@@ -431,6 +431,7 @@ interfaces! {
     SVGTextPositioningElement: SVGTextContentElement;
     SVGTitleElement: SVGElement;
     SVGUnitTypes;
+    SVGStringList;
     SVGTransform;
     SVGTransformList;
     SVGUseElement: SVGGraphicsElement;
