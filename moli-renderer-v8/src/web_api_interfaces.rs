@@ -388,6 +388,9 @@ interfaces! {
     SVGAnimatedLengthList;
     SVGAnimatedBoolean;
     SVGFEConvolveMatrixElement: SVGElement;
+    SVGAngle;
+    SVGAnimatedAngle;
+    SVGMarkerElement: SVGElement;
     SVGAnimatedNumber;
     SVGAnimatedNumberList;
     SVGAnimatedTransformList;
