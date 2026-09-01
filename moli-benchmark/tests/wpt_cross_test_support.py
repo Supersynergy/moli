@@ -125,6 +125,7 @@ from moli_benchmark.wpt_cross.server import (
     _host_header_hostname,
     _headers_include,
     _normalize_harness_case_key,
+    _inspect_headers_response_headers,
     _needs_wpt_template_substitution,
     _legacy_wpt_resource_alias,
     _pipe_response_header_operations,

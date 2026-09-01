@@ -131,6 +131,7 @@ IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.p
 
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
+FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
 FETCH_REDIRECT_RESOURCE_PATH = "/fetch/api/resources/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 XHR_URL_RESOURCE_PATHS = {
@@ -1366,6 +1367,61 @@ def _workers_modules_export_on_load_script_response() -> tuple[bytes, list[tuple
     )
 
 
+def _inspect_headers_response_headers(
+    query: str,
+    request_headers: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Model fetch/api/resources/inspect-headers.py's response headers."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    checked_headers_value = next(
+        (value for name, value in params if name == "headers"),
+        None,
+    )
+    checked_headers = (
+        checked_headers_value.split("|") if checked_headers_value is not None else []
+    )
+    request_headers_by_name: dict[str, str] = {}
+    for name, value in request_headers:
+        request_headers_by_name.setdefault(name.lower(), value)
+
+    response_headers = []
+    for name in checked_headers:
+        value = request_headers_by_name.get(name.lower())
+        if value is not None:
+            response_headers.append((f"x-request-{name}", value))
+
+    if any(name == "cors" for name, _ in params):
+        response_headers.extend(
+            [
+                (
+                    "Access-Control-Allow-Origin",
+                    request_headers_by_name.get("origin", "*"),
+                ),
+                ("Access-Control-Allow-Credentials", "true"),
+                ("Access-Control-Allow-Methods", "GET, POST, HEAD"),
+                (
+                    "Access-Control-Expose-Headers",
+                    ", ".join(f"x-request-{name}" for name in checked_headers),
+                ),
+            ]
+        )
+        allow_headers = next(
+            (value for name, value in params if name == "allow_headers"),
+            None,
+        )
+        response_headers.append(
+            (
+                "Access-Control-Allow-Headers",
+                allow_headers
+                if allow_headers is not None
+                else ", ".join(name for name, _ in request_headers),
+            )
+        )
+
+    return response_headers
+
+
 def _url_host_literal(hostname: str) -> str:
     if hostname.startswith("[") and hostname.endswith("]"):
         return hostname
@@ -2126,6 +2182,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
                 self._serve_fetch_redirect_resource(
                     urlsplit(self.path).query, emit_body=self.command != "HEAD",
@@ -2189,6 +2250,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
                 self._serve_fetch_redirect_resource(
                     urlsplit(self.path).query, emit_body=self.command != "HEAD",
@@ -2284,6 +2350,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
                 self._serve_fetch_redirect_resource(
                     urlsplit(self.path).query, emit_body=self.command != "HEAD",
@@ -2346,6 +2417,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
                 self._serve_fetch_redirect_resource(
                     urlsplit(self.path).query, emit_body=self.command != "HEAD",
@@ -2598,6 +2674,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
                 self._serve_fetch_redirect_resource(
                     urlsplit(self.path).query, emit_body=self.command != "HEAD",
@@ -3488,6 +3569,25 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500)
 
 
+        def _serve_fetch_inspect_headers(self, query: str, *, emit_body: bool) -> None:
+            try:
+                status_code = _pipe_response_status(query) or 200
+            except WptPipeError:
+                self.send_error(500, "Invalid WPT pipe")
+                return
+            headers = _inspect_headers_response_headers(query, list(self.headers.items()))
+            # The upstream handler only reads headers. Return immediately and
+            # close connections with unread uploads, as for redirect fixtures.
+            if (self.headers.get("Transfer-Encoding") is not None
+                    or self.headers.get("Content-Length", "0").strip() not in {"", "0"}):
+                self.close_connection = True
+                headers.append(("Connection", "close"))
+            self._send_bytes(
+                "text/plain", b"", emit_body=emit_body, extra_headers=headers,
+                status_code=status_code,
+            )
+
+
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
             if delay_seconds is None:
@@ -3533,6 +3633,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
+                return self._serve_fetch_resource_method
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == PRELOAD_COUNT_PATH:
                 return self._serve_preload_count_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
