@@ -33,6 +33,7 @@ mod message_channel;
 mod message_port_events;
 mod misc;
 mod navigation;
+mod navigator_overrides;
 mod performance;
 mod performance_memory;
 mod platform_identity;
