@@ -130,6 +130,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     VTTCue,
     Selection,
     History,
+    Location,
     Navigation,
     NavigationHistoryEntry,
     NavigationActivation,
