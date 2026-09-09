@@ -3263,6 +3263,7 @@ dependencies = [
  "moli-curl",
  "moli-dns-resolver",
  "moli-url",
+ "openssl",
  "rcgen",
  "rustls",
  "tokio",
