@@ -398,6 +398,7 @@ interfaces! {
     SVGNumberList;
     SVGPathElement: SVGGeometryElement;
     SVGPatternElement: SVGElement;
+    SVGPoint;
     SVGPolygonElement: SVGGeometryElement;
     SVGPolylineElement: SVGGeometryElement;
     SVGRadialGradientElement: SVGGradientElement;
