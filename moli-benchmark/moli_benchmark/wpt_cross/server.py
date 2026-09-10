@@ -130,6 +130,10 @@ IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.p
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
+XHR_URL_RESOURCE_PATHS = {
+    "/xhr/resources/requri.py",
+    "/xhr/resources/redirect.py",
+}
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
     "/fetch/api/resources/stash-take.py",
@@ -1261,6 +1265,32 @@ def _form_submission_response(
     return b"OK" if valid else b"FAIL"
 
 
+def _xhr_redirect_fixture_response(
+    path: str, query: str
+) -> tuple[int, str | None, list[tuple[str, str]], bytes, float | None]:
+    """Model xhr/resources/redirect.py, including its second Location decode."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    code = int(params.get("code", ["302"])[0])
+    location = params.get("location", [path + "?followed"])[0]
+    location = location.encode("latin-1").decode("utf-8")
+    if location:
+        location = parse_qs("location=" + location)["location"][0]
+        if location.startswith("redirect.py"):
+            location += "&code=" + str(code)
+    delay = None
+    if "delay" in params:
+        delay = float(params["delay"][0]) / 1_000
+        if not math.isfinite(delay) or delay < 0:
+            raise ValueError("invalid redirect delay")
+    if "followed" in params:
+        # Preserve the upstream handler's header spelling.
+        return 200, None, [("Content:Type", "text/plain")], b"MAGIC HAPPENED", delay
+    if any(character in location for character in "\r\n"):
+        raise ValueError("invalid Location header")
+    location.encode("latin-1")
+    return code, "WEBSRT MARKETING", [("Location", location)], b"TEST", delay
+
+
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     """Return the shared redirect response used by static WPT fixture handlers."""
 
@@ -2048,6 +2078,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
             return True
 
 
+        def _serve_xhr_url_method(self) -> None:
+            self._serve_xhr_url_resource(emit_body=self.command != "HEAD")
+
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_websocket()
@@ -2081,7 +2114,10 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
                 )
                 return
-            if self._serve_xhr_response_resource():
+            if (
+                self._serve_xhr_response_resource()
+                or self._serve_xhr_url_resource(emit_body=True)
+            ):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -2134,7 +2170,10 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
                 )
                 return
-            if self._serve_xhr_response_resource():
+            if (
+                self._serve_xhr_response_resource()
+                or self._serve_xhr_url_resource(emit_body=True)
+            ):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -2219,7 +2258,10 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
                 )
                 return
-            if self._serve_xhr_response_resource():
+            if (
+                self._serve_xhr_response_resource()
+                or self._serve_xhr_url_resource(emit_body=True)
+            ):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -2277,6 +2319,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self._serve_fetch_preflight_resource(
                     unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
                 )
+                return
+            if self._serve_xhr_url_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
@@ -2477,7 +2521,10 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
                 )
                 return
-            if self._serve_xhr_response_resource(emit_body=emit_body):
+            if (
+                self._serve_xhr_response_resource(emit_body=emit_body)
+                or self._serve_xhr_url_resource(emit_body=emit_body)
+            ):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -3216,6 +3263,52 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500)
 
 
+        def _serve_xhr_url_resource(self, *, emit_body: bool) -> bool:
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            if path not in XHR_URL_RESOURCE_PATHS:
+                return False
+            try:
+                if path == "/xhr/resources/requri.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True)
+                    uri = self.path
+                    if "full" in params and not uri.startswith("http://"):
+                        authority = self.headers.get("Host")
+                        if authority is None:
+                            authority = _url_host_literal(
+                                str(self.server.server_address[0])
+                            )
+                        if urlsplit("//" + authority).port is None:
+                            authority += ":" + str(self.server.server_address[1])
+                        uri = f"http://{authority}{uri}"
+                    status, reason, headers, body = 200, None, [], uri.encode("utf-8")
+                else:
+                    status, reason, headers, body, delay = _xhr_redirect_fixture_response(
+                        parsed.path, parsed.query
+                    )
+                    if delay is not None:
+                        time.sleep(delay)
+            except (ValueError, KeyError, OverflowError):
+                self.send_error(500)
+                return True
+            # These handlers reply without reading uploads. Close connections
+            # with unread bodies so a redirect can arrive before upload finishes.
+            if (
+                self.headers.get("Transfer-Encoding") is not None
+                or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
+            ):
+                self.close_connection = True
+                headers.append(("Connection", "close"))
+            self._send_bytes(
+                None,
+                body,
+                emit_body=emit_body,
+                extra_headers=headers,
+                status_code=status,
+                status_text=reason,
+            )
+            return True
+
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
             if delay_seconds is None:
@@ -3269,6 +3362,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return self._serve_document_charset_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == IFRAME_STASH_PATH:
                 return self._serve_iframe_stash_resource
+
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in XHR_URL_RESOURCE_PATHS:
+                return self._serve_xhr_url_method
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
@@ -3908,12 +4004,15 @@ requestExecutor("{executor_uuid}", {start_on_js});
             cache_control: str | None = "no-store",
             auto_content_length: bool = True,
         ) -> None:
-            content_type, extra_headers = _response_content_type_and_extra_headers(
-                content_type,
-                extra_headers,
-            )
+            if content_type is None:
+                header_block = list(extra_headers or [])
+            else:
+                content_type, extra_headers = _response_content_type_and_extra_headers(
+                    content_type,
+                    extra_headers,
+                )
+                header_block = _static_response_header_block(content_type, extra_headers)
             self.send_response(status_code, status_text)
-            header_block = _static_response_header_block(content_type, extra_headers)
             for name, value in header_block:
                 self.send_header(name, value)
             if auto_content_length and not _headers_include(header_block, "Content-Length"):
