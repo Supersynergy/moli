@@ -50,7 +50,7 @@ from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import product
 from pathlib import Path
-from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
 from .pipes import WptPipeError, parse_pipe_commands
 
@@ -129,6 +129,7 @@ IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.p
 
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
+FETCH_REDIRECT_RESOURCE_PATH = "/fetch/api/resources/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 XHR_URL_RESOURCE_PATHS = {
     "/xhr/resources/requri.py",
@@ -1307,6 +1308,40 @@ def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     return status, location
 
 
+def _fetch_redirect_form_status(method: str, content_type: str | None, body: bytes) -> str | None:
+    """Read the first redirect_status field like wptserve's CGI form parser."""
+    if content_type is None:
+        content_type = "application/x-www-form-urlencoded" if method == "POST" else "text/plain"
+    media_type = content_type.partition(";")[0].strip()
+    if media_type == "application/x-www-form-urlencoded":
+        params = parse_qs(body.decode("latin-1"), keep_blank_values=True, encoding="latin-1")
+        return params.get("redirect_status", [None])[0]
+    if media_type.startswith("multipart/"):
+        message = BytesParser(policy=policy.HTTP).parsebytes(
+            f"Content-Type: {content_type}\r\n\r\n".encode("latin-1") + body
+        )
+        boundary = message.get_boundary()
+        if boundary is None or re.fullmatch(r"[ -~]{0,200}[!-~]", boundary) is None:
+            raise ValueError("Invalid multipart boundary")
+        for part in message.iter_parts():
+            if part.get_param("name", header="content-disposition") == "redirect_status":
+                if part.get_filename():
+                    raise ValueError("A file is not a redirect status")
+                # CGI leaves transfer encodings untouched and treats form
+                # values as isomorphic bytes, regardless of part charset.
+                del part["Content-Transfer-Encoding"]
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    raise ValueError("A multipart value is not a redirect status")
+                return payload.decode("latin-1")
+        return None
+    if body:
+        # Upstream FieldStorage's non-form binary read raises TypeError when
+        # writing a nonempty upload into its text buffer.
+        raise ValueError("Unsupported non-form upload")
+    return None
+
+
 def _content_security_policy_resource_response() -> tuple[bytes, list[tuple[str, str]]]:
     """Return the minimal CSP resource.py fixture used by worker CSP WPT."""
 
@@ -2091,6 +2126,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
+                self._serve_fetch_redirect_resource(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
@@ -2147,6 +2187,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
+                self._serve_fetch_redirect_resource(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
@@ -2235,6 +2280,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
+                self._serve_fetch_redirect_resource(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
@@ -2290,6 +2340,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
+                self._serve_fetch_redirect_resource(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
@@ -2506,6 +2561,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
+                self._serve_fetch_redirect_resource(
+                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
+                )
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2615,7 +2675,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
 
             if path in {
-                "/fetch/api/resources/redirect.py",
                 "/common/redirect-opt-in.py",
             }:
                 redirect = _redirect_fixture_response(parsed.query)
@@ -3309,6 +3368,87 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
             return True
 
+        def _serve_fetch_redirect_resource(self, query: str, *, emit_body: bool) -> None:
+            connection_headers = []
+            if (self.headers.get("Transfer-Encoding") is not None
+                    or self.headers.get("Content-Length", "0").strip() not in {"", "0"}):
+                # A query status or an ordinary OPTIONS response never reads
+                # the upload in upstream redirect.py. Do not wait for EOF.
+                self.close_connection = True
+                connection_headers.append(("Connection", "close"))
+            if unquote(urlsplit(self.path).path) == "/fetch/api/resources/redirect-empty-location.py":
+                self._send_bytes(
+                    None, b"", emit_body=emit_body, status_code=302,
+                    extra_headers=[*connection_headers, ("Location", "")],
+                    cache_control=None,
+                )
+                return
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            stash_path = urlsplit(self.path).path
+            headers = [*connection_headers, ("Content-Type", "text/plain"), ("Pragma", "no-cache")]
+            if "Origin" in self.headers:
+                headers.extend([
+                    ("Access-Control-Allow-Origin", self.headers.get("Origin", "")),
+                    ("Access-Control-Allow-Credentials", "true"),
+                ])
+            else:
+                headers.append(("Access-Control-Allow-Origin", "*"))
+            token = params.get("token", [None])[0]
+            data = {"count": 0, "preflight": "0"}
+            try:
+                if "token" in params:
+                    data = fetch_stash.take(token, path=stash_path) or data
+                if self.command == "OPTIONS":
+                    if "allow_headers" in params:
+                        headers.append(("Access-Control-Allow-Headers", params["allow_headers"][0]))
+                    data["preflight"] = "1"
+                    if "redirect_preflight" not in params:
+                        if token:
+                            fetch_stash.put(token, data, path=stash_path)
+                        self._send_bytes(None, b"", emit_body=emit_body, extra_headers=headers,
+                                         cache_control="no-cache")
+                        return
+
+                status = 302
+                if "redirect_status" in params:
+                    status = int(params["redirect_status"][0].encode("latin-1"))
+                elif self.command not in {"GET", "HEAD"}:
+                    # wptserve's CGI input is bounded by Content-Length even
+                    # when Transfer-Encoding is also present.
+                    body = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                    if body is None:
+                        return
+                    form_status = _fetch_redirect_form_status(
+                        self.command, self.headers.get("Content-Type"), body
+                    )
+                    if form_status is not None:
+                        status = int(form_status.encode("latin-1"))
+                data["count"] += 1
+                if "location" in params:
+                    location = params["location"][0]
+                    if "simple" not in params and urlparse(location).scheme in {"", "http", "https"}:
+                        location += "&" if "?" in location else "?"
+                        location += urlencode({name: values[0] for name, values in params.items()})
+                        location += "&count=" + str(data["count"])
+                    headers.append(("Location", location))
+                if "redirect_referrerpolicy" in params:
+                    headers.append(("Referrer-Policy", params["redirect_referrerpolicy"][0]))
+                if "delay" in params:
+                    time.sleep(float(params["delay"][0].encode("latin-1")) / 1000)
+                if token:
+                    fetch_stash.put(token, data, path=stash_path)
+                    if "max_count" in params and data["count"] > int(params["max_count"][0].encode("latin-1")):
+                        # Upstream returns a plain body instead of its tuple;
+                        # none of the redirect/CORS headers survive that return.
+                        self._send_bytes(None, str(data["count"] - 1).encode(), emit_body=emit_body,
+                                         extra_headers=connection_headers, cache_control=None)
+                        return
+                self._send_bytes(None, b"", emit_body=emit_body, extra_headers=headers,
+                                 status_code=status, cache_control="no-cache")
+            except (KeyError, ValueError, TypeError, OverflowError):
+                self.send_error(500)
+
+
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
             if delay_seconds is None:
@@ -3354,6 +3494,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
+                return self._serve_fetch_resource_method
             if name.startswith("do_") and unquote(urlsplit(self.path).path) in REMOTE_CONTEXT_RESOURCE_PATHS:
                 return self._serve_remote_context_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_CONTENT_TYPE_PATH:
