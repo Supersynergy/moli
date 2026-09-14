@@ -53,7 +53,6 @@ struct DocumentPageLoadOptions {
     pub extra_http_headers: Vec<(String, String)>,
     pub script_execution_disabled: bool,
     pub bypass_content_security_policy: bool,
-    pub cpu_throttling_rate: f64,
     pub emulated_media: EmulatedMediaOverrides,
     pub viewport_surface: Option<ViewportSurface>,
     pub network_offline: bool,
@@ -202,7 +201,6 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub extra_http_headers: Vec<(String, String)>,
     pub script_execution_disabled: bool,
     pub bypass_content_security_policy: bool,
-    pub cpu_throttling_rate: f64,
     pub emulated_media: EmulatedMediaOverrides,
     pub idle_override: Option<crate::page::EmulatedIdleOverride>,
     pub navigator_overrides: moli_page_types::NavigatorOverrides,
@@ -264,7 +262,6 @@ impl PreparedDocumentPage {
                     extra_http_headers: configuration.extra_http_headers,
                     script_execution_disabled: configuration.script_execution_disabled,
                     bypass_content_security_policy: configuration.bypass_content_security_policy,
-                    cpu_throttling_rate: configuration.cpu_throttling_rate,
                     emulated_media: configuration.emulated_media,
                     idle_override: configuration.idle_override,
                     navigator_overrides: configuration.navigator_overrides,
@@ -327,7 +324,6 @@ impl PreparedDocumentPage {
 /// [`Self::await_ready`] when the resulting page is needed.
 pub struct PendingBuiltDocumentPage {
     pending: moli_renderer_v8::PendingHtmlPage,
-    document_activity: moli_page_types::DocumentActivity,
 }
 
 impl PendingBuiltDocumentPage {
@@ -343,10 +339,7 @@ impl PendingBuiltDocumentPage {
             .await_ready()
             .await
             .context("failed to build html page")?;
-        let mut page = Page::from_attached_handle(handle, page_state);
-        page.set_document_activity_async(self.document_activity)
-            .await
-            .context("failed to apply native document activity")?;
+        let page = Page::from_attached_handle(handle, page_state);
         Ok(BuiltDocumentPage {
             page,
             page_creation_diagnostics,
@@ -1172,7 +1165,6 @@ impl NavigationEngine {
         runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1206,7 +1198,6 @@ impl NavigationEngine {
                     extra_http_headers,
                     script_execution_disabled,
                     bypass_content_security_policy: false,
-                    cpu_throttling_rate,
                     emulated_media,
                     viewport_surface,
                     network_offline,
@@ -1234,7 +1225,6 @@ impl NavigationEngine {
         runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1252,7 +1242,6 @@ impl NavigationEngine {
             Vec::new(),
             extra_http_headers,
             script_execution_disabled,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -1277,7 +1266,6 @@ impl NavigationEngine {
         runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1302,7 +1290,6 @@ impl NavigationEngine {
             runtime_inspector_session_restore_snapshots,
             extra_http_headers,
             script_execution_disabled,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -1336,7 +1323,6 @@ impl NavigationEngine {
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
         bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1369,7 +1355,6 @@ impl NavigationEngine {
                 extra_http_headers,
                 script_execution_disabled,
                 bypass_content_security_policy,
-                cpu_throttling_rate,
                 emulated_media,
                 viewport_surface,
                 network_offline,
@@ -1397,7 +1382,6 @@ impl NavigationEngine {
         runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1421,7 +1405,6 @@ impl NavigationEngine {
             extra_http_headers,
             script_execution_disabled,
             false,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -1452,7 +1435,6 @@ impl NavigationEngine {
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
         bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1483,7 +1465,6 @@ impl NavigationEngine {
             extra_http_headers,
             script_execution_disabled,
             bypass_content_security_policy,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -1525,7 +1506,6 @@ impl NavigationEngine {
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
         bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1540,20 +1520,21 @@ impl NavigationEngine {
         loader.set_extra_http_headers(&extra_http_headers);
         loader.set_network_offline(network_offline);
         loader.set_blocked_url_patterns(&blocked_url_patterns);
-        let pending = self
-            .js_runtime
-            .start_create_html_page_from_response_with_inspector_session_restores_and_activity(
-                page_reservation,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                &loader,
-                web_storage,
-                response_body,
+        let pending = self.js_runtime.start_create_html_page_from_response(
+            page_reservation,
+            requested_url,
+            final_url,
+            navigation_initiator_url,
+            redirected,
+            redirect_count,
+            response_status,
+            response_headers,
+            &loader,
+            web_storage,
+            response_body,
+            top_level_storage_key,
+            moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
+            moli_renderer_v8::RendererDocumentOptions {
                 indexed_db_manager,
                 storage_bucket_store,
                 document_start_scripts,
@@ -1561,24 +1542,19 @@ impl NavigationEngine {
                 extra_http_headers,
                 script_execution_disabled,
                 bypass_content_security_policy,
-                cpu_throttling_rate,
                 emulated_media,
                 viewport_surface,
-                self.document_activity,
+                document_activity: self.document_activity,
                 network_offline,
                 blocked_url_patterns,
                 fetch_subresource_interception_enabled,
                 fetch_subresource_interception_resource_type,
                 runtime_inspector_session_restore_snapshots,
                 root_frame_id,
-                top_level_storage_key,
-                moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
                 main_document_commit,
-            )?;
-        Ok(PendingBuiltDocumentPage {
-            pending,
-            document_activity: self.document_activity,
-        })
+            },
+        )?;
+        Ok(PendingBuiltDocumentPage { pending })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1597,7 +1573,6 @@ impl NavigationEngine {
         runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1623,7 +1598,6 @@ impl NavigationEngine {
             extra_http_headers,
             script_execution_disabled,
             false,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -1655,7 +1629,6 @@ impl NavigationEngine {
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
         bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1688,7 +1661,6 @@ impl NavigationEngine {
             extra_http_headers,
             script_execution_disabled,
             bypass_content_security_policy,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -1721,7 +1693,6 @@ impl NavigationEngine {
         runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1757,7 +1728,6 @@ impl NavigationEngine {
                 extra_http_headers,
                 script_execution_disabled,
                 false,
-                cpu_throttling_rate,
                 emulated_media,
                 viewport_surface,
                 network_offline,
@@ -1798,7 +1768,6 @@ impl NavigationEngine {
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
         bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1822,7 +1791,7 @@ impl NavigationEngine {
         loader.set_blocked_url_patterns(&blocked_url_patterns);
         let prepared = self
             .js_runtime
-            .prepare_streaming_raw_document_from_external_body_with_inspector_session_restores_and_activity(
+            .prepare_streaming_raw_document_from_external_body(
                 page_reservation,
                 requested_url,
                 final_url,
@@ -1835,31 +1804,32 @@ impl NavigationEngine {
                 &loader,
                 web_storage,
                 raw_body,
-                indexed_db_manager,
-                storage_bucket_store,
-                document_start_scripts,
-                runtime_bindings,
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                cpu_throttling_rate,
-                emulated_media,
-                viewport_surface,
-                self.document_activity,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                runtime_inspector_session_restore_snapshots,
                 false,
                 stage,
                 reply_boundary,
                 moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
                 moli_renderer_v8::RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
-                root_frame_id,
                 reserved_service_worker_client,
-                main_document_commit,
                 None,
+                moli_renderer_v8::RendererDocumentOptions {
+                    indexed_db_manager,
+                    storage_bucket_store,
+                    document_start_scripts,
+                    runtime_bindings,
+                    extra_http_headers,
+                    script_execution_disabled,
+                    bypass_content_security_policy,
+                    emulated_media,
+                    viewport_surface,
+                    document_activity: self.document_activity,
+                    network_offline,
+                    blocked_url_patterns,
+                    fetch_subresource_interception_enabled,
+                    fetch_subresource_interception_resource_type,
+                    runtime_inspector_session_restore_snapshots,
+                    root_frame_id,
+                    main_document_commit,
+                },
             )
             .await
             .context("failed to prepare streaming raw page")?;
@@ -1882,7 +1852,6 @@ impl NavigationEngine {
         runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1906,7 +1875,6 @@ impl NavigationEngine {
             Vec::new(),
             extra_http_headers,
             script_execution_disabled,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -1940,7 +1908,6 @@ impl NavigationEngine {
         runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -1974,7 +1941,6 @@ impl NavigationEngine {
             runtime_inspector_session_restore_snapshots,
             extra_http_headers,
             script_execution_disabled,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -2010,7 +1976,6 @@ impl NavigationEngine {
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
         bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -2046,7 +2011,6 @@ impl NavigationEngine {
             extra_http_headers,
             script_execution_disabled,
             bypass_content_security_policy,
-            cpu_throttling_rate,
             emulated_media,
             viewport_surface,
             network_offline,
@@ -2087,7 +2051,7 @@ impl NavigationEngine {
             pending_download,
         ) = self
             .js_runtime
-            .create_html_page_from_response_with_inspector_session_restores_and_activity(
+            .create_html_page_from_response(
                 options.requested_url.clone(),
                 options.final_url,
                 options.navigation_initiator_url,
@@ -2098,31 +2062,32 @@ impl NavigationEngine {
                 &loader,
                 web_storage,
                 options.response_body,
-                indexed_db_manager,
-                storage_bucket_store,
-                options.document_start_scripts,
-                options.runtime_bindings,
-                options.extra_http_headers,
-                options.script_execution_disabled,
-                options.bypass_content_security_policy,
-                options.cpu_throttling_rate,
-                options.emulated_media,
-                options.viewport_surface,
-                self.document_activity,
-                options.network_offline,
-                options.blocked_url_patterns,
-                options.fetch_subresource_interception_enabled,
-                options.fetch_subresource_interception_resource_type,
-                options.runtime_inspector_session_restore_snapshots,
-                options.root_frame_id,
-                options.main_document_commit,
+                moli_renderer_v8::RendererDocumentOptions {
+                    indexed_db_manager,
+                    storage_bucket_store,
+                    document_start_scripts: options.document_start_scripts,
+                    runtime_bindings: options.runtime_bindings,
+                    extra_http_headers: options.extra_http_headers,
+                    script_execution_disabled: options.script_execution_disabled,
+                    bypass_content_security_policy: options.bypass_content_security_policy,
+                    emulated_media: options.emulated_media,
+                    viewport_surface: options.viewport_surface,
+                    document_activity: self.document_activity,
+                    network_offline: options.network_offline,
+                    blocked_url_patterns: options.blocked_url_patterns,
+                    fetch_subresource_interception_enabled: options
+                        .fetch_subresource_interception_enabled,
+                    fetch_subresource_interception_resource_type: options
+                        .fetch_subresource_interception_resource_type,
+                    runtime_inspector_session_restore_snapshots: options
+                        .runtime_inspector_session_restore_snapshots,
+                    root_frame_id: options.root_frame_id,
+                    main_document_commit: options.main_document_commit,
+                },
             )
             .await
             .context("failed to build html page")?;
-        let mut page = Page::from_attached_handle(handle, page_state);
-        page.set_document_activity_async(self.document_activity)
-            .await
-            .context("failed to apply native document activity")?;
+        let page = Page::from_attached_handle(handle, page_state);
         Ok(BuiltDocumentPage {
             page,
             page_creation_diagnostics,
@@ -2163,7 +2128,6 @@ impl NavigationEngine {
             options.extra_http_headers,
             options.script_execution_disabled,
             options.bypass_content_security_policy,
-            options.cpu_throttling_rate,
             options.emulated_media,
             options.viewport_surface,
             options.network_offline,
@@ -2223,7 +2187,6 @@ impl NavigationEngine {
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
         bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -2260,7 +2223,6 @@ impl NavigationEngine {
                 extra_http_headers,
                 script_execution_disabled,
                 bypass_content_security_policy,
-                cpu_throttling_rate,
                 emulated_media,
                 viewport_surface,
                 network_offline,
@@ -2289,7 +2251,6 @@ impl NavigationEngine {
         runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
         extra_http_headers: Vec<(String, String)>,
         script_execution_disabled: bool,
-        cpu_throttling_rate: f64,
         emulated_media: EmulatedMediaOverrides,
         viewport_surface: Option<ViewportSurface>,
         network_offline: bool,
@@ -2323,7 +2284,6 @@ impl NavigationEngine {
                 extra_http_headers,
                 script_execution_disabled,
                 bypass_content_security_policy: false,
-                cpu_throttling_rate,
                 emulated_media,
                 viewport_surface,
                 network_offline,
