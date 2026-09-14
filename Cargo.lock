@@ -2498,8 +2498,10 @@ dependencies = [
  "moli-cookie-cache",
  "moli-cookie-jar",
  "moli-crypto",
+ "moli-leveldb-parser",
  "rusqlite",
  "rusty-leveldb",
+ "serde",
  "serde_json",
  "snap",
  "tempfile",
@@ -2769,6 +2771,18 @@ dependencies = [
  "taffy",
  "thiserror",
  "wuff",
+]
+
+[[package]]
+name = "moli-leveldb-parser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crc32c",
+ "rusty-leveldb",
+ "snap",
+ "tempfile",
+ "zerocopy",
 ]
 
 [[package]]
