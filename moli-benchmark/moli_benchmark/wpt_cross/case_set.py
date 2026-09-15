@@ -744,7 +744,22 @@ def _supported_wptserve_handler_references(
         "html/semantics/scripting-1/the-script-element/module/"
     ):
         supported += SUPPORTED_MODULE_DELAY_WPTSERVE_HANDLER_PATTERNS
+    if rel is not None:
+        supported += _script_load_error_handler_reference_patterns(posixpath.dirname(rel) or ".")
     return supported
+
+
+@lru_cache(maxsize=None)
+def _script_load_error_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "html/semantics/scripting-1/the-script-element/resources/load-error-events.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
 
 
 def _has_unsupported_server_feature(
