@@ -96,6 +96,9 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/inspect-headers.py",
     "/xhr/resources/echo-headers.py",
     "/xhr/resources/corsenabled.py",
+
+    "/xhr/resources/bad-chunk-encoding.py",
+    "/xhr/resources/infinite-redirects.py",
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
 }
@@ -2946,6 +2949,70 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 ),
             )
 
+        def _xhr_request_url(self) -> str:
+            if self.path.startswith("http://"):
+                return self.path
+            authority = self.headers.get("Host")
+            if authority is None:
+                authority = _url_host_literal(str(self.server.server_address[0]))
+            if urlsplit("//" + authority).port is None:
+                authority += ":" + str(self.server.server_address[1])
+            return f"http://{authority}{self.path}"
+
+        def _serve_xhr_bad_chunk_encoding(self) -> None:
+            # The upstream explicit writer sends these bytes even for HEAD.
+            # Use raw framing so clients receive data before a decoding error.
+            self.close_connection = True
+            self.protocol_version = self.request_version
+            try:
+                if stopping.wait(0.1):
+                    return
+                self.send_response(200)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.flush()
+                if stopping.wait(0.1):
+                    return
+                for _ in range(5):
+                    self.wfile.write(b"a\r\nTEST_CHUNK\r\n")
+                    self.wfile.flush()
+                    if stopping.wait(0.1):
+                        return
+                self.wfile.write(b"garbage")
+                self.wfile.flush()
+            except OSError:
+                # Clients may abort once they receive a partial response.
+                return
+
+        def _serve_xhr_infinite_redirects(self, parsed, *, emit_body: bool) -> None:
+            try:
+                params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                page = "default" if params.get("page", [None])[0] == "alternate" else "alternate"
+                redirect_type = 301 if params.get("type", [None])[0] == "301" else 302
+                mix = int(params.get("mix", [None])[0] == "1")
+                if mix:
+                    redirect_type = 302 if redirect_type == 301 else 301
+                request_url = urlsplit(self._xhr_request_url())
+                location = urlunsplit((
+                    request_url.scheme, request_url.netloc, request_url.path,
+                    f"page={page}&type={redirect_type}&mix={mix}", "",
+                ))
+                # Upstream returns 301 regardless of the next URL's `type`.
+                status, reason = 301, None
+                headers = [("Pragma", "no-cache"), ("Location", location)]
+                cache_control = "no-cache"
+                body = ("Hello guest. You have been redirected to " + location).encode("utf-8")
+            except (ValueError, OSError, OverflowError):
+                self.send_error(500)
+                return
+            self.close_connection = True
+            headers.append(("Connection", "close"))
+            self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
+                             status_code=status, status_text=reason, cache_control=cache_control)
+
         def _serve_xhr_response_resource(self, *, emit_body: bool = True) -> bool:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -2956,6 +3023,12 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return True
             if path == "/xhr/resources/corsenabled.py":
                 self._serve_xhr_cors_echo(parsed, emit_body=emit_body)
+                return True
+            if path == "/xhr/resources/bad-chunk-encoding.py":
+                self._serve_xhr_bad_chunk_encoding()
+                return True
+            if path == "/xhr/resources/infinite-redirects.py":
+                self._serve_xhr_infinite_redirects(parsed, emit_body=emit_body)
                 return True
             try:
                 if path == "/xhr/resources/inspect-headers.py":
