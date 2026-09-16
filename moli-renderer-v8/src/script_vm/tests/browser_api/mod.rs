@@ -23,6 +23,7 @@ mod idle_detection;
 mod images;
 mod media;
 mod media_devices;
+mod message_channel;
 mod misc;
 mod navigation;
 mod performance;
