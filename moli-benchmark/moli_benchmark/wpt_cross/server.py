@@ -29,6 +29,10 @@ import http.client
 import json
 import math
 import mimetypes
+import os
+import random
+from datetime import datetime
+
 import re
 import socket
 import struct
@@ -137,12 +141,22 @@ NAVIGATION_SECOND_VISIT_PATH = (
     "/navigation-api/navigation-methods/return-value/resources/"
     "204-205-download-on-second-visit.py"
 )
-SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS = {
+SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
     "/service-workers/service-worker/resources/mime-type-worker.py",
     "/service-workers/service-worker/resources/import-mime-type-worker.py",
     "/service-workers/service-worker/resources/malformed-worker.py",
     "/service-workers/service-worker/resources/invalid-chunked-encoding.py",
     "/service-workers/service-worker/resources/invalid-chunked-encoding-with-flush.py",
+    "/service-workers/service-worker/resources/redirect.py",
+    "/service-workers/service-worker/resources/update-worker.py",
+    "/service-workers/service-worker/resources/update-worker-from-file.py",
+    "/service-workers/service-worker/resources/update-during-installation-worker.py",
+    "/service-workers/service-worker/ServiceWorkerGlobalScope/resources/update-worker.py",
+    "/service-workers/service-worker/resources/import-scripts-version.py",
+    "/service-workers/service-worker/resources/import-scripts-get.py",
+    "/service-workers/service-worker/resources/import-scripts-echo.py",
+    "/service-workers/service-worker/resources/subdir/import-scripts-echo.py",
+    "/service-workers/service-worker/resources/scope2/import-scripts-echo.py",
 }
 SERVICE_WORKER_MALFORMED_SCRIPTS = {
     "parse-error": 'var foo = function() {;',
@@ -1918,8 +1932,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
-                self._serve_service_worker_registration_resource()
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if self._serve_xhr_response_resource():
                 return
@@ -1959,8 +1973,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
-                self._serve_service_worker_registration_resource()
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if self._serve_xhr_response_resource():
                 return
@@ -2021,8 +2035,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
-                self._serve_service_worker_registration_resource()
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if self._serve_xhr_response_resource():
                 return
@@ -2068,8 +2082,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             } | XHR_BODY_RESOURCE_PATHS:
                 self._serve_xhr_response_resource()
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
-                self._serve_service_worker_registration_resource()
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
@@ -2289,8 +2303,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
-                self._serve_service_worker_registration_resource()
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if self._serve_xhr_response_resource(emit_body=emit_body):
                 return
@@ -2802,7 +2816,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
 
 
-        def _serve_service_worker_registration_resource(self) -> None:
+        def _serve_service_worker_script_resource(self) -> None:
             parsed = urlsplit(self.path)
             path = unquote(parsed.path)
             if path.endswith(("/invalid-chunked-encoding.py", "/invalid-chunked-encoding-with-flush.py")):
@@ -2812,31 +2826,132 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
             headers: list[tuple[str, str]] = []
+            status = 200
             body = b""
             try:
-                if path.endswith("/mime-type-worker.py"):
+                if path.endswith("/redirect.py"):
+                    status = int(params.get("Status", ["302"])[0])
+                    headers.append(("Location", params["Redirect"][0]))
+                    if "ACAOrigin" in params:
+                        headers.extend(
+                            ("Access-Control-Allow-Origin", value)
+                            for value in params["ACAOrigin"][0].split(",")
+                        )
+                    for suffix in ("Headers", "Methods", "Credentials"):
+                        if "ACA" + suffix in params:
+                            headers.append((
+                                "Access-Control-Allow-" + suffix,
+                                params["ACA" + suffix][0],
+                            ))
+                    if "ACEHeaders" in params:
+                        headers.append(("Access-Control-Expose-Headers", params["ACEHeaders"][0]))
+                elif path.endswith("/mime-type-worker.py"):
                     if "mime" in params:
                         headers.append(("Content-Type", params["mime"][0]))
                 elif path.endswith("/import-mime-type-worker.py"):
                     headers.append(("Content-Type", "application/javascript"))
                     suffix = "?mime=" + params["mime"][0] if "mime" in params else ""
                     body = f"importScripts('./mime-type-worker.py{suffix}');".encode("latin-1")
-                else:
+                elif path.endswith("/malformed-worker.py"):
+                    # Upstream selects on the complete, undecoded query.
                     script = SERVICE_WORKER_MALFORMED_SCRIPTS.get(parsed.query)
                     if script is None:
                         self.send_error(500)
                         return
                     headers.append(("Content-Type", "application/javascript"))
                     body = script.encode("utf-8")
+                else:
+                    headers = [
+                        ("Cache-Control", "no-cache, must-revalidate"),
+                        ("Pragma", "no-cache"),
+                        ("Content-Type", "application/javascript"),
+                    ]
+                    if path.endswith("/update-worker-from-file.py"):
+                        count = fetch_stash.increment(params["Key"][0], path=parsed.path)
+                        if count > 2:
+                            self.send_error(500, "Unknown update worker state")
+                            return
+                        filename = os.fsdecode(params["First" if count == 1 else "Second"][0].encode("latin-1"))
+                        source = ((wpt_root / path.lstrip("/")).parent / filename).resolve()
+                        source.relative_to(wpt_root.resolve())
+                        body = source.read_bytes()
+                    elif path.endswith("/ServiceWorkerGlobalScope/resources/update-worker.py"):
+                        headers = [
+                            ("Cache-Control", "max-age: 0"),
+                            ("Content-Type", "application/javascript"),
+                        ]
+                        source = (wpt_root / path.lstrip("/")).with_suffix(".js")
+                        script = source.read_text(encoding="utf-8")
+                        body = f"// {time.time()}\n{script}".encode("utf-8")
+                    elif path.endswith("/update-during-installation-worker.py"):
+                        headers = [
+                            ("Content-Type", "application/javascript"),
+                            ("Cache-Control", "max-age=0"),
+                        ]
+                        body = (
+                            f"// {random.random()}\n"
+                            "importScripts('update-during-installation-worker.js');"
+                        ).encode("ascii")
+                    elif path.endswith("/import-scripts-version.py"):
+                        # Match the upstream delay so update checks see new bytes.
+                        if stopping.wait(0.1):
+                            self.close_connection = True
+                            return
+                        version = (datetime.now() - datetime(1970, 1, 1)).total_seconds()
+                        body = f'version = "{version}";\n'.encode("ascii")
+                    elif path.endswith("/import-scripts-get.py"):
+                        body = ('%s = "%s";\n' % (
+                            params["output"][0], params["msg"][0],
+                        )).encode("latin-1")
+                    elif path.endswith("/import-scripts-echo.py"):
+                        directory = path.rsplit("/", 2)[-2]
+                        suffix = f" ({directory}/)" if directory in ("subdir", "scope2") else ""
+                        body = ('echo_output = "%s%s";\n' % (
+                            params["msg"][0], suffix,
+                        )).encode("latin-1")
+                    else:
+                        mode = params["Mode"][0]
+                        count = fetch_stash.increment(params["Key"][0], path=parsed.path)
+                        extra_body = ""
+                        if count == 2:
+                            if mode == "bad_mime_type":
+                                headers[-1] = ("Content-Type", "text/html")
+                            elif mode == "not_found":
+                                status = 404
+                                headers = [("Content-Type", "text/plain")]
+                            elif mode == "redirect":
+                                status = 301
+                                location = unquote(params.get("Redirect", ["empty.js"])[0])
+                                headers.append(("Location", location))
+                            elif mode == "syntax_error":
+                                extra_body = "badsyntax(isbad;"
+                            elif mode == "throw_install":
+                                extra_body = (
+                                    "addEventListener('install', function(e) { "
+                                    "throw new Error('boom'); });"
+                                )
+                        if status == 404:
+                            body = b"Page not found"
+                        elif status == 301:
+                            body = f"/* {count} */".encode("ascii")
+                        else:
+                            body = f"/* {count} */ {extra_body}".encode("utf-8")
+                if not 100 <= status <= 599:
+                    raise ValueError("invalid response status")
                 for _, value in headers:
                     if "\r" in value or "\n" in value:
                         raise ValueError("invalid response header")
                     value.encode("latin-1")
-            except (ValueError, UnicodeError):
+            except OSError:
+                self.send_error(500)
+                return
+            except (KeyError, ValueError, UnicodeError):
                 self.send_error(400)
                 return
-            self._send_bytes(None, body, emit_body=self.command != "HEAD",
-                             extra_headers=headers, cache_control=None)
+            self._send_bytes(
+                None, body, emit_body=self.command != "HEAD",
+                extra_headers=headers, status_code=status, cache_control=None,
+            )
 
 
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
@@ -2894,8 +3009,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return self._serve_navigation_second_visit
             if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
                 return self._serve_empty_location_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) in SERVICE_WORKER_REGISTRATION_RESOURCE_PATHS:
-                return self._serve_service_worker_registration_resource
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                return self._serve_service_worker_script_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
                 return self._serve_xhr_response_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in FETCH_RANGE_RESOURCE_PATHS:

@@ -838,7 +838,7 @@ def _supported_wptserve_handler_references(
 ) -> tuple[re.Pattern[str], ...]:
     supported: tuple[re.Pattern[str], ...] = ()
     if rel is not None:
-        supported += _service_worker_registration_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _service_worker_script_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.startswith("fetch/api/"):
         supported += _empty_location_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None:
@@ -1636,15 +1636,19 @@ def explicit_case(wpt_root: Path, case_path: str) -> WptCase:
 
 
 @lru_cache(maxsize=None)
-def _service_worker_registration_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+def _service_worker_script_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     references = []
-    resources = (
-        "service-workers/service-worker/resources/mime-type-worker.py",
-        "service-workers/service-worker/resources/import-mime-type-worker.py",
-        "service-workers/service-worker/resources/malformed-worker.py",
-        "service-workers/service-worker/resources/invalid-chunked-encoding.py",
-        "service-workers/service-worker/resources/invalid-chunked-encoding-with-flush.py",
-    )
+    resources = tuple(
+        "service-workers/service-worker/resources/" + name
+        for name in (
+            "redirect.py", "update-worker.py", "update-worker-from-file.py",
+            "mime-type-worker.py", "import-mime-type-worker.py", "malformed-worker.py",
+            "invalid-chunked-encoding.py", "invalid-chunked-encoding-with-flush.py",
+            "update-during-installation-worker.py",
+            "import-scripts-version.py", "import-scripts-get.py", "import-scripts-echo.py",
+            "subdir/import-scripts-echo.py", "scope2/import-scripts-echo.py",
+        )
+    ) + ("service-workers/service-worker/ServiceWorkerGlobalScope/resources/update-worker.py",)
     for resource in resources:
         relative = posixpath.relpath(resource, directory)
         references.extend(("/" + resource, relative, "./" + relative))
