@@ -29,6 +29,10 @@ import http.client
 import json
 import math
 import mimetypes
+import os
+import random
+from datetime import datetime
+
 import re
 import socket
 import struct
@@ -121,6 +125,20 @@ NAVIGATION_SECOND_VISIT_PATH = (
     "/navigation-api/navigation-methods/return-value/resources/"
     "204-205-download-on-second-visit.py"
 )
+SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
+    "/service-workers/service-worker/resources/redirect.py",
+    "/service-workers/service-worker/resources/update-worker.py",
+    "/service-workers/service-worker/resources/update-worker-from-file.py",
+    "/service-workers/service-worker/resources/update-during-installation-worker.py",
+    "/service-workers/service-worker/ServiceWorkerGlobalScope/resources/update-worker.py",
+    "/service-workers/service-worker/resources/import-scripts-version.py",
+    "/service-workers/service-worker/resources/import-scripts-get.py",
+    "/service-workers/service-worker/resources/import-scripts-echo.py",
+    "/service-workers/service-worker/resources/subdir/import-scripts-echo.py",
+    "/service-workers/service-worker/resources/scope2/import-scripts-echo.py",
+}
+
+
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
@@ -1720,6 +1738,9 @@ def _make_handler(
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1753,6 +1774,9 @@ def _make_handler(
             if self._serve_common_echo_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
+                return
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if self._serve_xhr_response_resource():
                 return
@@ -1809,6 +1833,9 @@ def _make_handler(
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1846,6 +1873,9 @@ def _make_handler(
                 "/xhr/resources/inspect-headers.py", "/xhr/resources/echo-headers.py",
             } | XHR_BODY_RESOURCE_PATHS:
                 self._serve_xhr_response_resource()
+                return
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
@@ -2060,6 +2090,9 @@ def _make_handler(
             if self._serve_common_echo_resource():
                 return
             if self._serve_empty_location_resource(emit_body=emit_body):
+                return
+            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
                 return
             if self._serve_xhr_response_resource(emit_body=emit_body):
                 return
@@ -2549,6 +2582,126 @@ def _make_handler(
                 emit_body=emit_body, cache_control=None,
             )
 
+        def _serve_service_worker_script_resource(self) -> None:
+            if not self._consume_request_body():
+                return
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            headers: list[tuple[str, str]] = []
+            status = 200
+            body = b""
+            try:
+                if path.endswith("/redirect.py"):
+                    status = int(params.get("Status", ["302"])[0])
+                    headers.append(("Location", params["Redirect"][0]))
+                    if "ACAOrigin" in params:
+                        headers.extend(
+                            ("Access-Control-Allow-Origin", value)
+                            for value in params["ACAOrigin"][0].split(",")
+                        )
+                    for suffix in ("Headers", "Methods", "Credentials"):
+                        if "ACA" + suffix in params:
+                            headers.append((
+                                "Access-Control-Allow-" + suffix,
+                                params["ACA" + suffix][0],
+                            ))
+                    if "ACEHeaders" in params:
+                        headers.append(("Access-Control-Expose-Headers", params["ACEHeaders"][0]))
+                else:
+                    headers = [
+                        ("Cache-Control", "no-cache, must-revalidate"),
+                        ("Pragma", "no-cache"),
+                        ("Content-Type", "application/javascript"),
+                    ]
+                    if path.endswith("/update-worker-from-file.py"):
+                        count = fetch_stash.increment(params["Key"][0], path=parsed.path)
+                        if count > 2:
+                            self.send_error(500, "Unknown update worker state")
+                            return
+                        filename = os.fsdecode(params["First" if count == 1 else "Second"][0].encode("latin-1"))
+                        source = ((wpt_root / path.lstrip("/")).parent / filename).resolve()
+                        source.relative_to(wpt_root.resolve())
+                        body = source.read_bytes()
+                    elif path.endswith("/ServiceWorkerGlobalScope/resources/update-worker.py"):
+                        headers = [
+                            ("Cache-Control", "max-age: 0"),
+                            ("Content-Type", "application/javascript"),
+                        ]
+                        source = (wpt_root / path.lstrip("/")).with_suffix(".js")
+                        script = source.read_text(encoding="utf-8")
+                        body = f"// {time.time()}\n{script}".encode("utf-8")
+                    elif path.endswith("/update-during-installation-worker.py"):
+                        headers = [
+                            ("Content-Type", "application/javascript"),
+                            ("Cache-Control", "max-age=0"),
+                        ]
+                        body = (
+                            f"// {random.random()}\n"
+                            "importScripts('update-during-installation-worker.js');"
+                        ).encode("ascii")
+                    elif path.endswith("/import-scripts-version.py"):
+                        # Match the upstream delay so update checks see new bytes.
+                        if stopping.wait(0.1):
+                            self.close_connection = True
+                            return
+                        version = (datetime.now() - datetime(1970, 1, 1)).total_seconds()
+                        body = f'version = "{version}";\n'.encode("ascii")
+                    elif path.endswith("/import-scripts-get.py"):
+                        body = ('%s = "%s";\n' % (
+                            params["output"][0], params["msg"][0],
+                        )).encode("latin-1")
+                    elif path.endswith("/import-scripts-echo.py"):
+                        directory = path.rsplit("/", 2)[-2]
+                        suffix = f" ({directory}/)" if directory in ("subdir", "scope2") else ""
+                        body = ('echo_output = "%s%s";\n' % (
+                            params["msg"][0], suffix,
+                        )).encode("latin-1")
+                    else:
+                        mode = params["Mode"][0]
+                        count = fetch_stash.increment(params["Key"][0], path=parsed.path)
+                        extra_body = ""
+                        if count == 2:
+                            if mode == "bad_mime_type":
+                                headers[-1] = ("Content-Type", "text/html")
+                            elif mode == "not_found":
+                                status = 404
+                                headers = [("Content-Type", "text/plain")]
+                            elif mode == "redirect":
+                                status = 301
+                                location = unquote(params.get("Redirect", ["empty.js"])[0])
+                                headers.append(("Location", location))
+                            elif mode == "syntax_error":
+                                extra_body = "badsyntax(isbad;"
+                            elif mode == "throw_install":
+                                extra_body = (
+                                    "addEventListener('install', function(e) { "
+                                    "throw new Error('boom'); });"
+                                )
+                        if status == 404:
+                            body = b"Page not found"
+                        elif status == 301:
+                            body = f"/* {count} */".encode("ascii")
+                        else:
+                            body = f"/* {count} */ {extra_body}".encode("utf-8")
+                if not 100 <= status <= 599:
+                    raise ValueError("invalid response status")
+                for _, value in headers:
+                    if "\r" in value or "\n" in value:
+                        raise ValueError("invalid response header")
+                    value.encode("latin-1")
+            except OSError:
+                self.send_error(500)
+                return
+            except (KeyError, ValueError, UnicodeError):
+                self.send_error(400)
+                return
+            self._send_bytes(
+                None, body, emit_body=self.command != "HEAD",
+                extra_headers=headers, status_code=status, cache_control=None,
+            )
+
+
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
             if delay_seconds is None:
@@ -2600,6 +2753,8 @@ def _make_handler(
                 return self._serve_navigation_second_visit
             if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
                 return self._serve_empty_location_resource
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                return self._serve_service_worker_script_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
                 return self._serve_xhr_response_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in FETCH_RANGE_RESOURCE_PATHS:
