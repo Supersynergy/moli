@@ -839,6 +839,7 @@ def _supported_wptserve_handler_references(
     supported: tuple[re.Pattern[str], ...] = ()
     if rel is not None:
         supported += _service_worker_script_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _fetch_preflight_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.startswith("fetch/api/"):
         supported += _empty_location_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None:
@@ -1659,4 +1660,30 @@ def _service_worker_script_handler_reference_patterns(directory: str) -> tuple[r
         )
         for reference in references
     )
+
+
+
+@lru_cache(maxsize=None)
+def _fetch_preflight_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    names = ("preflight.py", "clean-stash.py")
+    references = []
+    for name in names:
+        resource = "fetch/api/resources/" + name
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    patterns = [
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    ]
+    # The Fetch API's shared utils.js defines RESOURCES_DIR. Keep the
+    # concatenation intact in this match; a bare filename is not sufficient.
+    patterns.append(re.compile(
+        r"(?<![\w$.])RESOURCES_DIR\s*\+\s*['\"](?:"
+        + "|".join(re.escape(name) for name in names)
+        + rf"){WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+    ))
+    return tuple(patterns)
 

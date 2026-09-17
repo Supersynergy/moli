@@ -170,6 +170,10 @@ SERVICE_WORKER_MALFORMED_SCRIPTS = {
     "instantiation-error-and-top-level-await":
         'import nonexistent from "./imported-module-script.js"; await Promise.resolve(1);',
 }
+FETCH_PREFLIGHT_RESOURCE_PATHS = {
+    "/fetch/api/resources/preflight.py",
+    "/fetch/api/resources/clean-stash.py",
+}
 
 
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
@@ -1707,12 +1711,16 @@ class FetchStash:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._values: dict[tuple[str, uuid.UUID], str] = {}
+        self._values: dict[tuple[str, uuid.UUID], object] = {}
         self._counts: dict[tuple[str, uuid.UUID], int] = {}
 
-    def put(self, key: str, value: str, *, path: str = "/fetch/api/resources/",
-            overwrite: bool = False) -> None:
+    def put(
+        self, key: str, value: object, *, overwrite: bool = False,
+        path: str = "/fetch/api/resources/",
+    ) -> None:
         parsed_key = (path, uuid.UUID(key))
+        if value is None:
+            raise ValueError("Shared stash values cannot be None")
         with self._lock:
             if not overwrite and parsed_key in self._values:
                 raise ValueError("Tried to overwrite existing shared stash value")
@@ -1726,7 +1734,7 @@ class FetchStash:
             return value
 
 
-    def take(self, key: str, *, path: str = "/fetch/api/resources/") -> str | None:
+    def take(self, key: str, *, path: str = "/fetch/api/resources/") -> object:
         parsed_key = (path, uuid.UUID(key))
         with self._lock:
             return self._values.pop(parsed_key, None)
@@ -1935,6 +1943,12 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
                 self._serve_service_worker_script_resource()
                 return
+            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                parsed = urlsplit(self.path)
+                self._serve_fetch_preflight_resource(
+                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
+                )
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -1975,6 +1989,12 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
                 self._serve_service_worker_script_resource()
+                return
+            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                parsed = urlsplit(self.path)
+                self._serve_fetch_preflight_resource(
+                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
+                )
                 return
             if self._serve_xhr_response_resource():
                 return
@@ -2038,6 +2058,12 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
                 self._serve_service_worker_script_resource()
                 return
+            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                parsed = urlsplit(self.path)
+                self._serve_fetch_preflight_resource(
+                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
+                )
+                return
             if self._serve_xhr_response_resource():
                 return
             parsed = urlparse(self.path)
@@ -2084,6 +2110,12 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
                 self._serve_service_worker_script_resource()
+                return
+            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                parsed = urlsplit(self.path)
+                self._serve_fetch_preflight_resource(
+                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
+                )
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
@@ -2305,6 +2337,12 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
                 self._serve_service_worker_script_resource()
+                return
+            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                parsed = urlsplit(self.path)
+                self._serve_fetch_preflight_resource(
+                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
+                )
                 return
             if self._serve_xhr_response_resource(emit_body=emit_body):
                 return
@@ -2954,6 +2992,88 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
 
 
+        def _serve_fetch_preflight_resource(
+            self, path: str, query: str, *, emit_body: bool
+        ) -> None:
+            connection_headers = []
+            # Neither upstream handler reads the upload. Respond immediately
+            # and close unread-body connections instead of waiting for EOF.
+            if (self.headers.get("Transfer-Encoding") is not None
+                    or self.headers.get("Content-Length", "0").strip() not in {"", "0"}):
+                self.close_connection = True
+                connection_headers.append(("Connection", "close"))
+            params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            stash_path = urlsplit(self.path).path
+            try:
+                if path.endswith("/clean-stash.py"):
+                    # These handlers use the complete request path, whereas
+                    # the abort helpers explicitly share a directory namespace.
+                    removed = fetch_stash.take(params["token"][0], path=stash_path)
+                    self._send_bytes(None, b"1" if removed is not None else b"0",
+                                     emit_body=emit_body, extra_headers=connection_headers)
+                    return
+
+                headers = [*connection_headers, ("Content-Type", "text/plain")]
+                for origin in params.get("origin", ["*"])[0].split(", "):
+                    headers.append(("Access-Control-Allow-Origin", origin))
+                token = params.get("token", [None])[0]
+                if "clear-stash" in params:
+                    removed = fetch_stash.take(token, path=stash_path)
+                    self._send_bytes(None, b"1" if removed is not None else b"0",
+                                     emit_body=emit_body, extra_headers=headers)
+                    return
+                if "credentials" in params:
+                    headers.append(("Access-Control-Allow-Credentials", "true"))
+                data = {"control_request_headers": "", "preflight": "0", "preflight_referrer": ""}
+                if self.command == "OPTIONS":
+                    if "Access-Control-Request-Method" not in self.headers:
+                        self._send_bytes("application/json", b"ERROR: No access-control-request-method in preflight!",
+                                         emit_body=emit_body, extra_headers=connection_headers, status_code=400)
+                        return
+                    if self.headers.get("Accept", "") != "*/*":
+                        self._send_bytes("application/json", b"ERROR: Invalid access in preflight!",
+                                         emit_body=emit_body, extra_headers=connection_headers, status_code=400)
+                        return
+                    if "control_request_headers" in params:
+                        data["control_request_headers"] = self.headers.get("Access-Control-Request-Headers")
+                    for param, field in (("max_age", "Access-Control-Max-Age"),
+                                         ("allow_headers", "Access-Control-Allow-Headers"),
+                                         ("allow_methods", "Access-Control-Allow-Methods")):
+                        if param in params:
+                            headers.append((field, params[param][0]))
+                    status = int(params.get("preflight_status", ["200"])[0])
+                    data.update(preflight="1", preflight_referrer=self.headers.get("Referer", ""),
+                                preflight_user_agent=self.headers.get("User-Agent", ""))
+                    if token:
+                        fetch_stash.put(token, data, path=stash_path)
+                    self._send_bytes(None, b"", emit_body=emit_body, extra_headers=headers, status_code=status)
+                    return
+
+                if token:
+                    data = fetch_stash.take(token, path=stash_path) or data
+                if ("checkUserAgentHeaderInPreflight" in params
+                        and self.headers.get("User-Agent") != data["preflight_user_agent"]):
+                    self._send_bytes(None, b"ERROR: No user-agent header in preflight",
+                                     emit_body=emit_body, extra_headers=headers, status_code=400)
+                    return
+                headers.extend([
+                    ("Access-Control-Expose-Headers", "x-did-preflight, x-control-request-headers, x-referrer, x-preflight-referrer, x-origin"),
+                    ("x-did-preflight", data["preflight"]),
+                ])
+                if data["control_request_headers"] is not None:
+                    headers.append(("x-control-request-headers", data["control_request_headers"]))
+                headers.extend([
+                    ("x-preflight-referrer", data["preflight_referrer"]),
+                    ("x-referrer", self.headers.get("Referer", "")),
+                    ("x-origin", self.headers.get("Origin", "")),
+                ])
+                if token:
+                    fetch_stash.put(token, data, path=stash_path)
+                self._send_bytes(None, b"", emit_body=emit_body, extra_headers=headers)
+            except (KeyError, ValueError, TypeError):
+                self.send_error(500)
+
+
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
             if delay_seconds is None:
@@ -3011,6 +3131,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return self._serve_empty_location_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
                 return self._serve_service_worker_script_resource
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                return self._serve_fetch_resource_method
             if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
                 return self._serve_xhr_response_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in FETCH_RANGE_RESOURCE_PATHS:
