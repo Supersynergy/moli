@@ -2235,6 +2235,7 @@ mod observer_receivers;
 mod post_parse;
 mod queue_microtask;
 mod rendering_update;
+mod retained_child_window;
 mod script_terminal_completion;
 mod streams;
 mod string_timers;
