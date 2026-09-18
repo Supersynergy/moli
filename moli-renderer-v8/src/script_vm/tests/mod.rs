@@ -2248,7 +2248,6 @@ mod websocket;
 mod window_execution_context;
 mod worklet_interfaces;
 
-mod string_timers;
 
 mod history_replace_forward;
 
