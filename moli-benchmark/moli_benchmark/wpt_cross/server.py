@@ -93,6 +93,7 @@ XHR_BODY_RESOURCE_PATHS = {
 }
 XHR_RESPONSE_RESOURCE_PATHS = {
     *XHR_BODY_RESOURCE_PATHS,
+    "/xhr/resources/headers.py",
     "/xhr/resources/inspect-headers.py",
     "/xhr/resources/echo-headers.py",
     "/xhr/resources/access-control-basic-put-allow.py",
@@ -3088,6 +3089,19 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     headers, body = _xhr_inspect_headers_fixture_response(
                         parsed.query, list(self.headers.raw_items()),
                     )
+                elif path == "/xhr/resources/headers.py":
+                    status, reason, content_type, body = 200, None, "text/plain", b"TEST"
+                    headers = [
+                        ("X-Custom-Header", "test"),
+                        ("Set-Cookie", "test"),
+                        ("Set-Cookie2", "test"),
+                        ("X-Custom-Header-Empty", ""),
+                        ("X-Custom-Header-Comma", "1"),
+                        ("X-Custom-Header-Comma", "2"),
+                        # send_header encodes strings as Latin-1; preserve the
+                        # UTF-8 ellipsis bytes written by the upstream fixture.
+                        ("X-Custom-Header-Bytes", "\u00e2\u0080\u00a6"),
+                    ]
                 elif path == "/xhr/resources/echo-headers.py":
                     status, reason, content_type = 200, None, "text/plain"
                     headers = []
