@@ -185,6 +185,8 @@ pub struct RendererCreateHtmlPageRequest {
 }
 
 pub struct RendererCreateStreamingRawPageRequest {
+    pub(super) document_replacement:
+        Option<Arc<super::document_replacement::RendererDocumentReplacementScope>>,
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
     pub requested_url: Url,

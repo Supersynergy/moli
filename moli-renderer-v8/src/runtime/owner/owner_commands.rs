@@ -177,7 +177,7 @@ impl RendererOwnerHandle {
     /// observes `Opened` before this release on success, while an early failure
     /// produces only the release. Never move this to the navigation completion
     /// channel: that independent channel cannot order against stream opening.
-    pub(super) fn release_page_output_reservation(
+    pub(in crate::runtime) fn release_page_output_reservation(
         &self,
         reservation: RendererPageReservationToken,
     ) {

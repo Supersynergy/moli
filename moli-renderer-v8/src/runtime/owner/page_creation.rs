@@ -722,6 +722,7 @@ impl RendererOwnerHandle {
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateStreamingRawPageRequest {
         RendererCreateStreamingRawPageRequest {
+            document_replacement: None,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
             requested_url,
@@ -1108,6 +1109,7 @@ impl RendererOwnerHandle {
         _owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererCreateStreamingRawPageRequest {
+            document_replacement: _document_replacement,
             root_frame_id,
             main_document_commit,
             requested_url,
