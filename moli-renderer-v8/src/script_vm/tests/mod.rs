@@ -2232,6 +2232,7 @@ mod inspector_unwrap;
 mod lazy_storage;
 mod lazy_window_surfaces;
 mod mouse_snapshot;
+mod navigation_timing_inheritance;
 mod no_cors_header_fill;
 mod observable;
 mod observer_callbacks;
@@ -2249,21 +2250,20 @@ mod webidl_collections;
 mod webidl_fetch;
 mod webidl_receivers;
 mod webidl_trusted_types;
+mod history_replace_forward;
 mod websocket;
 mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;
-mod worklet_interfaces;
-
-
 mod history_replace_forward;
+mod worklet_interfaces;
 mod extracted;
-mod navigation_timing_inheritance;
 mod response_blob_mime;
 mod intersection_target_order;
 mod observer_element_arguments;
 
 mod media_device_interfaces;
+mod window_promise_method_receivers;
 mod window_restricted_accessors;
 mod window_scheduling_receivers;
 mod window_sync_method_receivers;
