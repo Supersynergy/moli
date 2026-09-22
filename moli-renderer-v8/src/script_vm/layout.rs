@@ -404,6 +404,7 @@ impl ScriptVm {
         batch: &moli_layout::LayoutQueryBatch<DomHandle>,
     ) -> Result<moli_layout::LayoutAnswers<DomHandle>, moli_layout::LayoutError> {
         let host = self._context_host.borrow();
+        host.ensure_current_layout()?;
         crate::native_bridge::element::observable_geometry_batch(&host, document, batch)
     }
 

@@ -107,7 +107,7 @@ fn mouse_click_consumes_snapshot_through_hover_focus_and_dom_mutation() {
 }
 
 #[test]
-fn mouse_and_geometry_reuse_the_snapshot_until_fresh_paint() {
+fn mouse_input_keeps_its_snapshot_while_dom_geometry_refreshes() {
     let mut vm = new_parsed_test_vm(
         "https://mouse-snapshot.test/",
         r#"<!doctype html><style>body{min-height:100px}</style>
@@ -122,13 +122,14 @@ fn mouse_and_geometry_reuse_the_snapshot_until_fresh_paint() {
     mouse(&mut vm, "mousemove").unwrap();
     assert_eq!(vm.eval("JSON.stringify(hits)").unwrap(), r#"["target"]"#);
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    // DOM and hover changes do not invalidate ordinary geometry reads.
+    // Input hit testing used the published frame; a direct DOM geometry read
+    // now asks for the changed style's current box.
     assert_eq!(
         vm.eval("String(target.getBoundingClientRect().left)")
             .unwrap(),
-        "20"
+        "300"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
     vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(1920, 1080, 1.0))
         .unwrap()
         .unwrap();
@@ -137,10 +138,10 @@ fn mouse_and_geometry_reuse_the_snapshot_until_fresh_paint() {
             .unwrap(),
         "300"
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 2);
     mouse(&mut vm, "mousemove").unwrap();
     assert_eq!(vm.eval("JSON.stringify(hits)").unwrap(), r#"["target",""]"#);
-    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+    assert_eq!(vm.layout_pass_observability_for_test().1, before + 2);
 }
 
 #[test]

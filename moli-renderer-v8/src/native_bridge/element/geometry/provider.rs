@@ -33,7 +33,7 @@ pub(crate) fn observable_geometry_query(
     document: DomHandle,
     query: &LayoutQuery<DomHandle>,
 ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
-    runtime.ensure_initial_layout()?;
+    runtime.ensure_current_layout()?;
     published_geometry_query(runtime, document, query)
 }
 
@@ -108,6 +108,7 @@ pub(crate) fn observable_sources_with_fragments(
     if sources.is_empty() {
         return Ok(HashSet::new());
     }
+    runtime.ensure_current_layout()?;
     let queries = sources
         .iter()
         .copied()
@@ -276,6 +277,7 @@ pub(crate) fn observable_caret_position(
     document: DomHandle,
     point: LayoutPoint,
 ) -> Result<Option<LayoutCaretPosition<DomHandle>>, LayoutError> {
+    runtime.ensure_current_layout()?;
     let answers = observable_geometry_batch(
         runtime,
         document,

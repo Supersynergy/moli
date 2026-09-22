@@ -528,6 +528,7 @@ fn element_at_point(
     x: f64,
     y: f64,
 ) -> Result<Option<DomHandle>, moli_layout::LayoutError> {
+    runtime.ensure_current_layout()?;
     // A single-point query intentionally keeps a foremost text hit and maps
     // it to its web-exposed parent element. This is observably different from
     // the penetrating-list filtering performed by `elements_at_point`.
@@ -556,6 +557,7 @@ fn elements_at_point(
     x: f64,
     y: f64,
 ) -> Result<Vec<DomHandle>, moli_layout::LayoutError> {
+    runtime.ensure_current_layout()?;
     let (metrics, hits) = match observable_hit_test_all(
         runtime,
         document,

@@ -206,10 +206,8 @@ impl JsContextHost {
             .inferred_frame_style_viewport_cache_observability()
     }
 
-    /// Lazily publishes the first screen layout for this main Document.
-    ///
-    /// Every consumer shares the same recursive tree. Missing nodes or newly
-    /// navigated frames in an existing tree must not refresh the whole page.
+    /// Lazily publishes the first screen layout. Input dispatch keeps using
+    /// this frozen tree until the next explicit visual publication.
     pub(crate) fn ensure_initial_layout(&self) -> Result<(), LayoutError> {
         if !self.layout_policy.uses_real_layout() {
             return Ok(());
@@ -232,6 +230,44 @@ impl JsContextHost {
         );
         let pass = self
             .build_layout_pass_for_document(document, request)?
+            .ok_or(LayoutError::NoLayoutRoot)?;
+        self.publish_layout_pass_for_document(document, pass);
+        Ok(())
+    }
+
+    /// Direct DOM and protocol geometry reads require the current layout
+    /// inputs. The previous tree remains owned for sampled consumers until a
+    /// replacement pass succeeds. Reads inside an input event keep that
+    /// event's already selected hit-test frame stable.
+    pub(crate) fn ensure_current_layout(&self) -> Result<(), LayoutError> {
+        if self.current_input_event().is_some() {
+            return self.ensure_initial_layout();
+        }
+        if !self.layout_policy.uses_real_layout() {
+            return Ok(());
+        }
+        if self.layout_pass_active.get() {
+            return Err(LayoutError::ReentrantLayoutPass);
+        }
+        let document = self.document_handle();
+        let viewport = self.layout_viewport_for_document(document);
+        let state = self.document_layout_state.borrow();
+        let current = !state.latest_layout_is_dirty()
+            && state
+                .latest_layout(document)
+                .is_some_and(|tree| tree.viewport == viewport);
+        drop(state);
+        if current {
+            return Ok(());
+        }
+        let pass = self
+            .build_layout_pass_for_document(
+                document,
+                LayoutPassRequest::new(
+                    viewport,
+                    moli_layout::LayoutFlushReason::SynchronousGeometry,
+                ),
+            )?
             .ok_or(LayoutError::NoLayoutRoot)?;
         self.publish_layout_pass_for_document(document, pass);
         Ok(())
@@ -404,6 +440,17 @@ impl JsContextHost {
         }
     }
 
+    fn with_current_layout_tree_for_document<T>(
+        &self,
+        document: DomHandle,
+        inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>) -> T,
+    ) -> Option<T> {
+        if self.document_layout_state.borrow().latest_layout_is_dirty() {
+            return None;
+        }
+        self.with_latest_layout_tree_for_document(document, inspect)
+    }
+
     /// Inspects the member tree for one exact Document in the single latest
     /// recursively frozen snapshot.
     ///
@@ -511,6 +558,14 @@ impl JsContextHost {
         self.document_layout_state
             .borrow_mut()
             .mark_visual_state_dirty();
+    }
+
+    pub(crate) fn mark_layout_input_dirty(&self) {
+        debug_assert!(!self.layout_pass_active.get());
+        self.clear_layout_rect_cache();
+        self.document_layout_state
+            .borrow_mut()
+            .mark_latest_layout_dirty();
     }
 
     pub(crate) fn document_web_font_resources_are_current(

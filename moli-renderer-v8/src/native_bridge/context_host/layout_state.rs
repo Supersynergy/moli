@@ -43,6 +43,7 @@ pub(super) struct DocumentLayoutState {
     web_font_resource_generation: Option<StylesheetResourceGeneration>,
     visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
+    latest_layout_is_dirty: bool,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
@@ -141,6 +142,15 @@ impl DocumentLayoutState {
         tree: FrozenLayoutTree<DomHandle>,
     ) {
         self.latest_layout.publish(document, tree);
+        self.latest_layout_is_dirty = false;
+    }
+
+    pub(super) const fn latest_layout_is_dirty(&self) -> bool {
+        self.latest_layout_is_dirty
+    }
+
+    pub(super) fn mark_latest_layout_dirty(&mut self) {
+        self.latest_layout_is_dirty = true;
     }
 
     pub(super) fn clear_latest_layout(&mut self) {
@@ -235,15 +245,24 @@ impl DocumentLayoutState {
         &mut self,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
+        let registered_before = self.services.web_font_count();
         self.web_fonts
             .retain_active_slots(resources, &mut self.services);
+        if self.services.web_font_count() != registered_before {
+            self.mark_latest_layout_dirty();
+        }
     }
 
     pub(super) fn admit(
         &mut self,
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
-        self.web_fonts.admit(resource, &mut self.services)
+        let registered_before = self.services.web_font_count();
+        let admitted = self.web_fonts.admit(resource, &mut self.services);
+        if self.services.web_font_count() != registered_before {
+            self.mark_latest_layout_dirty();
+        }
+        admitted
     }
 
     pub(super) fn complete(
@@ -251,6 +270,9 @@ impl DocumentLayoutState {
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
         let completion = self.web_fonts.complete(terminal, &mut self.services);
+        if matches!(&completion, DocumentWebFontCompletion::Registered(_)) {
+            self.mark_latest_layout_dirty();
+        }
         if !matches!(&completion, DocumentWebFontCompletion::Stale) {
             self.mark_visual_state_dirty();
         }

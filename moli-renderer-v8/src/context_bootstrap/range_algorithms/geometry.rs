@@ -122,6 +122,9 @@ fn native_range_client_rects<'s>(
     if queries.is_empty() {
         return Some(Ok(Vec::new()));
     }
+    if let Err(error) = host.ensure_current_layout() {
+        return Some(Err(error));
+    }
     let answers = match observable_geometry_batch(
         host,
         document,
