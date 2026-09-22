@@ -2384,11 +2384,15 @@ async fn network_navigations_use_unique_document_loader_ids() {
             axum::Router::new()
                 .route(
                     "/first",
-                    axum::routing::get(|| async { "<!doctype html><main>first</main>" }),
+                    axum::routing::get(|| async {
+                        axum::response::Html("<!doctype html><main>first</main>")
+                    }),
                 )
                 .route(
                     "/second",
-                    axum::routing::get(|| async { "<!doctype html><main>second</main>" }),
+                    axum::routing::get(|| async {
+                        axum::response::Html("<!doctype html><main>second</main>")
+                    }),
                 ),
         )
         .await
@@ -2467,11 +2471,15 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {
             axum::Router::new()
                 .route(
                     "/first",
-                    axum::routing::get(|| async { "<!doctype html><main>first</main>" }),
+                    axum::routing::get(|| async {
+                        axum::response::Html("<!doctype html><main>first</main>")
+                    }),
                 )
                 .route(
                     "/second",
-                    axum::routing::get(|| async { "<!doctype html><main>second</main>" }),
+                    axum::routing::get(|| async {
+                        axum::response::Html("<!doctype html><main>second</main>")
+                    }),
                 ),
         )
         .await
