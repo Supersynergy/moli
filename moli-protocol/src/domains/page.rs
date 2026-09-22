@@ -1351,6 +1351,7 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
         navigation.request_body(),
         navigation.request_headers(),
         navigation.browser_navigation_kind(),
+        navigation.navigation_history().cloned(),
     )
     .await;
 }
@@ -1370,6 +1371,7 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
         None,
         &[],
         moli_fetch::BrowserNavigationRequestKind::Navigate,
+        None,
     )
     .await;
 }
@@ -1383,6 +1385,7 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
 ) {
     let start = navigation::start_session_owner_navigation_from_renderer(
         conn,
@@ -1392,6 +1395,7 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
         request_body,
         request_headers,
         browser_navigation_kind,
+        navigation_history,
     );
     let step =
         navigation::finish_started_navigation_command_for_parts(conn, None, owner, start, &[]);
