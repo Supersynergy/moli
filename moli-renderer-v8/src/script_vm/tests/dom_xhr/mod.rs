@@ -5,6 +5,7 @@ mod cssom;
 mod dom;
 mod forms;
 mod misc;
+mod no_cors_redirect;
 mod response_headers;
 mod send_body;
 mod shadow_dom;
