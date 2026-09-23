@@ -81,6 +81,8 @@ from .case_set import (
 http.client._MAXHEADERS = 512
 
 
+PRELOAD_COUNT_PATH = "/preload/resources/preload-count.py"
+PRELOAD_COUNT_KEY = "a8697ae7-c8cb-4dbd-a8ef-27111dc7042f"
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
@@ -1772,7 +1774,6 @@ class CspReportStore:
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
         self._reports: dict[str, list[dict]] = {}
-        self._counts: dict[str, int] = {}
 
     def append_reports(self, report_id: str, reports: list[dict]) -> None:
         with self._cv:
@@ -1836,7 +1837,6 @@ class FetchStash:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._values: dict[tuple[str, uuid.UUID], object] = {}
-        self._counts: dict[tuple[str, uuid.UUID], int] = {}
 
     def put(
         self, key: str, value: object, *, overwrite: bool = False,
@@ -1853,8 +1853,8 @@ class FetchStash:
     def increment(self, key: str, *, path: str) -> int:
         parsed_key = (path, uuid.UUID(key))
         with self._lock:
-            value = int(self._counts.get(parsed_key, 0)) + 1
-            self._counts[parsed_key] = value
+            value = int(self._values.get(parsed_key, 0)) + 1
+            self._values[parsed_key] = value
             return value
 
 
@@ -2143,6 +2143,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_common_redirect_resource():
                 return
+            if self._serve_preload_count_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
@@ -2203,6 +2205,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
+                return
+            if self._serve_preload_count_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -2297,6 +2301,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_common_redirect_resource():
                 return
+            if self._serve_preload_count_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
@@ -2356,6 +2362,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
+                return
+            if self._serve_preload_count_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -2525,6 +2533,35 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 escape_type=escape_type,
             )
 
+        def _serve_preload_count_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != PRELOAD_COUNT_PATH:
+                return False
+            # The upstream handler only reads GET parameters, for every method.
+            self.close_connection = True
+            stash_path = PRELOAD_COUNT_PATH.rsplit("/", 1)[0] + "/"
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            try:
+                action = params["action"][0]
+            except KeyError:
+                # Upstream takes the counter before reading the required action.
+                fetch_stash.take(PRELOAD_COUNT_KEY, path=stash_path)
+                self.send_error(500)
+                return True
+            if action == "result":
+                count = fetch_stash.take(PRELOAD_COUNT_KEY, path=stash_path) or 0
+                status, content_type = 200, "text/javascript"
+                body = f"preloadCount = {count};".encode("ascii")
+            else:
+                fetch_stash.increment(PRELOAD_COUNT_KEY, path=stash_path)
+                status, content_type, body = 404, None, b"No entry is found"
+            self._send_bytes(
+                content_type, body, emit_body=self.command != "HEAD",
+                status_code=status, cache_control=None,
+                extra_headers=[("Connection", "close")],
+            )
+            return True
+
         def _serve_common_echo_resource(self) -> bool:
             parsed = urlsplit(self.path)
             if unquote(parsed.path) != COMMON_ECHO_PATH:
@@ -2569,6 +2606,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
+                return
+            if self._serve_preload_count_resource():
                 return
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
@@ -3494,6 +3533,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == PRELOAD_COUNT_PATH:
+                return self._serve_preload_count_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
                 return self._serve_fetch_resource_method
             if name.startswith("do_") and unquote(urlsplit(self.path).path) in REMOTE_CONTEXT_RESOURCE_PATHS:
