@@ -726,6 +726,19 @@ def _html_path_is_supported(
 
 
 @lru_cache(maxsize=None)
+def _preload_count_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "preload/resources/preload-count.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
+
+
+@lru_cache(maxsize=None)
 def _common_echo_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     resource = "common/echo.py"
     relative = posixpath.relpath(resource, directory)
@@ -866,6 +879,7 @@ def _supported_wptserve_handler_references(
         supported += _fetch_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _document_charset_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _iframe_stash_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _preload_count_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _navigation_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
