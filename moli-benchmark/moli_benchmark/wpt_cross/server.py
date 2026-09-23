@@ -99,6 +99,7 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/last-modified.py",
 }
 COMMON_ECHO_PATH = "/common/echo.py"
+COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
@@ -1718,6 +1719,8 @@ def _make_handler(
         def do_OPTIONS(self) -> None:  # noqa: N802
             if self._serve_common_echo_resource():
                 return
+            if self._serve_common_redirect_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if self._serve_xhr_response_resource():
@@ -1751,6 +1754,8 @@ def _make_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             if self._serve_common_echo_resource():
+                return
+            if self._serve_common_redirect_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -1807,6 +1812,8 @@ def _make_handler(
         def _serve_fetch_resource_method(self) -> None:
             if self._serve_common_echo_resource():
                 return
+            if self._serve_common_redirect_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if self._serve_xhr_response_resource():
@@ -1839,6 +1846,8 @@ def _make_handler(
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
             if self._serve_common_echo_resource():
+                return
+            if self._serve_common_redirect_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -2059,6 +2068,8 @@ def _make_handler(
         def _serve_response(self, *, emit_body: bool) -> None:
             if self._serve_common_echo_resource():
                 return
+            if self._serve_common_redirect_resource():
+                return
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
             if self._serve_xhr_response_resource(emit_body=emit_body):
@@ -2144,7 +2155,6 @@ def _make_handler(
 
             if path in {
                 "/fetch/api/resources/redirect.py",
-                "/common/redirect.py",
                 "/common/redirect-opt-in.py",
             }:
                 redirect = _redirect_fixture_response(parsed.query)
@@ -2596,6 +2606,8 @@ def _make_handler(
         def __getattr__(self, name: str):
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
+                return self._serve_common_redirect_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) == NAVIGATION_SECOND_VISIT_PATH:
                 return self._serve_navigation_second_visit
             if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
@@ -2666,6 +2678,35 @@ def _make_handler(
                 return
             self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
                              status_code=status, status_text=reason)
+
+        def _serve_common_redirect_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != COMMON_REDIRECT_PATH:
+                return False
+            # This handler responds without reading uploads, including OPTIONS.
+            self.close_connection = True
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            status = 302
+            try:
+                status = int(params.get("status", ["302"])[0].encode("latin-1"))
+            except ValueError:
+                pass
+            if "location" not in params:
+                self.send_error(500)
+                return True
+            headers = [("Connection", "close"), ("Location", params["location"][0])]
+            origin = self.headers.get("Origin")
+            if "enable-cors" in params and origin:
+                headers.extend([
+                    ("Content-Type", "text/plain"),
+                    ("Access-Control-Allow-Origin", origin),
+                    ("Access-Control-Allow-Credentials", "true"),
+                ])
+            self.send_response(status)
+            for name, value in headers:
+                self.send_header(name, value)
+            self.end_headers()
+            return True
 
         def _serve_empty_location_resource(self, *, emit_body: bool = True) -> bool:
             if unquote(urlparse(self.path).path) != FETCH_EMPTY_LOCATION_PATH:
