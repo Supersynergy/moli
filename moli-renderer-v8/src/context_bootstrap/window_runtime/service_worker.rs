@@ -1005,7 +1005,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_message_handler_set
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -1022,7 +1022,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_message_handler_set
         SERVICE_WORKER_CONTAINER_LISTENERS_SLOT,
         "message",
         SERVICE_WORKER_CONTAINER_ONMESSAGE_SLOT,
-        stored.is_function(),
+        stored.is_object(),
     );
 }
 
@@ -1050,7 +1050,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_messageerror_handle
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -1067,7 +1067,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_messageerror_handle
         SERVICE_WORKER_CONTAINER_LISTENERS_SLOT,
         "messageerror",
         SERVICE_WORKER_CONTAINER_ONMESSAGEERROR_SLOT,
-        stored.is_function(),
+        stored.is_object(),
     );
 }
 
@@ -1095,7 +1095,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_controllerchange_ha
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -1112,7 +1112,7 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_controllerchange_ha
         SERVICE_WORKER_CONTAINER_LISTENERS_SLOT,
         "controllerchange",
         SERVICE_WORKER_CONTAINER_ONCONTROLLERCHANGE_SLOT,
-        stored.is_function(),
+        stored.is_object(),
     );
 }
 
