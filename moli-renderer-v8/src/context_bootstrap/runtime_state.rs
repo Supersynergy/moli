@@ -1981,6 +1981,8 @@ pub(crate) fn finish_context_bootstrap(
         ("IntersectionObserver", "IntersectionObserver"),
         ("IntersectionObserverEntry", "IntersectionObserverEntry"),
         ("ResizeObserver", "ResizeObserver"),
+        ("ResizeObserverEntry", "ResizeObserverEntry"),
+        ("ResizeObserverSize", "ResizeObserverSize"),
         ("PerformanceObserver", "PerformanceObserver"),
         (
             "PerformanceObserverEntryList",
