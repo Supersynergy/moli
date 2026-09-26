@@ -2239,6 +2239,7 @@ mod javascript_url_origin;
 mod joint_history;
 mod lazy_storage;
 mod lazy_window_surfaces;
+mod legacy_performance;
 mod location_put_forwards;
 mod mouse_snapshot;
 mod navigation_timing_inheritance;
