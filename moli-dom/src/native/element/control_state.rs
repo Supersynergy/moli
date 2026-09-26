@@ -1,6 +1,7 @@
 use super::Attribute;
 use crate::forms::{
-    input_type_has_value_sanitization, sanitize_input_value_for_type_with_multiple,
+    InputValueSanitizationContext, input_type_has_value_sanitization,
+    sanitize_input_value_for_type_with_context,
 };
 use crate::native::NativeNodeId;
 use indexmap::IndexSet;
@@ -248,10 +249,16 @@ impl ElementControlState {
 
         if local_name == "input" {
             let input_type = InputType::from_attribute_value(attribute("type"));
-            state.input_value = Some(sanitize_input_value_for_type_with_multiple(
+            state.input_value = Some(sanitize_input_value_for_type_with_context(
                 input_type,
                 attribute("value").unwrap_or_default(),
-                attribute("multiple").is_some(),
+                InputValueSanitizationContext {
+                    multiple: attribute("multiple").is_some(),
+                    min: attribute("min"),
+                    max: attribute("max"),
+                    step: attribute("step"),
+                    value_attribute: attribute("value"),
+                },
             ));
             state.checked = Some(attribute("checked").is_some());
             state.selection_start = Some(0);
@@ -877,7 +884,7 @@ impl ElementControlState {
         namespace: &str,
         local_name: &str,
         input_type: InputType,
-        input_multiple: bool,
+        input_context: InputValueSanitizationContext<'_>,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -890,29 +897,40 @@ impl ElementControlState {
         match (local_name, attribute_name) {
             ("input", "value") => {
                 if !self.input_value_dirty {
-                    self.input_value = Some(sanitize_input_value_for_type_with_multiple(
+                    self.input_value = Some(sanitize_input_value_for_type_with_context(
                         input_type,
                         attribute_value.unwrap_or_default(),
-                        input_multiple,
+                        input_context,
                     ));
                 }
             }
             ("input", "type") => {
-                if input_type_has_value_sanitization(input_type) || input_type == InputType::Email {
+                if input_type_has_value_sanitization(input_type)
+                    || matches!(input_type, InputType::Range | InputType::Email)
+                {
                     let current = self.input_value.as_deref().unwrap_or_default();
-                    self.input_value = Some(sanitize_input_value_for_type_with_multiple(
+                    self.input_value = Some(sanitize_input_value_for_type_with_context(
                         input_type,
                         current,
-                        input_multiple,
+                        input_context,
                     ));
                 }
             }
             ("input", "multiple") if input_type == InputType::Email => {
                 let current = self.input_value.as_deref().unwrap_or_default();
-                self.input_value = Some(sanitize_input_value_for_type_with_multiple(
+                self.input_value = Some(sanitize_input_value_for_type_with_context(
                     input_type,
                     current,
-                    input_multiple,
+                    input_context,
+                ));
+                self.input_bad_input = false;
+            }
+            ("input", "min" | "max" | "step") if input_type == InputType::Range => {
+                let source = self.input_value.as_deref().unwrap_or_default();
+                self.input_value = Some(sanitize_input_value_for_type_with_context(
+                    input_type,
+                    source,
+                    input_context,
                 ));
                 self.input_bad_input = false;
             }
