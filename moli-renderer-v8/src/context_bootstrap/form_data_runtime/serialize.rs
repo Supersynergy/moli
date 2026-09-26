@@ -1,7 +1,10 @@
 use super::storage::{form_data_entries, form_data_is_object, push_form_data_entry};
 use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
-use crate::dom::{forms::InputType, native::Node};
+use crate::dom::{
+    forms::{InputType, apply_textarea_wrapping_transformation},
+    native::Node,
+};
 use crate::native_bridge::{
     element::{
         element_attribute_for_object, element_internals_form_value_for_target,
@@ -396,8 +399,15 @@ fn native_form_control_value(
     let (runtime_ptr, handle) = node_runtime_and_handle_from_object(scope, control).ok()?;
     let runtime = unsafe { &*runtime_ptr };
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    if element.is_html_input() || element.is_html_textarea() {
+    if element.is_html_input() {
         return Some(text_control_value(runtime, handle));
+    }
+    if element.is_html_textarea() {
+        return Some(apply_textarea_wrapping_transformation(
+            text_control_value(runtime, handle),
+            element.attribute_ns("", "wrap"),
+            element.attribute_ns("", "cols"),
+        ));
     }
     if element.is_html_option() {
         return Some(element.option_value(runtime.dom_host().dom(), handle));
