@@ -375,6 +375,7 @@ where
             root_style.viewport_scrollbar_gutter(),
             root_style.scrollbar_colors(),
             root_style.uses_horizontal_writing_mode(),
+            self.source.disables_viewport_user_scrolling(),
         );
     }
 

@@ -292,6 +292,204 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     );
 }
 #[test]
+fn iframe_scrolling_attribute_suppresses_only_viewport_scrollbars() {
+    for (scrolling, suppressed) in [
+        ("no", true),
+        ("NO", true),
+        ("off", true),
+        ("NoScroll", true),
+        ("auto", false),
+        ("yes", false),
+        (" no", false),
+        ("", false),
+    ] {
+        for gutter in ["auto", "stable both-edges"] {
+            let mut vm = new_parsed_test_vm(
+                "https://iframe-scrollbar-policy.test/",
+                "<!doctype html><iframe id=frame style='width:100px;height:100px;border:0'></iframe>",
+            );
+            vm.eval(&format!(
+                r#"
+                frame.scrolling = {scrolling:?};
+                globalThis.child = frame.contentDocument;
+                child.open();
+                child.write('<!doctype html><style>html{{overflow:scroll;scrollbar-gutter:{gutter}}}body{{margin:0}}</style><div style="height:400px"><div id="scroller" style="width:70px;height:20px;overflow:scroll"><div style="height:40px"></div></div></div>');
+                child.close();
+                "#,
+            ))
+            .unwrap();
+            let width = if suppressed {
+                100
+            } else if gutter == "auto" {
+                85
+            } else {
+                70
+            };
+            let query = r#"JSON.stringify([
+                child.documentElement.getBoundingClientRect().width,
+                child.getElementById('scroller').clientWidth,
+                child.defaultView.getComputedStyle(child.documentElement).overflowY,
+                child.defaultView.getComputedStyle(child.documentElement).scrollbarWidth
+            ])"#;
+            let expected = format!(r#"[{width},55,"scroll","auto"]"#);
+            assert_eq!(
+                vm.eval(query).unwrap(),
+                expected,
+                "{scrolling:?} / {gutter}"
+            );
+            publish_layout_for_test(&mut vm);
+            assert_eq!(
+                vm.eval(query).unwrap(),
+                expected,
+                "paint: {scrolling:?} / {gutter}"
+            );
+            assert_eq!(
+                vm.eval("child.defaultView.scrollTo(0,20);child.defaultView.scrollY")
+                    .unwrap(),
+                "20",
+                "hiding scrollbar UI must preserve script scrolling"
+            );
+        }
+    }
+}
+
+#[test]
+fn iframe_scrolling_changes_apply_at_the_next_layout_publication() {
+    let mut vm = new_parsed_test_vm(
+        "https://iframe-scrollbar-update.test/",
+        "<!doctype html><iframe id=frame scrolling=no style='width:100px;height:100px;border:0'></iframe>",
+    );
+    vm.eval(
+        r#"
+        globalThis.child = frame.contentDocument;
+        child.open();
+        child.write('<!doctype html><body style="margin:0"><div style="height:400px"></div>');
+        child.close();
+        "#,
+    )
+    .unwrap();
+    let query = "child.documentElement.getBoundingClientRect().width";
+    assert_eq!(vm.eval(query).unwrap(), "100");
+    vm.eval("frame.scrolling='auto'").unwrap();
+    assert_eq!(vm.eval(query).unwrap(), "100");
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(query).unwrap(), "85");
+    vm.eval("frame.scrolling='no'").unwrap();
+    assert_eq!(vm.eval(query).unwrap(), "85");
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(query).unwrap(), "100");
+}
+
+fn iframe_scrolling_policy_test_vm(
+    scrolling: &str,
+    scrollbar_width: &str,
+) -> StandaloneScriptVmHarness {
+    let mut vm = new_parsed_test_vm(
+        "https://iframe-user-scroll-policy.test/",
+        r#"<!doctype html><body style="margin:0">
+          <div style="width:2400px;height:2400px"></div>
+          <iframe id=frame style="position:fixed;left:0;top:0;width:240px;height:180px;border:0"></iframe>"#,
+    );
+    vm.eval(&format!(
+        r#"
+        frame.scrolling = {scrolling:?};
+        globalThis.child = frame.contentWindow;
+        child.document.open();
+        child.document.write('<!doctype html><style>html{{overflow:scroll;scrollbar-width:{scrollbar_width}}}body{{margin:0}}</style><div style="width:1200px;height:1200px"></div><div id=scroller style="position:fixed;left:10px;top:10px;width:80px;height:60px;overflow:scroll"><div style="width:640px;height:640px"></div></div>');
+        child.document.close();
+        globalThis.scroller = child.document.getElementById('scroller');
+        "#,
+    ))
+    .unwrap();
+    vm
+}
+
+#[test]
+fn iframe_scrolling_policy_distinguishes_wheel_input_from_scrollbar_appearance() {
+    let positions = "JSON.stringify([child.scrollX,child.scrollY])";
+    for (scrolling, scrollbar_width, disabled) in [
+        ("auto", "none", false),
+        ("auto", "auto", false),
+        ("no", "auto", true),
+        ("NO", "none", true),
+        ("off", "auto", true),
+        ("NoScroll", "auto", true),
+    ] {
+        for initially_published in [false, true] {
+            let mut vm = iframe_scrolling_policy_test_vm(scrolling, scrollbar_width);
+            if initially_published {
+                publish_layout_for_test(&mut vm);
+            }
+            let expected = if disabled { "[0,0]" } else { "[40,120]" };
+            vm.dispatch_mouse_event_at_point(150.0, 100.0, "wheel", -1, Some(0), 40.0, 120.0)
+                .expect("wheel over the child viewport");
+            assert_eq!(
+                vm.eval(positions).unwrap(),
+                expected,
+                "scrolling={scrolling}, scrollbar-width={scrollbar_width}, published={initially_published}"
+            );
+
+            vm.eval("scrollTo(0,0);child.scrollTo(0,0)").unwrap();
+            vm.dispatch_mouse_event_at_point(30.0, 30.0, "wheel", -1, Some(0), 40.0, 30.0)
+                .expect("wheel over an ordinary descendant scroll container");
+            assert_eq!(
+                vm.eval("JSON.stringify([scroller.scrollLeft,scroller.scrollTop,child.scrollX,child.scrollY,scrollX,scrollY])").unwrap(),
+                "[40,30,0,0,0,0]",
+                "frame scrolling policy must not disable descendant containers"
+            );
+
+            vm.eval("scroller.scrollTo(10000,10000)").unwrap();
+            vm.dispatch_mouse_event_at_point(30.0, 30.0, "wheel", -1, Some(0), 40.0, 120.0)
+                .expect("wheel chains beyond a descendant at its scroll boundary");
+            assert_eq!(
+                vm.eval(positions).unwrap(),
+                expected,
+                "chained wheel: {scrolling}"
+            );
+            assert_eq!(
+                vm.eval("child.scrollTo(20,20);JSON.stringify([child.scrollX,child.scrollY])")
+                    .unwrap(),
+                "[20,20]",
+                "frame scrolling policy must preserve script scrolling"
+            );
+        }
+    }
+}
+
+#[test]
+fn iframe_scrolling_policy_changes_input_permissions_at_next_publication() {
+    let mut vm = iframe_scrolling_policy_test_vm("auto", "none");
+    let positions = "JSON.stringify([child.scrollX,child.scrollY])";
+    publish_layout_for_test(&mut vm);
+    for (scrolling, publish, expected) in [
+        ("no", false, "[40,120]"),
+        ("no", true, "[0,0]"),
+        ("auto", false, "[0,0]"),
+        ("auto", true, "[40,120]"),
+    ] {
+        vm.eval(&format!(
+            "scrollTo(0,0);child.scrollTo(0,0);frame.scrolling={scrolling:?}"
+        ))
+        .unwrap();
+        let before = vm.layout_pass_observability_for_test().1;
+        if publish {
+            publish_layout_for_test(&mut vm);
+        }
+        vm.dispatch_mouse_event_at_point(150.0, 100.0, "wheel", -1, Some(0), 40.0, 120.0)
+            .expect("wheel consumes the published viewport policy");
+        assert_eq!(
+            vm.eval(positions).unwrap(),
+            expected,
+            "{scrolling} / publish={publish}"
+        );
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            before + u64::from(publish)
+        );
+    }
+}
+
+#[test]
 fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
     let mut vm = new_storage_test_vm("https://iframe-input-snapshot.test/");
     vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
