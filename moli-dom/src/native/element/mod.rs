@@ -22,7 +22,8 @@ use super::NativeDom;
 use super::node::{NativeNodeId, Node};
 use crate::custom_elements::is_valid_custom_element_name;
 use crate::forms::{
-    InputType, is_valid_number_input_value, sanitize_input_value_for_type_with_multiple,
+    InputType, InputValueSanitizationContext, is_valid_number_input_value,
+    sanitize_input_value_for_type_with_context,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -564,11 +565,30 @@ impl Element {
     }
 
     fn sanitized_input_value(&self, value: &str) -> String {
-        sanitize_input_value_for_type_with_multiple(
+        sanitize_input_value_for_type_with_context(
             self.input_type(),
             value,
-            self.has_attribute("multiple"),
+            InputValueSanitizationContext {
+                multiple: self.has_attribute("multiple"),
+                min: self.attribute("min"),
+                max: self.attribute("max"),
+                step: self.attribute("step"),
+                value_attribute: self.attribute("value"),
+            },
         )
+    }
+
+    pub(crate) fn resanitize_input_value_after_parser_attributes(&mut self) -> bool {
+        if !self.is_html_input()
+            || self.input_type() != InputType::Range
+            || self.input_value_dirty()
+        {
+            return false;
+        }
+        let source = self.attribute("value").unwrap_or_default().to_owned();
+        let value = self.sanitized_input_value(&source);
+        self.control_state_mut()
+            .set_input_value_with_dirty(&value, false)
     }
 
     pub fn set_input_value(&mut self, value: &str) -> bool {
@@ -1163,11 +1183,26 @@ impl Element {
             self.input_type()
         };
         let input_multiple = self.is_html_input() && self.has_attribute("multiple");
+        let range_attribute = |name| {
+            (input_type == InputType::Range)
+                .then(|| self.attribute(name).map(str::to_owned))
+                .flatten()
+        };
+        let input_min = range_attribute("min");
+        let input_max = range_attribute("max");
+        let input_step = range_attribute("step");
+        let input_value = range_attribute("value");
         self.rare_data.sync_control_state_from_attribute(
             self.namespace.as_ref(),
             self.local_name.as_ref(),
             input_type,
-            input_multiple,
+            InputValueSanitizationContext {
+                multiple: input_multiple,
+                min: input_min.as_deref(),
+                max: input_max.as_deref(),
+                step: input_step.as_deref(),
+                value_attribute: input_value.as_deref(),
+            },
             attribute_name,
             attribute_value,
         );
