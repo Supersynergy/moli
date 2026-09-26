@@ -136,19 +136,26 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     traversal: PendingHistoryTraversal,
 ) {
     let plan = history_traversal_target_window(scope, host, traversal.target).and_then(|owner| {
-        let history = window_history_for_holder(scope, owner)?;
-        let entries = history_entries(scope, history)?;
-        let entry = entries.get(traversal.target_index as usize)?;
-        if traversal
-            .target_key
-            .as_ref()
-            .is_some_and(|key| entry.borrow().key.as_str() != key)
-        {
-            return None;
-        }
-        let step = traversal
-            .joint_step
-            .or_else(|| super::super::session_history::step_for_entry(scope, owner, entry))?;
+        // A joint traversal is identified by its stable step. queue_plan uses
+        // the initiating realm's current entry only as an admission anchor;
+        // it is not the destination, and an isolated realm may have a
+        // different local history view. Reproject the step onto the owning
+        // Window instead of validating that anchor against the default realm.
+        let step = if let Some(step) = traversal.joint_step {
+            step
+        } else {
+            let history = window_history_for_holder(scope, owner)?;
+            let entries = history_entries(scope, history)?;
+            let entry = entries.get(traversal.target_index as usize)?;
+            if traversal
+                .target_key
+                .as_ref()
+                .is_some_and(|key| entry.borrow().key.as_str() != key)
+            {
+                return None;
+            }
+            super::super::session_history::step_for_entry(scope, owner, entry)?
+        };
         super::super::navigation_traversal_plan::JointTraversalPlan::resolve(scope, owner, step)
     });
     let Some(plan) = plan else {
