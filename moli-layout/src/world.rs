@@ -321,6 +321,7 @@ pub(crate) struct ViewportScrollPolicy {
     scrollbar_gutter: LayoutScrollbarGutter,
     scrollbar_colors: Option<LayoutScrollbarColors>,
     horizontal_writing_mode: bool,
+    user_scrolling_disabled: bool,
     revealed_scrollbar_x: bool,
     revealed_scrollbar_y: bool,
 }
@@ -334,6 +335,7 @@ impl Default for ViewportScrollPolicy {
             scrollbar_gutter: LayoutScrollbarGutter::Auto,
             scrollbar_colors: None,
             horizontal_writing_mode: true,
+            user_scrolling_disabled: false,
             revealed_scrollbar_x: false,
             revealed_scrollbar_y: false,
         }
@@ -348,14 +350,23 @@ impl ViewportScrollPolicy {
         scrollbar_gutter: LayoutScrollbarGutter,
         scrollbar_colors: Option<LayoutScrollbarColors>,
         horizontal_writing_mode: bool,
+        user_scrolling_disabled: bool,
     ) -> Self {
         Self {
             defining_box,
             effective_overflow,
-            scrollbar_width,
+            // The embedder disables viewport input and scrollbar UI together.
+            // Keep its restriction distinct from CSS scrollbar-width: none,
+            // which only hides the scrollbar.
+            scrollbar_width: if user_scrolling_disabled {
+                LayoutScrollbarWidth::None
+            } else {
+                scrollbar_width
+            },
             scrollbar_gutter,
             scrollbar_colors,
             horizontal_writing_mode,
+            user_scrolling_disabled,
             revealed_scrollbar_x: false,
             revealed_scrollbar_y: false,
         }
@@ -409,7 +420,7 @@ impl ViewportScrollPolicy {
     }
 
     pub(crate) fn allows_user_scroll(self, axis: LayoutScrollbarAxis) -> bool {
-        self.overflow_mode(axis).allows_user_scroll()
+        !self.user_scrolling_disabled && self.overflow_mode(axis).allows_user_scroll()
     }
 
     pub(crate) fn clips_overflow(self) -> bool {

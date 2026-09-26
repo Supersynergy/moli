@@ -482,6 +482,13 @@ pub trait LayoutSource {
     fn root_is_document_element(&self) -> bool {
         false
     }
+    /// Whether the embedding context disables user scrolling of this viewport,
+    /// including its scrollbar UI and gutters, independently of CSS overflow.
+    /// Sampled for this layout pass; descendant scroll containers and
+    /// programmatic viewport scrolling keep their ordinary behavior.
+    fn disables_viewport_user_scrolling(&self) -> bool {
+        false
+    }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId>;

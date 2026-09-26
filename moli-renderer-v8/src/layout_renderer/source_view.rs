@@ -65,6 +65,27 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }) == Some(self.root)
     }
 
+    fn disables_viewport_user_scrolling(&self) -> bool {
+        if !self.root_is_document_element() {
+            return false;
+        }
+        self.document
+            .and_then(|document| {
+                self.runtime
+                    .child_browsing_context_host_for_document_handle(document)
+            })
+            .filter(|frame| {
+                self.host().is_html_element_named(*frame, "iframe")
+                    || self.host().is_html_element_named(*frame, "frame")
+            })
+            .and_then(|frame| self.host().get_attribute(frame, "scrolling"))
+            .is_some_and(|value| {
+                ["no", "off", "noscroll"]
+                    .iter()
+                    .any(|keyword| value.eq_ignore_ascii_case(keyword))
+            })
+    }
+
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
         native_flat_parent(self.host(), self.root, node)
     }
