@@ -4894,6 +4894,7 @@ pub enum RendererPageCommand {
         backend_node_id: u32,
     },
     TriggerAutofill(RendererAutofillTriggerRequest),
+    CheckMainDocumentBeforeUnload,
     UnloadMainDocumentForNavigationCommit,
     ResetNavigationHistory,
     SetFileInputFilesForBackendNodeId {

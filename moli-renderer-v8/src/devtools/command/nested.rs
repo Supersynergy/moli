@@ -149,6 +149,8 @@ impl RendererPageCommand {
             | Self::PerformanceMetricSnapshot
             | Self::RuntimeCollectGarbage
             | Self::StopDocumentLifecycle
+            | Self::CheckMainDocumentBeforeUnload
+            | Self::UnloadMainDocumentForNavigationCommit
             | Self::SetInlineStyleSheetTextForStyleSheetId { .. }
             | Self::ScrollBackendNodeIntoViewIfNeeded { .. }
             | Self::RemoveDocumentBackendNodeId { .. }
