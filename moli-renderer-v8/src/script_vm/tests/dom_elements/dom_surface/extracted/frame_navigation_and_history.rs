@@ -2260,8 +2260,49 @@ __domainAccessFrame.src = globalThis.__replacementDomainChildUrl;
         vec!["/replacement.html"]
     );
 }
+
 #[test]
-fn initial_empty_iframe_reload_uses_shared_no_history_admission() {
+fn initial_empty_iframe_reload_methods_replace_document_and_dispatch_load() {
+    for reload in ["location.reload()", "history.go(0)", "navigation.reload()"] {
+        let mut vm = new_storage_test_vm("https://initial-empty-reload.test/page.html");
+
+        vm.exec(
+            &format!(
+                r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(frame);
+globalThis.__initialReloadFrame = frame;
+globalThis.__initialReloadDocument = frame.contentDocument;
+globalThis.__initialReloadLoads = 0;
+frame.onload = () => ++__initialReloadLoads;
+frame.contentWindow.{reload};
+"#
+            ),
+            None,
+        )
+        .expect("initial-empty iframe reload should evaluate");
+        assert!(
+            vm.has_pending_child_navigation_commit_for_test(),
+            "reloading an ordinary initial about:blank iframe must queue a navigation"
+        );
+
+        vm.drain_pending_child_frame_work_for_test();
+        assert_eq!(
+            vm.eval(
+                r#"[
+  __initialReloadFrame.contentDocument !== __initialReloadDocument,
+  __initialReloadLoads,
+  __initialReloadFrame.contentWindow.location.href
+].join('|')"#,
+            )
+            .expect("initial-empty iframe reload result should evaluate"),
+            "true|1|about:blank"
+        );
+    }
+}
+
+#[test]
+fn initial_empty_iframe_reload_preserves_pending_attribute_navigation_result_shape() {
     let mut vm = new_storage_test_vm("https://initial-empty-reload.test/page.html");
 
     let setup = vm
@@ -2269,6 +2310,9 @@ fn initial_empty_iframe_reload_uses_shared_no_history_admission() {
             r#"
 (() => {
   const frame = document.createElement('iframe');
+  frame.loading = 'lazy';
+  frame.hidden = true;
+  frame.src = '/pending-attribute-navigation.html';
   (document.body || document.documentElement || document).appendChild(frame);
   const child = frame.contentWindow;
   const log = [];
@@ -2337,6 +2381,7 @@ fn initial_empty_iframe_reload_uses_shared_no_history_admission() {
         "about:blank"
     );
 }
+
 #[test]
 fn non_initial_about_blank_iframe_remains_reloadable() {
     let mut vm = new_storage_test_vm("https://non-initial-blank-reload.test/page.html");
