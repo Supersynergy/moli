@@ -1167,7 +1167,7 @@ pub(super) struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable)]
+#[webapi(interface = web_api_interfaces::HTMLBodyElement, enumerable, receiver)]
 pub(super) struct HtmlBodyElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,

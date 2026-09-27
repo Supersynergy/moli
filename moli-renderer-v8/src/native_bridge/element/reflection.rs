@@ -1268,7 +1268,7 @@ pub(super) fn nullable_attribute_property_getter_from_object_or_detached<'s>(
     rv.set(value.into());
 }
 
-fn element_reflection_receiver_or_throw<'s>(
+pub(super) fn element_reflection_receiver_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<(*mut super::super::JsContextHost, DomHandle)> {
