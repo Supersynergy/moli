@@ -792,3 +792,52 @@ fn detached_iframe_windows_do_not_change_document_visibility() {
 
     assert_eq!(result, "[]");
 }
+
+#[test]
+fn body_legacy_colors_treat_null_as_empty_before_reflection() {
+    let mut vm = new_parsed_test_vm(
+        "https://body-color-null-reflection.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const detachedDocument = document.implementation.createHTMLDocument("");
+  for (const body of [document.body, document.createElement("body"), detachedDocument.body]) {
+    for (const name of ["text", "link", "vLink", "aLink", "bgColor"]) {
+      const attribute = name.toLowerCase();
+      body[name] = null;
+      assert(body[name] === "" && body.getAttribute(attribute) === "", `${name}: null`);
+      body[name] = undefined;
+      assert(body[name] === "undefined", `${name}: undefined`);
+      let conversions = 0;
+      body[name] = {toString() { conversions++; return "red"; }};
+      assert(conversions === 1 && body.getAttribute(attribute) === "red", `${name}: conversion`);
+      const failure = new Error("conversion failure");
+      let caught;
+      try { body[name] = {toString() {throw failure; }}; } catch (error) { caught = error; }
+      assert(caught === failure && body[name] === "red", `${name}: exception`);
+      const setter = Object.getOwnPropertyDescriptor(HTMLBodyElement.prototype, name).set;
+      for (const invalid of [{}, document.createElement("div"), Object.create(body), new Proxy(body, {})]) {
+        conversions = 0;
+        caught = undefined;
+        try {
+          setter.call(invalid, {toString() {conversions++; return "blue"; }});
+        } catch (error) { caught = error; }
+        assert(caught instanceof TypeError && conversions === 0, `${name}: receiver before conversion`);
+      }
+    }
+    body.background = null;
+    assert(body.getAttribute("background") === "null", "background uses ordinary DOMString conversion");
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("legacy body colors should preserve WebIDL conversion semantics");
+    assert_eq!(result, "ok");
+}

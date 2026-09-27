@@ -1,3 +1,4 @@
+use super::super::global_attributes::set_dom_string_treat_null_as_empty_on_object;
 use super::super::{
     attribute_property_getter_from_object_or_detached, element_attribute,
     html_element_getter_receiver, html_element_setter_receiver, property_dom_string_value,
@@ -82,7 +83,8 @@ macro_rules! body_attr_reflection {
         $getter:ident,
         $setter:ident,
         $attr_name:expr,
-        $idl_name:expr $(,)?
+        $idl_name:expr,
+        $set_attribute:ident $(,)?
     ) => {
         pub(in crate::native_bridge::element) fn $getter<'s>(
             scope: &mut v8::PinScope<'s, '_>,
@@ -97,7 +99,7 @@ macro_rules! body_attr_reflection {
             args: v8::FunctionCallbackArguments<'s>,
             mut rv: v8::ReturnValue<'s, v8::Value>,
         ) {
-            set_dom_string_attribute_property_on_object(
+            $set_attribute(
                 scope,
                 args.this(),
                 $attr_name,
@@ -114,29 +116,34 @@ body_attr_reflection!(
     body_text_getter_function,
     body_text_setter_function,
     "text",
-    "text"
+    "text",
+    set_dom_string_treat_null_as_empty_on_object
 );
 body_attr_reflection!(
     body_link_getter_function,
     body_link_setter_function,
     "link",
-    "link"
+    "link",
+    set_dom_string_treat_null_as_empty_on_object
 );
 body_attr_reflection!(
     body_v_link_getter_function,
     body_v_link_setter_function,
     "vlink",
-    "vLink"
+    "vLink",
+    set_dom_string_treat_null_as_empty_on_object
 );
 body_attr_reflection!(
     body_a_link_getter_function,
     body_a_link_setter_function,
     "alink",
-    "aLink"
+    "aLink",
+    set_dom_string_treat_null_as_empty_on_object
 );
 body_attr_reflection!(
     body_background_getter_function,
     body_background_setter_function,
     "background",
-    "background"
+    "background",
+    set_dom_string_attribute_property_on_object
 );

@@ -16,7 +16,8 @@ use super::super::{
 use super::details_dialog::main_summary_child;
 use super::reflection::{
     DomStringReflection, ElementReflectionInterface, NullToEmptyDomStringReflection,
-    UnsignedLongReflection, UsvStringReflection, remove_reflected_attribute,
+    UnsignedLongReflection, UsvStringReflection, element_reflection_receiver_or_throw,
+    remove_reflected_attribute,
 };
 use super::{
     attribute_property_getter_from_object_or_detached,
@@ -1081,7 +1082,7 @@ pub(in crate::native_bridge) fn node_sandbox_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn set_dom_string_treat_null_as_empty_on_object<'s>(
+pub(super) fn set_dom_string_treat_null_as_empty_on_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     attribute: &str,
@@ -1089,6 +1090,9 @@ fn set_dom_string_treat_null_as_empty_on_object<'s>(
     owner: &'static str,
     property: &'static str,
 ) {
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
+        return;
+    };
     let options = webidl::StringOptions {
         treat_null_as_empty_string: true,
     };
@@ -1103,10 +1107,6 @@ fn set_dom_string_treat_null_as_empty_on_object<'s>(
             webidl::throw_error(scope, &error);
             return;
         }
-    };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value);
 }
