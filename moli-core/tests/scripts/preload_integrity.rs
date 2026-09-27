@@ -146,3 +146,6 @@ async fn preload_integrity_checks_service_worker_response_filter() -> Result<()>
     }})()"#), count).await?;
     Ok(())
 }
+
+#[path = "preload_consumers.rs"]
+mod consumers;
