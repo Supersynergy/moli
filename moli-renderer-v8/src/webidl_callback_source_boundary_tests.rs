@@ -116,7 +116,8 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/stream_adapter/utils.rs",
-        9,
+        // Cancellation continuations now use the native Promise API.
+        8,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(

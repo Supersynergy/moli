@@ -112,8 +112,8 @@ pub(super) use readable_state::{
 };
 pub(in crate::context_bootstrap::stream_adapter) use transform_finish::transform_stream_readable_cancel_callback;
 pub(super) use utils::{
-    done_result, promise_then_undefined, reject_pending_read, rejected_promise_value,
-    resolved_promise_value, set_resolved_promise, suppress_pending_read_unhandled_rejection,
+    done_result, reject_pending_read, rejected_promise_value, resolved_promise_value,
+    set_resolved_promise, suppress_pending_read_unhandled_rejection,
     suppress_promise_unhandled_rejection, value_buffer_source_bytes,
 };
 pub(in crate::context_bootstrap) use writable::register_writable_stream_pipe_owner;

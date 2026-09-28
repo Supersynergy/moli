@@ -5461,3 +5461,46 @@ fn readable_stream_pipe_options_getter_errors_keep_entrypoint_semantics_and_orde
         r#"["pipeThrough:preventAbort:threw:preventAbort:preventAbort","pipeThrough:preventCancel:threw:preventCancel:preventAbort,preventCancel","pipeThrough:preventClose:threw:preventClose:preventAbort,preventCancel,preventClose","pipeThrough:signal:threw:signal:preventAbort,preventCancel,preventClose,signal","pipeTo:preventAbort:rejected:preventAbort:preventAbort","pipeTo:preventAbort:returned:true","pipeTo:preventCancel:rejected:preventCancel:preventAbort,preventCancel","pipeTo:preventCancel:returned:true","pipeTo:preventClose:rejected:preventClose:preventAbort,preventCancel,preventClose","pipeTo:preventClose:returned:true","pipeTo:signal:rejected:signal:preventAbort,preventCancel,preventClose,signal","pipeTo:signal:returned:true"]"#
     );
 }
+
+#[test]
+fn readable_cancel_uses_intrinsic_promise_chaining() {
+    let mut vm = new_storage_test_vm("https://shared-binding-regression.test/");
+    vm.eval(
+        r#"
+        globalThis.cancelResults = [];
+        globalThis.cancelThenReads = 0;
+        const reason = new Error('cancel reason');
+        const streams = [
+            new ReadableStream({cancel() { return 'ignored'; }}),
+            new ReadableStream({cancel() { throw reason; }})
+        ];
+        const descriptor = Object.getOwnPropertyDescriptor(Promise.prototype, 'then');
+        try {
+            Object.defineProperty(Promise.prototype, 'then', {configurable: true, get() {
+                cancelThenReads++;
+                throw new Error('internal chaining must not read public then');
+            }});
+            for (const stream of streams) {
+                const result = stream.cancel(reason);
+                descriptor.value.call(result,
+                    value => cancelResults.push(value === undefined),
+                    error => cancelResults.push(error === reason)
+                );
+            }
+        } finally {
+            Object.defineProperty(Promise.prototype, 'then', descriptor);
+        }
+    "#,
+    )
+    .unwrap();
+    for _ in 0..8 {
+        if vm.eval("cancelResults.length === 2").unwrap() == "true" {
+            break;
+        }
+    }
+    assert_eq!(
+        vm.eval("JSON.stringify([cancelThenReads, cancelResults])")
+            .unwrap(),
+        "[0,[true,true]]"
+    );
+}
