@@ -8,6 +8,74 @@
 use super::*;
 use crate::context_bootstrap::{exposed_interfaces, world_wrappers};
 
+const EVENT_ATTRIBUTE_GETTERS_SLOT: &str = "__moliEventAttributeGetters";
+
+// The callback carries the original V8 key. Its projection is chosen once when
+// the realm's getter is created, so reads never convert field names to Rust.
+#[derive(Clone, Copy)]
+enum AttributeProjection {
+    Value,
+    Target,
+    PlatformObject,
+    NavigationEntry,
+    NavigationDestination,
+}
+
+impl AttributeProjection {
+    fn for_property(property: &str) -> Self {
+        match property {
+            "target" | "srcElement" | "currentTarget" => Self::Target,
+            "signal" | "formData" | "sourceElement" | "relatedTarget" | "submitter" | "source" => {
+                Self::PlatformObject
+            }
+            "from" => Self::NavigationEntry,
+            "destination" => Self::NavigationDestination,
+            // Arbitrary JS payloads (detail, data, reason, info, error, state)
+            // retain their identity; they are not platform-object projections.
+            _ => Self::Value,
+        }
+    }
+
+    fn project<'s>(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        wrapper: v8::Local<'s, v8::Object>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        if matches!(self, Self::Value) {
+            return Some(value);
+        }
+        let context = wrapper.get_creation_context(scope)?;
+        match self {
+            Self::Value => Some(value),
+            Self::Target => Some(match v8::Local::<v8::Object>::try_from(value) {
+                Ok(target) => crate::context_bootstrap::shared_event_targets::target_in_realm(
+                    scope, target, context,
+                )
+                .into(),
+                Err(_) => value,
+            }),
+            Self::PlatformObject => {
+                crate::context_bootstrap::platform_object_worlds::in_realm(scope, value, context)
+            }
+            Self::NavigationEntry => Some(
+                crate::context_bootstrap::history_runtime::native::entry_value_in_realm(
+                    scope, value, context,
+                ),
+            ),
+            Self::NavigationDestination => {
+                let destination = v8::Local::<v8::Object>::try_from(value).ok()?;
+                let scope = &mut v8::ContextScope::new(scope, context);
+                crate::context_bootstrap::navigation_events::navigation_destination_for_realm(
+                    scope,
+                    destination,
+                )
+                .map(Into::into)
+            }
+        }
+    }
+}
+
 pub(crate) fn new_event_state<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
     crate::util::new_null_prototype_object(scope)
 }
@@ -27,6 +95,25 @@ pub(crate) fn initialize_event_wrapper<'s>(
         super::base::EVENT_BACKING_SLOT,
         state.into(),
     );
+    // Keep the cache on the existing intrinsic, in V8's heap. It contains only
+    // field getters, never an instance/backing or a native persistent root.
+    let constructor =
+        exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "Event").ok()?;
+    let getters =
+        crate::util::get_private_object(scope, constructor.into(), EVENT_ATTRIBUTE_GETTERS_SLOT)
+            .unwrap_or_else(|| {
+                let getters = crate::util::new_null_prototype_object(scope);
+                set_private_value(
+                    scope,
+                    constructor.into(),
+                    EVENT_ATTRIBUTE_GETTERS_SLOT,
+                    getters.into(),
+                );
+                getters
+            });
+    let trusted_key = v8str(scope, "isTrusted");
+    // Some native events and optional dictionary members have different own
+    // fields. Preserve the actual state shape and descriptor order.
     let names = state.get_own_property_names(
         scope,
         v8::GetPropertyNamesArgs {
@@ -36,11 +123,11 @@ pub(crate) fn initialize_event_wrapper<'s>(
     )?;
     for index in 0..names.length() {
         let property = names.get_index(scope, index)?;
-        if property.to_rust_string_lossy(scope) == "isTrusted" {
+        if property.strict_equals(trusted_key.into()) {
             super::base::define_event_is_trusted_accessor(scope, wrapper);
         } else {
             let attributes = state.get_property_attributes(scope, property)?;
-            bind_attribute(scope, wrapper, property, attributes)?;
+            bind_attribute(scope, getters, wrapper, property, attributes)?;
         }
     }
     if interface == "NavigateEvent" {
@@ -68,16 +155,46 @@ pub(crate) fn new_event_wrapper<'s>(
 
 fn bind_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    getters: v8::Local<'s, v8::Object>,
     wrapper: v8::Local<'s, v8::Object>,
     property: v8::Local<'s, v8::Value>,
     attributes: v8::PropertyAttribute,
 ) -> Option<()> {
     let name = v8::Local::<v8::Name>::try_from(property).ok()?;
-    let getter = v8::Function::builder(event_attribute_getter)
-        .data(property)
-        .build(scope)?;
-    let getter_name = format!("get {}", property.to_rust_string_lossy(scope));
-    getter.set_name(v8_string(scope, &getter_name)?);
+    let getter = if let Some(getter) = getters
+        .get(scope, property)
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    {
+        getter
+    } else {
+        let field = property.to_rust_string_lossy(scope);
+        let getter = match AttributeProjection::for_property(&field) {
+            AttributeProjection::Value => v8::Function::builder(event_attribute_getter::<0>)
+                .data(property)
+                .build(scope),
+            AttributeProjection::Target => v8::Function::builder(event_attribute_getter::<1>)
+                .data(property)
+                .build(scope),
+            AttributeProjection::PlatformObject => {
+                v8::Function::builder(event_attribute_getter::<2>)
+                    .data(property)
+                    .build(scope)
+            }
+            AttributeProjection::NavigationEntry => {
+                v8::Function::builder(event_attribute_getter::<3>)
+                    .data(property)
+                    .build(scope)
+            }
+            AttributeProjection::NavigationDestination => {
+                v8::Function::builder(event_attribute_getter::<4>)
+                    .data(property)
+                    .build(scope)
+            }
+        }?;
+        getter.set_name(v8_string(scope, &format!("get {field}"))?);
+        getters.create_data_property(scope, name, getter.into())?;
+        getter
+    };
     let mut accessor_attributes = v8::PropertyAttribute::NONE;
     if attributes.is_dont_enum() {
         accessor_attributes = accessor_attributes | v8::PropertyAttribute::DONT_ENUM;
@@ -97,7 +214,7 @@ fn bind_attribute<'s>(
     .ok()
 }
 
-fn event_attribute_getter<'s>(
+fn event_attribute_getter<'s, const PROJECTION: u8>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -106,8 +223,19 @@ fn event_attribute_getter<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    let property = args.data().to_rust_string_lossy(scope);
-    if let Some(value) = event_attribute_in_wrapper(scope, args.this(), &property) {
+    let state = event_backing(scope, args.this());
+    let Some(value) = state.get(scope, args.data()) else {
+        return;
+    };
+    let projection = match PROJECTION {
+        0 => AttributeProjection::Value,
+        1 => AttributeProjection::Target,
+        2 => AttributeProjection::PlatformObject,
+        3 => AttributeProjection::NavigationEntry,
+        4 => AttributeProjection::NavigationDestination,
+        _ => unreachable!("Event getter projection"),
+    };
+    if let Some(value) = projection.project(scope, args.this(), value) {
         rv.set(value);
     }
 }
@@ -118,18 +246,7 @@ pub(super) fn event_attribute_in_wrapper<'s>(
     property: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let value = event_attribute(scope, wrapper, property)?;
-    let context = wrapper.get_creation_context(scope)?;
-    if matches!(property, "target" | "srcElement" | "currentTarget")
-        && let Ok(target) = v8::Local::<v8::Object>::try_from(value)
-    {
-        return Some(
-            crate::context_bootstrap::shared_event_targets::target_in_realm(scope, target, context)
-                .into(),
-        );
-    }
-    crate::context_bootstrap::navigation_event_worlds::attribute_in_realm(
-        scope, property, value, context,
-    )
+    AttributeProjection::for_property(property).project(scope, wrapper, value)
 }
 
 /// Engine reads must bypass the public wrapper, including own shadows and
