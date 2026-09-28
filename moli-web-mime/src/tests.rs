@@ -532,14 +532,6 @@ fn derives_effective_response_mime_for_body_consumers() {
         effective_response_mime_essence(&headers, Some("Application/XHTML+XML")),
         Some("application/xhtml+xml".to_owned())
     );
-    assert_eq!(
-        response_blob_mime_type(&headers),
-        "text/html; charset=utf-8"
-    );
-
-    let invalid: Vec<(String, Vec<u8>)> =
-        vec![("Content-Type".to_owned(), b"text/plain\n".to_vec())];
-    assert_eq!(response_blob_mime_type(&invalid), "");
 }
 
 #[test]

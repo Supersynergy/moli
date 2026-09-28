@@ -1,5 +1,5 @@
 use crate::classification::is_binary_document_mime_type;
-use crate::parse::{mime_essence, normalize_web_api_mime_type};
+use crate::parse::mime_essence;
 
 pub fn response_header_value(headers: &[(String, Vec<u8>)], name: &str) -> Option<String> {
     response_header_values(headers, name).into_iter().next()
@@ -120,16 +120,6 @@ pub fn effective_response_mime_essence(
     effective_response_mime_type(headers, override_mime_type)
         .as_deref()
         .and_then(mime_essence)
-}
-
-pub fn response_blob_mime_type(headers: &[(String, Vec<u8>)]) -> String {
-    normalize_response_blob_mime_type(response_content_type(headers).as_deref())
-}
-
-pub fn normalize_response_blob_mime_type(content_type: Option<&str>) -> String {
-    content_type
-        .map(normalize_web_api_mime_type)
-        .unwrap_or_default()
 }
 
 fn parsed_header_name(name: &str) -> Option<http::HeaderName> {
