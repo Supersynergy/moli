@@ -1,6 +1,6 @@
 //! CSSOM box, range, element-metric, and source-provenance projections.
 
-use std::{fmt::Debug, hash::Hash, ops::Range};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, ops::Range};
 
 use crate::LayoutPosition;
 
@@ -13,6 +13,11 @@ use super::{
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::{CssSizingBox, FrozenLayoutBox, FrozenLayoutTree},
 };
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_OUTPUT_BOX_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct InlineOffsetGeometry {
@@ -33,6 +38,8 @@ where
         let mut found = false;
         let mut output = LayoutNodeOutput::default();
         for layout_box in &self.boxes {
+            #[cfg(test)]
+            SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(count.get() + 1));
             if layout_box.principal_source == Some(source) {
                 output.principal_box = Some(layout_box.id);
                 found = true;
@@ -55,6 +62,42 @@ where
             }
         }
         found.then_some(output)
+    }
+
+    /// Builds provenance only for this operation's requested sources. Absent
+    /// sources remain explicit None entries; fragment and proxy order follow
+    /// the canonical vectors exactly as in the direct source query.
+    pub(super) fn source_outputs(&self, outputs: &mut HashMap<N, Option<LayoutNodeOutput>>) {
+        for layout_box in &self.boxes {
+            #[cfg(test)]
+            SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(count.get() + 1));
+            if let Some(output) = layout_box
+                .principal_source
+                .and_then(|source| outputs.get_mut(&source))
+            {
+                output.get_or_insert_default().principal_box = Some(layout_box.id);
+            }
+            if let Some(output) = layout_box
+                .geometry_source
+                .and_then(|source| outputs.get_mut(&source))
+            {
+                output.get_or_insert_default().fragments.extend(
+                    layout_box.fragments.iter().copied().filter(|id| {
+                        self.fragment(*id).is_some_and(|fragment| {
+                            !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
+                        })
+                    }),
+                );
+            }
+        }
+        for (source, box_id) in &self.scroll_proxy_links {
+            if let Some(output) = outputs.get_mut(source) {
+                output
+                    .get_or_insert_default()
+                    .scroll_proxy_boxes
+                    .push(*box_id);
+            }
+        }
     }
 
     pub fn element_metrics_for_source(&self, source: N) -> Option<LayoutElementMetrics<N>> {
@@ -283,7 +326,10 @@ where
     }
 
     pub fn box_model_for_source(&self, source: N) -> Option<LayoutBoxModel> {
-        let output = self.source_output(source)?;
+        self.box_model_for_output(&self.source_output(source)?)
+    }
+
+    pub(super) fn box_model_for_output(&self, output: &LayoutNodeOutput) -> Option<LayoutBoxModel> {
         let fragment_models = output
             .fragments
             .iter()
@@ -312,9 +358,11 @@ where
     }
 
     pub fn client_rects_for_source(&self, source: N) -> Vec<LayoutQuad> {
-        let Some(output) = self.source_output(source) else {
-            return Vec::new();
-        };
+        self.source_output(source)
+            .map_or_else(Vec::new, |output| self.client_rects_for_output(&output))
+    }
+
+    pub(super) fn client_rects_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
         output
             .fragments
             .iter()
@@ -333,9 +381,11 @@ where
     }
 
     pub fn content_quads_for_source(&self, source: N) -> Vec<LayoutQuad> {
-        let Some(output) = self.source_output(source) else {
-            return Vec::new();
-        };
+        self.source_output(source)
+            .map_or_else(Vec::new, |output| self.content_quads_for_output(&output))
+    }
+
+    pub(super) fn content_quads_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
         output
             .fragments
             .iter()
@@ -360,9 +410,16 @@ where
     }
 
     pub fn text_range_rects(&self, source: N, utf16_range: Range<usize>) -> Vec<LayoutQuad> {
-        let Some(output) = self.source_output(source) else {
-            return Vec::new();
-        };
+        self.source_output(source).map_or_else(Vec::new, |output| {
+            self.text_range_rects_for_output(&output, utf16_range)
+        })
+    }
+
+    pub(super) fn text_range_rects_for_output(
+        &self,
+        output: &LayoutNodeOutput,
+        utf16_range: Range<usize>,
+    ) -> Vec<LayoutQuad> {
         #[derive(Clone, Copy)]
         struct SelectedTextRect {
             box_id: LayoutOutputBoxId,
@@ -750,8 +807,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn inline_offset_geometry_skips_unprojectable_fragments_and_keeps_one_dimensional_bounds() {
+    fn inline_fragment_tree() -> FrozenLayoutTree<u8> {
         let box_id = LayoutOutputBoxId::from_index(0);
         let coordinate_space = LayoutCoordinateSpaceId::from_index(1);
         let skipped_fragment = LayoutFragmentId::from_index(0);
@@ -792,7 +848,7 @@ mod tests {
             scrollbar_corner: None,
             scrollbar_colors: None,
         };
-        let tree = FrozenLayoutTree::new(
+        FrozenLayoutTree::new(
             0_u8,
             LayoutViewport::new(100, 100, 1.0),
             LayoutPoint::ZERO,
@@ -838,7 +894,15 @@ mod tests {
             identity_space(None),
             Vec::new(),
             Vec::new(),
-        );
+        )
+    }
+
+    #[test]
+    fn inline_offset_geometry_skips_unprojectable_fragments_and_keeps_one_dimensional_bounds() {
+        let tree = inline_fragment_tree();
+        let box_id = LayoutOutputBoxId::from_index(0);
+        let skipped_fragment = LayoutFragmentId::from_index(0);
+        let valid_fragment = LayoutFragmentId::from_index(1);
         let output = LayoutNodeOutput {
             principal_box: Some(box_id),
             fragments: vec![skipped_fragment, valid_fragment],
@@ -858,5 +922,87 @@ mod tests {
             LayoutPoint::new(3.0, 4.0)
         );
         assert_eq!(geometry.size, LayoutSize::new(0.0, 5.0));
+    }
+    #[test]
+    fn batch_fragment_queries_scan_boxes_once_and_preserve_missing_sources() {
+        use crate::{LayoutFlushReason, LayoutQuery, LayoutQueryBatch};
+        let mut tree = inline_fragment_tree();
+        for source in 2..=64 {
+            let mut layout_box = tree.boxes[0].clone();
+            layout_box.geometry.id = LayoutOutputBoxId::from_index(tree.boxes.len());
+            layout_box.geometry.fragments.clear();
+            layout_box.geometry_source = Some(source);
+            layout_box.principal_source = Some(source);
+            tree.boxes.push(layout_box);
+        }
+        // Include proxy-only and missing sources as well as repeated queries.
+        tree.scroll_proxy_links.push((100, tree.boxes[0].id));
+        let queries = LayoutQueryBatch::new(
+            (0..=128)
+                .flat_map(|source| {
+                    [
+                        LayoutQuery::ClientRects { source },
+                        LayoutQuery::ContentQuads { source },
+                        LayoutQuery::BoxModel { source },
+                        LayoutQuery::TextRangeRects {
+                            source,
+                            utf16_range: 0..4,
+                        },
+                    ]
+                })
+                .collect(),
+        );
+        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        let expected = queries
+            .queries
+            .iter()
+            .map(|query| tree.answer_query(query))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get),
+            tree.boxes.len() * queries.queries.len()
+        );
+        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        // The metrics are pass diagnostics, copied unchanged by query batches.
+        let metrics = crate::LayoutPassMetrics {
+            reason: LayoutFlushReason::Test,
+            elapsed: std::time::Duration::ZERO,
+            box_tree_elapsed: std::time::Duration::ZERO,
+            list_marker_elapsed: std::time::Duration::ZERO,
+            form_control_elapsed: std::time::Duration::ZERO,
+            inline_preparation_elapsed: std::time::Duration::ZERO,
+            numeric_layout_elapsed: std::time::Duration::ZERO,
+            numeric_first_pass_elapsed: std::time::Duration::ZERO,
+            numeric_followup_passes_elapsed: std::time::Duration::ZERO,
+            overflow_detection_elapsed: std::time::Duration::ZERO,
+            scrollbar_feedback_elapsed: std::time::Duration::ZERO,
+            embedded_frame_elapsed: std::time::Duration::ZERO,
+            projection_elapsed: std::time::Duration::ZERO,
+            numeric_layout_pass_count: 0,
+            numeric_feedback_invalidated_node_count: 0,
+            numeric_feedback_overflow_recomputed_node_count: 0,
+            box_count: 0,
+            fragment_count: 0,
+            paint_event_count: 0,
+            paint_culled_event_count: 0,
+            paint_text_line_count: 0,
+            paint_culled_text_line_count: 0,
+            paint_operation_count: 0,
+            fallback_count: 0,
+        };
+        let answers = tree.answer_queries(&queries, metrics);
+        assert_eq!(answers.answers, expected);
+        assert_eq!(
+            SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get),
+            tree.boxes.len()
+        );
+        assert_eq!(answers.metrics, metrics);
+        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        let one = LayoutQueryBatch::new(vec![LayoutQuery::ClientRects { source: 1 }]);
+        tree.answer_queries(&one, metrics);
+        assert_eq!(
+            SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get),
+            tree.boxes.len()
+        );
     }
 }

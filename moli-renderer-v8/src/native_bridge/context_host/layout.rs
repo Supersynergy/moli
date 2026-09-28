@@ -364,13 +364,10 @@ impl JsContextHost {
         document: DomHandle,
         queries: &LayoutQueryBatch<DomHandle>,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        self.with_published_layout_for_document(document, |tree, metrics| LayoutAnswers {
-            answers: queries
-                .queries
-                .iter()
-                .map(|query| self.answer_layout_query(tree, query))
-                .collect(),
-            metrics,
+        self.with_published_layout_for_document(document, |tree, metrics| {
+            tree.answer_queries_with(queries, metrics, |query| {
+                self.specialize_layout_query(tree, query)
+            })
         })
     }
 
@@ -436,9 +433,18 @@ impl JsContextHost {
         tree: &FrozenLayoutTree<DomHandle>,
         query: &LayoutQuery<DomHandle>,
     ) -> LayoutQueryAnswer<DomHandle> {
+        self.specialize_layout_query(tree, query)
+            .unwrap_or_else(|| tree.answer_query(query))
+    }
+
+    fn specialize_layout_query(
+        &self,
+        tree: &FrozenLayoutTree<DomHandle>,
+        query: &LayoutQuery<DomHandle>,
+    ) -> Option<LayoutQueryAnswer<DomHandle>> {
         // Geometry and its coordinate environment come from the same
         // published frame, even after live viewport changes.
-        match query {
+        Some(match query {
             LayoutQuery::ElementMetrics { source } => LayoutQueryAnswer::ElementMetrics(
                 tree.element_metrics_for_source_with_offset_parent_filter(*source, |candidate| {
                     self.offset_parent_candidate_is_exposed(*source, candidate)
@@ -454,8 +460,8 @@ impl JsContextHost {
             LayoutQuery::CaretPosition { point } if !tree.viewport.contains(*point) => {
                 LayoutQueryAnswer::CaretPosition(None)
             }
-            _ => tree.answer_query(query),
-        }
+            _ => return None,
+        })
     }
 
     /// Blink exposes only offset-parent candidates whose TreeScope is one of
