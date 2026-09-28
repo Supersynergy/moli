@@ -6,6 +6,7 @@
 mod color;
 mod declaration;
 mod font_face;
+mod font_palette;
 mod math;
 mod root_margin;
 mod stylo_stylesheet;
@@ -21,6 +22,9 @@ pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration
 pub use font_face::{
     CssFontFace, font_load_query_contains_css_wide_keyword, font_load_query_family,
     normalize_font_face_src, parse_font_faces,
+};
+pub use font_palette::{
+    CssFontPaletteValuesProperty, parse_font_palette_values_property_with_stylo,
 };
 pub use math::{
     ContainerQueryLengthContext, CssNumericContext, CssNumericKind, CssNumericValue, UnitlessAngle,

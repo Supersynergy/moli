@@ -140,6 +140,11 @@ pub(in crate::context_bootstrap) fn install_css_stylesheet_template_bindings<'s>
                 scope, prototype,
             );
         }
+        "CSSFontPaletteValuesRule" => {
+            font_palette_values::CssFontPaletteValuesRulePrototypeDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
         "CSSPropertyRule" => {
             CssPropertyRulePrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }

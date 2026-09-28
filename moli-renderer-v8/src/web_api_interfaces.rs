@@ -52,6 +52,7 @@ interfaces! {
     CSSFontFeatureValuesMap;
     CSSFontFeatureValuesMapIterator = "CSSFontFeatureValuesMap Iterator";
     CSSFontFeatureValuesRule: CSSRule;
+    CSSFontPaletteValuesRule: CSSRule;
     CSSGroupingRule: CSSRule;
     CSSImportRule: CSSRule;
     CSSKeyframeRule: CSSRule;

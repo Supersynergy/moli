@@ -539,6 +539,16 @@ impl StylesheetRuleWrapperBinding {
         self.rule.layer_rule_read()
     }
 
+    pub(crate) fn font_palette_values_property(
+        &self,
+        property: moli_css_parse::CssFontPaletteValuesProperty,
+    ) -> Option<String> {
+        let NativeStylesheetRule::Css(CssRule::FontPaletteValues(rule)) = &self.rule else {
+            return None;
+        };
+        Some(property.read(rule))
+    }
+
     pub(crate) fn keyframes_name(&self) -> Option<String> {
         self.rule.keyframes_name(&self.shared_lock)
     }

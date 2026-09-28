@@ -191,6 +191,16 @@ pub(crate) fn css_rule_attached_native_layer_read<'s>(
     with_css_rule_attached_native_binding(scope, rule, |binding| binding.layer_rule_read())?
 }
 
+pub(crate) fn css_rule_attached_native_font_palette_values_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+    property: moli_css_parse::CssFontPaletteValuesProperty,
+) -> Option<String> {
+    with_css_rule_attached_native_binding(scope, rule, |binding| {
+        binding.font_palette_values_property(property)
+    })?
+}
+
 pub(crate) fn css_rule_attached_native_keyframes_name<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
