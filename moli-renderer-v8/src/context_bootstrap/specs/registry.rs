@@ -645,6 +645,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::XPathEvaluator,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::XPathExpression::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::XPathResult::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

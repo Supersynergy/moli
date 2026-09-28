@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     custom_elements,
-    dom::native::DomHost,
+    dom::native::{DomHost, DomMutationEffects},
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{
         context_host_ptr_from_global_bridge, get_private_object, get_private_value,
@@ -1173,6 +1173,43 @@ pub(in crate::native_bridge) fn detached_record_tree_mutation<'s>(
         v8str(scope, "queryVersion").into(),
         v8::BigInt::new_from_u64(scope, next).into(),
     );
+}
+
+pub(crate) fn detached_record_native_tree_mutations(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    dom_host: &DomHost,
+    effects: &DomMutationEffects,
+) {
+    // Native-backed detached nodes can use the ordinary Node mutation path.
+    // Keep their document-local query version in sync there too. These facts
+    // are available even when no MutationObserver has enabled record capture.
+    let inputs = effects.style();
+    let targets = inputs
+        .child_list_mutations()
+        .iter()
+        .map(|mutation| mutation.target())
+        .chain(
+            inputs
+                .attribute_mutations()
+                .iter()
+                .map(|mutation| mutation.target()),
+        )
+        .chain(inputs.character_data_mutations().iter().copied());
+    let mut documents = Vec::new();
+    for target in targets {
+        if let Some(document) = dom_host.owner_document_handle(target)
+            && !documents.contains(&document)
+        {
+            documents.push(document);
+        }
+    }
+    for document in documents {
+        if let Some(object) = paired_detached_native_object_for_handle(scope, runtime_ptr, document)
+        {
+            detached_record_tree_mutation(scope, object);
+        }
+    }
 }
 
 pub(in crate::native_bridge::document) fn detached_state_object<'s>(

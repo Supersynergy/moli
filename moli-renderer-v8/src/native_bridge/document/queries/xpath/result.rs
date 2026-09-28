@@ -411,10 +411,17 @@ pub(super) fn build_xpath_scalar_result<'s>(
     requested_result_type: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let result_type = match requested_result_type {
-        XPATH_ANY_TYPE | XPATH_STRING_TYPE => XPATH_STRING_TYPE,
-        XPATH_NUMBER_TYPE => XPATH_NUMBER_TYPE,
-        XPATH_BOOLEAN_TYPE => XPATH_BOOLEAN_TYPE,
-        _ => XPATH_STRING_TYPE,
+        XPATH_ANY_TYPE => match &value {
+            SnapshotValue::Boolean(_) => XPATH_BOOLEAN_TYPE,
+            SnapshotValue::Number(_) => XPATH_NUMBER_TYPE,
+            SnapshotValue::String(_) => XPATH_STRING_TYPE,
+            SnapshotValue::Nodes(_) => return None,
+        },
+        XPATH_STRING_TYPE | XPATH_NUMBER_TYPE | XPATH_BOOLEAN_TYPE => requested_result_type,
+        _ => {
+            throw_type_error(scope, "The XPath result is not a node set.");
+            return None;
+        }
     };
     let object = build_xpath_result_base(scope, result_type)?;
     match result_type {

@@ -22,6 +22,9 @@ pub(crate) fn notify_dom_mutation(
     dom_host: &DomHost,
     effects: &DomMutationEffects,
 ) -> MutationNotificationTimings {
+    crate::native_bridge::document::detached_record_native_tree_mutations(
+        scope, host_ptr, dom_host, effects,
+    );
     let host = unsafe { &mut *host_ptr };
     if !effects.stylesheet_owners().changes().is_empty() {
         host.apply_stylesheet_owner_changes(effects.stylesheet_owners().changes());

@@ -54,5 +54,5 @@ pub(in crate::native_bridge) use self::state_tree::{
 };
 pub(crate) use self::state_tree::{
     detached_native_handle_for_runtime, detached_native_object_for_handle,
-    paired_detached_native_object_for_handle,
+    detached_record_native_tree_mutations, paired_detached_native_object_for_handle,
 };
