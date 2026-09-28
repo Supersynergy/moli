@@ -1323,3 +1323,61 @@ fn inline_stylesheet_copy_on_write_preserves_unmodified_font_face_wrappers() {
         r#"{"initialCount":2,"insertPreservedFirst":true,"insertPreservedSecond":true,"descriptorReplacedFirst":true,"descriptorPreservedSecond":true}"#
     );
 }
+
+#[test]
+fn css_owner_changes_prepare_font_projections_only_for_exposed_collections() {
+    use crate::native_bridge::document::take_owner_font_face_projection_count_for_test;
+    let mut vm = new_storage_test_vm("https://lazy-font-projection.test/");
+    take_owner_font_face_projection_count_for_test();
+    vm.eval(
+        r#"
+      globalThis.lazyStyle = document.createElement('style');
+      (document.head || document.documentElement || document).appendChild(lazyStyle);
+      globalThis.heldSheets = document.styleSheets;
+      for (let i = 0; i < 64; i++) {
+        lazyStyle.textContent = `@font-face { font-family: Face${i}; src: local(Face${i}); }
+          #styled { color: rgb(1, 2, 3); }`;
+      }
+      globalThis.styled = document.createElement('div'); styled.id = 'styled';
+      (document.body || document.documentElement || document).appendChild(styled);
+      'ready'
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        take_owner_font_face_projection_count_for_test(),
+        0,
+        "unobserved FontFaceSets must not prepare owner projections"
+    );
+    assert_eq!(
+        vm.eval("[heldSheets.length, getComputedStyle(styled).color].join('|')")
+            .unwrap(),
+        "1|rgb(1, 2, 3)"
+    );
+    assert_eq!(
+        take_owner_font_face_projection_count_for_test(),
+        0,
+        "native styling and exposed StyleSheetLists do not consume JS font projections"
+    );
+    assert_eq!(vm.eval("globalThis.heldFonts = document.fonts; Array.from(heldFonts, face => face.family).join(',')").unwrap(), "Face63");
+    assert_eq!(
+        take_owner_font_face_projection_count_for_test(),
+        1,
+        "first observation prepares the current native state once"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+      lazyStyle.textContent = '@font-face { font-family: UpdatedFace; src: local(UpdatedFace); }';
+      Array.from(heldFonts, face => face.family).join(',')
+    "#
+        )
+        .unwrap(),
+        "UpdatedFace"
+    );
+    assert!(
+        take_owner_font_face_projection_count_for_test() > 0,
+        "already held FontFaceSets must update without rereading Document.fonts"
+    );
+    assert_eq!(vm.eval("lazyStyle.remove(); [heldFonts.size, heldSheets.length, heldFonts === document.fonts].join('|')").unwrap(), "0|0|true");
+}

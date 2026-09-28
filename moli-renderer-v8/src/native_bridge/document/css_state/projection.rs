@@ -1,8 +1,5 @@
 use super::{
-    font_faces::{
-        OwnerFontFaceProjection, apply_font_face_owner_projection,
-        finish_font_face_owner_projections, owner_font_face_projection,
-    },
+    font_faces::{apply_font_face_owner_projection, finish_font_face_owner_projections},
     style_sheets::sync_document_style_sheets,
 };
 use crate::{
@@ -21,7 +18,7 @@ enum DocumentCssProjection {
     FontFaceOwner {
         document: DomHandle,
         owner: DomHandle,
-        projection: Option<OwnerFontFaceProjection>,
+        refresh: bool,
     },
 }
 
@@ -41,18 +38,18 @@ impl DocumentCssProjections {
             let owner = change.owner();
             let scopes = change.tree_scopes();
             if let Some(old_scope) = scopes.old() {
-                projections.push_for_scope(host, old_scope, owner, None);
+                projections.push_for_scope(host, old_scope, owner, false);
             }
-            let current_projection = match change.kind() {
+            let refresh = !matches!(
+                change.kind(),
                 DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected: false }
-                | DomStylesheetOwnerChangeKind::Unregistered => None,
-                _ => owner_font_face_projection(host, owner),
-            };
+                    | DomStylesheetOwnerChangeKind::Unregistered
+            );
             if let Some(current_scope) = scopes.current_scope() {
-                projections.push_for_scope(host, current_scope, owner, current_projection.clone());
+                projections.push_for_scope(host, current_scope, owner, refresh);
             }
             if let Some(new_scope) = scopes.new_scope() {
-                projections.push_for_scope(host, new_scope, owner, current_projection.clone());
+                projections.push_for_scope(host, new_scope, owner, refresh);
             }
         }
         projections
@@ -63,8 +60,7 @@ impl DocumentCssProjections {
         let Some(tree_scope) = host.dom_host().root_node_handle(owner) else {
             return projections;
         };
-        let projection = owner_font_face_projection(host, owner);
-        projections.push_for_scope(host, tree_scope, owner, projection);
+        projections.push_for_scope(host, tree_scope, owner, true);
         projections
     }
 
@@ -73,7 +69,7 @@ impl DocumentCssProjections {
         host: &JsContextHost,
         scope: DomHandle,
         owner: DomHandle,
-        projection: Option<OwnerFontFaceProjection>,
+        refresh: bool,
     ) {
         if !host.dom_host().node(scope).is_some_and(Node::is_document) {
             return;
@@ -94,20 +90,20 @@ impl DocumentCssProjections {
         {
             let existing = &mut self.projections[index];
             let DocumentCssProjection::FontFaceOwner {
-                projection: existing_projection,
+                refresh: existing_refresh,
                 ..
             } = existing
             else {
                 unreachable!();
             };
-            *existing_projection = projection;
+            *existing_refresh = refresh;
             return;
         }
         let index = self.projections.len();
         self.projections.push(DocumentCssProjection::FontFaceOwner {
             document: scope,
             owner,
-            projection,
+            refresh,
         });
         self.font_face_projection_indices
             .insert((scope, owner), index);
@@ -133,14 +129,10 @@ impl DocumentCssProjections {
                     DocumentCssProjection::FontFaceOwner {
                         document,
                         owner,
-                        projection,
+                        refresh,
                     } => {
-                        if apply_font_face_owner_projection(
-                            scope,
-                            holder,
-                            owner,
-                            projection.as_ref(),
-                        ) && !font_face_documents.contains(&document)
+                        if apply_font_face_owner_projection(scope, holder, host, owner, refresh)
+                            && !font_face_documents.contains(&document)
                         {
                             font_face_documents.push(document);
                         }
