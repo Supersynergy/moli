@@ -189,6 +189,18 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Event,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AnimationEvent::DESCRIPTOR,
+        kind: ConstructorKind::AnimationEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::TransitionEvent::DESCRIPTOR,
+        kind: ConstructorKind::TransitionEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::BlobEvent::DESCRIPTOR,
+        kind: ConstructorKind::BlobEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::UIEvent::DESCRIPTOR,
         kind: ConstructorKind::UiEvent,
     },

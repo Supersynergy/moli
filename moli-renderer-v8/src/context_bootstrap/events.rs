@@ -7,7 +7,12 @@ mod init;
 mod kind;
 mod methods;
 mod subclasses;
+mod value;
 mod wrappers;
+
+pub(in crate::context_bootstrap) use value::{
+    ValueEventKind, build_value_event_template, install_value_event_template_bindings,
+};
 
 const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
 const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";
@@ -232,7 +237,8 @@ pub(crate) use base::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, define_event_property, event_backing,
     event_initialized, event_internal_bool_flag, event_is_dispatching, initialize_event_object,
-    mark_event_trusted, set_event_composed_path, set_event_internal_flag, set_event_trusted,
+    initialize_event_object_with_type, mark_event_trusted, set_event_composed_path,
+    set_event_internal_flag, set_event_trusted,
 };
 
 fn event_subclass_kind<'s>(

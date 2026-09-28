@@ -26,6 +26,7 @@ interfaces! {
     AnalyserNode;
     Animation;
     AnimationEffect;
+    AnimationEvent: Event;
     AnimationPlaybackEvent: Event;
     AnimationTimeline;
     Attr: Node;
@@ -41,6 +42,7 @@ interfaces! {
     BeforeUnloadEvent: Event;
     BiquadFilterNode;
     Blob;
+    BlobEvent: Event;
     BroadcastChannel: EventTarget;
     ByteLengthQueuingStrategy;
     CDATASection: Text;
@@ -459,6 +461,7 @@ interfaces! {
     TouchList;
     TrackEvent: Event;
     TransformStream;
+    TransitionEvent: Event;
     TransformStreamDefaultController;
     TreeWalker;
     TrustedHTML;
