@@ -221,7 +221,8 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for pending in pending_response_navigations {
-        let (token, navigation, _) = pending.fail(navigation_error_text.to_owned());
+        let (token, navigation, _) =
+            pending.fail(anyhow::Error::msg(navigation_error_text.to_owned()));
         let result = network::materialize_navigation_failure_preserving_committed_document(
             conn,
             &navigation,

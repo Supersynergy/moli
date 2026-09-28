@@ -3,9 +3,31 @@ use http::StatusCode;
 
 pub const NET_ERR_ABORTED_ERROR_TEXT: &str = "net::ERR_ABORTED";
 
+/// Explicit request cancellation, independent of diagnostic context or wording.
+#[derive(Debug, Clone, Copy)]
+pub struct FetchCancelled;
+
+impl std::fmt::Display for FetchCancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(NET_ERR_ABORTED_ERROR_TEXT)
+    }
+}
+
+impl std::error::Error for FetchCancelled {}
+
+/// Recognizes cancellation through typed causes, including shared body errors.
+pub fn is_fetch_cancelled(error: &anyhow::Error) -> bool {
+    error.is::<FetchCancelled>()
+        || error.chain().any(|cause| {
+            cause.is::<FetchCancelled>()
+                || cause
+                    .downcast_ref::<curl::Error>()
+                    .is_some_and(curl::Error::is_aborted_by_callback)
+        })
+}
+
 pub(crate) fn browser_network_error_text(error: &anyhow::Error) -> &'static str {
-    let error_chain = format!("{error:#}");
-    if error_chain.contains("request cancelled") || error_chain.contains("Callback aborted") {
+    if is_fetch_cancelled(error) {
         return NET_ERR_ABORTED_ERROR_TEXT;
     }
 
@@ -59,6 +81,42 @@ pub fn ensure_http_status_success(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_survives_context_without_matching_diagnostic_text() {
+        for error in [
+            anyhow::Error::new(FetchCancelled),
+            anyhow::Error::new(FetchCancelled)
+                .context("transport stopped")
+                .context("failed to prepare page"),
+            anyhow::anyhow!("inner detail").context(FetchCancelled),
+            anyhow::Error::new(curl::Error::new(curl_sys::CURLE_ABORTED_BY_CALLBACK))
+                .context("arbitrary diagnostic"),
+        ] {
+            assert!(is_fetch_cancelled(&error), "{error:#}");
+            assert_eq!(
+                browser_network_error_text(&error),
+                NET_ERR_ABORTED_ERROR_TEXT
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_words_cannot_change_a_non_cancelled_failure() {
+        for message in ["net::ERR_ABORTED", "request cancelled", "Callback aborted"] {
+            let error = anyhow::anyhow!(message).context("failed to fetch");
+            assert!(!is_fetch_cancelled(&error));
+            assert_eq!(browser_network_error_text(&error), "net::ERR_FAILED");
+
+            let error =
+                anyhow::Error::new(curl::Error::new(curl_sys::CURLE_RECV_ERROR)).context(message);
+            assert!(!is_fetch_cancelled(&error));
+            assert_eq!(
+                browser_network_error_text(&error),
+                "net::ERR_CONNECTION_RESET"
+            );
+        }
+    }
 
     #[test]
     fn curl_receive_failure_maps_to_browser_connection_reset() {

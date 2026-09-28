@@ -1362,11 +1362,29 @@ pub struct DevToolsContinueWithAuthCommand {
     pub password: Option<String>,
 }
 
+/// A protocol-requested failure. Cancellation is a cause, not a display string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevToolsRequestFailure {
+    Aborted,
+    Failed(String),
+}
+
+impl std::fmt::Display for DevToolsRequestFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Aborted => formatter.write_str("Aborted"),
+            Self::Failed(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for DevToolsRequestFailure {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevToolsFailInterceptedRequestCommand {
     pub context: DevToolsCommandContext,
     pub request_id: DevToolsRequestId,
-    pub error_text: String,
+    pub failure: DevToolsRequestFailure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

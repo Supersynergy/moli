@@ -63,7 +63,9 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
             DevToolsFailInterceptedRequestCommand {
                 context,
                 request_id: DevToolsRequestId::from("FETCH-background"),
-                error_text: "Failed".to_owned(),
+                failure: crate::devtools_runtime::DevToolsRequestFailure::Failed(
+                    "Failed".to_owned(),
+                ),
             },
         ))
         .await;

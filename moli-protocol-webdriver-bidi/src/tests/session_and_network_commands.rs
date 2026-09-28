@@ -817,7 +817,10 @@ fn maps_network_response_controls_to_shared_fetch_commands() {
         panic!("expected FailInterceptedRequest command");
     };
     assert_eq!(command.request_id.as_str(), "REQ-10");
-    assert_eq!(command.error_text, "Failed");
+    assert_eq!(
+        command.failure,
+        moli_protocol::devtools_runtime::DevToolsRequestFailure::Failed("Failed".to_owned())
+    );
 }
 
 #[test]

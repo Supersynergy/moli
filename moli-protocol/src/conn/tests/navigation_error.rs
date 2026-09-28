@@ -8,6 +8,153 @@ use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, Subreso
 
 const OFFLINE_ERROR_TEXT: &str = "net::ERR_INTERNET_DISCONNECTED";
 
+#[tokio::test]
+async fn cancelled_background_transport_does_not_prepare_a_network_error_document() {
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buffer = [0; 4096];
+        assert!(stream.read(&mut buffer).await.unwrap() > 0);
+        request_tx.send(()).unwrap();
+        // Hold response metadata until cancellation disconnects the transport.
+        while stream.read(&mut buffer).await.unwrap_or(0) != 0 {}
+    });
+
+    let (mut ctx, token, mut navigation) = navigation_fixture();
+    navigation.requested_url = Url::parse(&format!("http://{address}/pending-head")).unwrap();
+    let cancellation = ctx
+        .conn
+        .document_navigation_cancellation_handle(&token)
+        .unwrap();
+    let job = ctx
+        .conn
+        .background_navigation_load_job_for_navigation(
+            &token,
+            &navigation,
+            Default::default(),
+            None,
+        )
+        .unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let (result, ()) = tokio::join!(job.run(None), async {
+            request_rx.await.unwrap();
+            cancellation.cancel();
+        });
+        result
+    })
+    .await;
+    server.abort();
+    let (result, _) = result.expect("cancellation must release the pending transport");
+    let error = result.expect_err("cancellation must not prepare a browser-owned error page");
+    assert!(
+        error
+            .downcast_ref::<moli_fetch::NetworkFetchFailureContext>()
+            .is_some()
+    );
+    assert!(moli_fetch::is_fetch_cancelled(&error));
+    let outcome = crate::domains::network::materialize_navigation_load_result(
+        &mut ctx.conn,
+        &navigation,
+        Err(error.context("background navigation")),
+    );
+    let MaterializedNavigationLoadOutcome::Failed(failure) = outcome else {
+        panic!("cancelled transport must remain a failure, not a replacement document");
+    };
+    assert_eq!(
+        failure.document_policy,
+        FailedNavigationDocumentPolicy::PreserveCommittedDocument
+    );
+}
+
+#[tokio::test]
+async fn context_wrapped_cancellation_preserves_the_committed_page_and_releases_navigation() {
+    let (mut ctx, fixture_token, navigation) = navigation_fixture();
+    // This fixture starts an uncommitted request; retire it before installing
+    // the old document so it cannot keep the channel suspended during the test.
+    ctx.conn
+        .finish_renderer_document_navigation_for_owner(&navigation.owner, &fixture_token)
+        .unwrap();
+    ctx.conn
+        .clear_pending_document_navigation_for_owner_if_loader_matches(
+            &navigation.owner,
+            &fixture_token.loader_id,
+        );
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    let old_page = ctx
+        .conn
+        .runtime_session_owner_slot(Some("SID-1"))
+        .unwrap()
+        .loaded_page()
+        .unwrap()
+        .page_id();
+
+    for error in [
+        anyhow::Error::new(moli_fetch::FetchCancelled),
+        anyhow::Error::new(crate::devtools_runtime::DevToolsRequestFailure::Aborted),
+    ] {
+        let token = ctx
+            .conn
+            .start_document_navigation_for_owner(&navigation.owner, navigation.loader_id.clone())
+            .unwrap();
+        let error = error
+            .context("failed to prepare page")
+            .context("failed to continue intercepted navigation");
+        let expected_text = format!("{error:#}");
+        let materialized = crate::domains::network::materialize_navigation_load_result(
+            &mut ctx.conn,
+            &navigation,
+            Err(error),
+        );
+        let MaterializedNavigationLoadOutcome::Failed(failure) = &materialized else {
+            panic!("cancellation must produce a terminal failure");
+        };
+        assert_eq!(
+            failure.document_policy,
+            FailedNavigationDocumentPolicy::PreserveCommittedDocument
+        );
+        assert_eq!(failure.error_text, expected_text);
+        let mut out = Vec::new();
+        ctx.conn
+            .drain_materialized_navigation_completion_into(
+                &mut out,
+                MaterializedNavigationCompletion::new(token, navigation.clone(), materialized),
+                &mut CommandDispatchContext::default(),
+            )
+            .await;
+        assert_eq!(
+            ctx.conn
+                .runtime_session_owner_slot(Some("SID-1"))
+                .unwrap()
+                .loaded_page()
+                .expect("cancel must retain the old page")
+                .page_id(),
+            old_page
+        );
+        assert!(
+            !ctx.conn
+                .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1"))
+        );
+        assert!(
+            out.iter()
+                .any(|message| message["error"]["message"] == expected_text)
+        );
+    }
+    ctx.process_async(json!({
+        "id": 700, "sessionId": "SID-1", "method": "Runtime.evaluate",
+        "params": { "expression": "6 * 7" }
+    }))
+    .await;
+    assert_eq!(
+        ctx.take_response_by_id(700)["result"]["result"]["value"],
+        json!(42)
+    );
+}
+
 fn failing_streamed_document(
     navigation: &NavigationDispatchState,
 ) -> crate::conn::DocumentBodySource {

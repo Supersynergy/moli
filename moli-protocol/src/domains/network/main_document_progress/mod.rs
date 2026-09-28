@@ -21,6 +21,7 @@ use crate::conn::{
     CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation, NavigationDispatchState,
     NavigationLoadOutcome, NavigationRequestBlocked, ResponseCommitReady, TargetRuntimeSlot,
 };
+use crate::devtools_runtime::DevToolsRequestFailure;
 
 #[cfg(test)]
 use gate::MainDocumentProgressDrain;
@@ -71,13 +72,24 @@ pub(crate) enum FailedNavigationDocumentPolicy {
 }
 
 impl FailedNavigationDocumentPolicy {
-    fn for_navigation_error(error_text: &str) -> Self {
-        // Fetch.failRequest supplies the CDP reason "Aborted", while the
-        // transport supplies net::ERR_ABORTED. Both cancel the provisional
-        // load without discarding the currently committed document.
-        match error_text {
-            "Aborted" | moli_fetch::NET_ERR_ABORTED_ERROR_TEXT => Self::PreserveCommittedDocument,
-            _ => Self::InvalidateCommittedDocument,
+    fn for_navigation_error(error: &anyhow::Error) -> Self {
+        // Decide from the cause before projecting diagnostic text. Context and
+        // shared body-capture wrappers must not turn cancellation into failure.
+        if moli_fetch::is_fetch_cancelled(error)
+            || matches!(
+                error.downcast_ref::<DevToolsRequestFailure>(),
+                Some(DevToolsRequestFailure::Aborted)
+            )
+            || error.chain().any(|cause| {
+                matches!(
+                    cause.downcast_ref::<DevToolsRequestFailure>(),
+                    Some(DevToolsRequestFailure::Aborted)
+                )
+            })
+        {
+            Self::PreserveCommittedDocument
+        } else {
+            Self::InvalidateCommittedDocument
         }
     }
 
@@ -360,12 +372,11 @@ fn materialize_navigation_load_outcome(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
         NavigationLoadOutcome::NetworkFailure(error_text) => {
-            let document_policy = FailedNavigationDocumentPolicy::for_navigation_error(&error_text);
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,
                 error_text,
-                document_policy,
+                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
                 FailedNavigationResponseMode::CdpErrorTextResult,
             ))
         }
@@ -380,6 +391,7 @@ pub(crate) fn materialize_navigation_load_result(
     match navigation {
         Ok(navigation) => materialize_navigation_load_outcome(conn, state, navigation),
         Err(error) => {
+            let document_policy = FailedNavigationDocumentPolicy::for_navigation_error(&error);
             tracing::debug!(
                 error = ?error,
                 session_id = state.owner.session_id(),
@@ -389,7 +401,6 @@ pub(crate) fn materialize_navigation_load_result(
                 Some(blocked) => blocked.to_string(),
                 None => format!("{error:#}"),
             };
-            let document_policy = FailedNavigationDocumentPolicy::for_navigation_error(&error_text);
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,

@@ -20,9 +20,9 @@ use moli_protocol::devtools_runtime::{
     DevToolsPreloadScriptSource, DevToolsPrintToPdfCommand, DevToolsPrintToPdfTransferMode,
     DevToolsRealmId, DevToolsReleaseObjectsCommand, DevToolsReloadCommand, DevToolsRemoteHandleId,
     DevToolsRemoveBrowserContextCommand, DevToolsRemoveNetworkDataCollectorCommand,
-    DevToolsRemoveNetworkInterceptCommand, DevToolsRemovePreloadScriptCommand, DevToolsRequestId,
-    DevToolsResultOwnership, DevToolsScreenshotClip, DevToolsScreenshotElementClip,
-    DevToolsSerializationOptions, DevToolsSetCacheBehaviorCommand,
+    DevToolsRemoveNetworkInterceptCommand, DevToolsRemovePreloadScriptCommand,
+    DevToolsRequestFailure, DevToolsRequestId, DevToolsResultOwnership, DevToolsScreenshotClip,
+    DevToolsScreenshotElementClip, DevToolsSerializationOptions, DevToolsSetCacheBehaviorCommand,
     DevToolsSetClientWindowStateCommand, DevToolsSetDownloadBehaviorCommand,
     DevToolsSetExtraHeadersCommand, DevToolsSetGeolocationOverrideCommand,
     DevToolsSetLocaleOverrideCommand, DevToolsSetNetworkConditionsCommand,
@@ -1127,7 +1127,7 @@ fn bidi_network_fail_request_command(
     Ok(DevToolsFailInterceptedRequestCommand {
         context: context.command_context(None),
         request_id: DevToolsRequestId::from(required_network_request_id(&command.params)?),
-        error_text: "Failed".to_owned(),
+        failure: DevToolsRequestFailure::Failed("Failed".to_owned()),
     })
 }
 
