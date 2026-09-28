@@ -13,7 +13,7 @@ use crate::{
         StylesheetFontFaceDescriptor, StylesheetFontFaceProjection,
         StylesheetFontFaceRuleProjection,
     },
-    util::{get_private_value, serialize_v8_iter_array, set_private_value, v8_string, v8str},
+    util::{get_private_value, serialize_v8_iter_array, set_private_value, v8_string},
 };
 use std::convert::TryFrom;
 use std::rc::Rc;
@@ -66,9 +66,11 @@ fn construct_font_face_from_parts<'s>(
     family: &str,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor_value = global.get(scope, v8str(scope, "FontFace").into())?;
-    let ctor = v8::Local::<v8::Function>::try_from(ctor_value).ok()?;
+    let ctor =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
+            scope, "FontFace",
+        )
+        .ok()?;
     let family = v8_string(scope, family)?;
     let source = v8_string(scope, source)?;
     ctor.new_instance(scope, &[family.into(), source.into()])
