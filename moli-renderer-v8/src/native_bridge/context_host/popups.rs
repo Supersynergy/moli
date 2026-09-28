@@ -799,6 +799,11 @@ impl JsContextHost {
             )
         {
             set_object_slot(scope, window, "navigator", navigator.into());
+            if let Err(error) = crate::context_bootstrap::install_lightweight_popup_legacy_objects(
+                scope, window, navigator,
+            ) {
+                tracing::warn!(%error, "failed to initialize popup legacy Window objects");
+            }
         }
         let _ = install_storage_aliases_for_window(scope, window);
         install_simple_event_target_methods(

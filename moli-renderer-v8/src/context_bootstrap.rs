@@ -3,6 +3,8 @@ pub(crate) mod abort_signal_events;
 mod animation_runtime;
 mod assets;
 pub(crate) mod bridge_descriptor;
+mod external;
+pub(crate) use runtime_state::install_lightweight_popup_legacy_objects;
 mod broadcast_channel;
 mod canvas;
 mod chrome_runtime;
