@@ -20,21 +20,48 @@ use super::*;
 
 #[test]
 fn aborted_navigation_preserves_the_document_without_hiding_other_failures() {
-    for error_text in ["Aborted", "net::ERR_ABORTED"] {
+    use crate::devtools_runtime::DevToolsRequestFailure;
+
+    for error in [
+        anyhow::Error::new(moli_fetch::FetchCancelled),
+        anyhow::Error::new(DevToolsRequestFailure::Aborted),
+        anyhow::anyhow!("transport detail").context(moli_fetch::FetchCancelled),
+        anyhow::anyhow!("interception detail").context(DevToolsRequestFailure::Aborted),
+    ] {
         assert_eq!(
-            FailedNavigationDocumentPolicy::for_navigation_error(error_text),
+            FailedNavigationDocumentPolicy::for_navigation_error(&error),
+            FailedNavigationDocumentPolicy::PreserveCommittedDocument,
+        );
+        let error = error
+            .context("failed to prepare page")
+            .context("failed to continue intercepted navigation");
+        assert_eq!(
+            FailedNavigationDocumentPolicy::for_navigation_error(&error),
             FailedNavigationDocumentPolicy::PreserveCommittedDocument,
         );
     }
     for error_text in [
+        "Aborted",
+        "net::ERR_ABORTED",
         "Failed",
         "net::ERR_CONNECTION_RESET",
         "net::ERR_BLOCKED_BY_CLIENT",
     ] {
-        assert_eq!(
-            FailedNavigationDocumentPolicy::for_navigation_error(error_text),
-            FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
-        );
+        for error in [
+            anyhow::anyhow!(error_text),
+            anyhow::Error::new(DevToolsRequestFailure::Failed(error_text.to_owned())),
+        ] {
+            assert_eq!(
+                FailedNavigationDocumentPolicy::for_navigation_error(&error),
+                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+            );
+            assert_eq!(
+                FailedNavigationDocumentPolicy::for_navigation_error(
+                    &error.context("net::ERR_ABORTED")
+                ),
+                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+            );
+        }
     }
 }
 

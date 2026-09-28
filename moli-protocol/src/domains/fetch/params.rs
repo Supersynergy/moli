@@ -5,6 +5,7 @@ pub(super) use chromiumoxide_cdp::cdp::browser_protocol::fetch::AuthChallengeRes
 pub(super) use chromiumoxide_cdp::cdp::browser_protocol::fetch::{
     ContinueRequestParams, ContinueResponseParams, ContinueWithAuthParams, HeaderEntry,
 };
+pub(super) use chromiumoxide_cdp::cdp::browser_protocol::network::ErrorReason;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -37,7 +38,7 @@ pub(super) struct RequestIdParam {
 pub(super) struct FailRequestParams {
     pub(super) request_id: String,
     #[serde(default)]
-    pub(super) error_reason: Option<String>,
+    pub(super) error_reason: Option<ErrorReason>,
 }
 
 #[derive(Deserialize)]
@@ -103,7 +104,24 @@ fn default_websocket_opcode() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::WebSocketMessageOpcode;
+    use super::{ErrorReason, FailRequestParams, WebSocketMessageOpcode};
+
+    #[test]
+    fn fail_request_decodes_a_typed_reason_not_an_error_message() {
+        let params: FailRequestParams = serde_json::from_value(serde_json::json!({
+            "requestId": "request", "errorReason": "Aborted"
+        }))
+        .unwrap();
+        assert_eq!(params.error_reason, Some(ErrorReason::Aborted));
+        for error_text in ["net::ERR_ABORTED", "failed to prepare page: Aborted"] {
+            assert!(
+                serde_json::from_value::<FailRequestParams>(serde_json::json!({
+                    "requestId": "request", "errorReason": error_text
+                }))
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn websocket_message_opcode_parses_supported_cdp_tokens() {

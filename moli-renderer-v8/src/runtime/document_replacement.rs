@@ -28,7 +28,7 @@ impl RendererDocumentReplacement {
     pub(super) fn begin(self) -> anyhow::Result<Arc<RendererDocumentReplacementScope>> {
         anyhow::ensure!(
             !self.cancellation.is_cancelled() && self.pause.begin_document_replacement(),
-            moli_fetch::NET_ERR_ABORTED_ERROR_TEXT,
+            moli_fetch::FetchCancelled,
         );
         Ok(Arc::new(RendererDocumentReplacementScope {
             pause: self.pause,

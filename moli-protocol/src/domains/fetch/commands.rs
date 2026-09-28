@@ -7,7 +7,7 @@ use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
     DevToolsContinueInterceptedResponseCommand, DevToolsContinueWithAuthCommand,
     DevToolsFailInterceptedRequestCommand, DevToolsFulfillInterceptedRequestCommand,
-    DevToolsProtocol, DevToolsRequestId,
+    DevToolsProtocol, DevToolsRequestFailure, DevToolsRequestId,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::{activity, network, page};
@@ -27,7 +27,7 @@ use super::navigation::{
 };
 use super::params::{
     CloseWebSocketParams, ContinueRequestParams, ContinueResponseParams,
-    DispatchWebSocketMessageParams, FailRequestParams, FulfillRequestParams,
+    DispatchWebSocketMessageParams, ErrorReason, FailRequestParams, FulfillRequestParams,
     WebSocketMessageOpcode,
 };
 use super::state::{
@@ -92,11 +92,14 @@ pub(super) fn start_devtools_fetch_command_for_owner(
     }
 }
 
-fn navigation_fail_request_error_text(error_reason: Option<String>) -> String {
-    let error_text = error_reason.unwrap_or_else(|| "Fetch request failed".to_owned());
-    match error_text.as_str() {
-        "BlockedByClient" => BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
-        _ => error_text,
+fn navigation_fail_request_failure(error_reason: Option<ErrorReason>) -> DevToolsRequestFailure {
+    match error_reason {
+        Some(ErrorReason::Aborted) => DevToolsRequestFailure::Aborted,
+        Some(ErrorReason::BlockedByClient) => {
+            DevToolsRequestFailure::Failed(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
+        }
+        Some(reason) => DevToolsRequestFailure::Failed(reason.as_ref().to_owned()),
+        None => DevToolsRequestFailure::Failed("Fetch request failed".to_owned()),
     }
 }
 
@@ -460,7 +463,7 @@ fn finish_continue_subresource_request(
 pub(super) enum PendingFailRequestState {
     Navigation {
         pending: Box<crate::conn::PendingFetchNavigation>,
-        error_text: String,
+        failure: DevToolsRequestFailure,
     },
     SubresourceFetch {
         pending: Box<crate::conn::PendingSubresourceFetchRequest>,
@@ -470,7 +473,7 @@ pub(super) enum PendingFailRequestState {
     },
     ResponseTransfer {
         transfer: Box<crate::conn::PausedDocumentTransfer>,
-        error_text: String,
+        failure: DevToolsRequestFailure,
     },
 }
 
@@ -487,9 +490,8 @@ pub(super) fn start_fail_request_command(
             ));
         }
     };
-    let error_text = navigation_fail_request_error_text(params.error_reason);
-    let command =
-        build_cdp_fail_intercepted_request_command(conn, cmd, params.request_id, error_text);
+    let failure = navigation_fail_request_failure(params.error_reason);
+    let command = build_cdp_fail_intercepted_request_command(conn, cmd, params.request_id, failure);
     start_devtools_fetch_command(
         conn,
         cmd.id,
@@ -502,14 +504,14 @@ fn build_cdp_fail_intercepted_request_command(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
     request_id: String,
-    error_text: String,
+    failure: DevToolsRequestFailure,
 ) -> DevToolsFailInterceptedRequestCommand {
     let (browser_context_id, target_id) =
         devtools_fetch_owner_identity_for_session(conn, cmd.session_id);
     DevToolsFailInterceptedRequestCommand {
         context: cmd.devtools_command_context(target_id.as_deref(), browser_context_id.as_deref()),
         request_id: DevToolsRequestId::from(request_id),
-        error_text,
+        failure,
     }
 }
 
@@ -522,7 +524,8 @@ fn start_devtools_fail_intercepted_request_command(
     let command_session_id = owner.session_id();
     let validate_request_id = command.context.protocol == DevToolsProtocol::Cdp;
     let request_id = command.request_id.into_string();
-    let error_text = command.error_text;
+    let failure = command.failure;
+    let error_text = failure.to_string();
     let action_session_id = action_session_id_for_devtools_context(
         command_session_id,
         command.context.protocol,
@@ -536,7 +539,7 @@ fn start_devtools_fail_intercepted_request_command(
             PendingFetchCommandKind::FailRequest {
                 state: Box::new(PendingFailRequestState::Navigation {
                     pending: Box::new(pending),
-                    error_text,
+                    failure,
                 }),
             },
             PendingFetchCommandOperation::Ready,
@@ -660,7 +663,7 @@ fn start_devtools_fail_intercepted_request_command(
             PendingFetchCommandKind::FailRequest {
                 state: Box::new(PendingFailRequestState::ResponseTransfer {
                     transfer: Box::new(transfer),
-                    error_text,
+                    failure,
                 }),
             },
             PendingFetchCommandOperation::Ready,
@@ -681,10 +684,7 @@ pub(super) async fn complete_fail_request_command_async(
     out: &mut FetchCommandOutput,
 ) {
     match state {
-        PendingFailRequestState::Navigation {
-            pending,
-            error_text,
-        } => {
+        PendingFailRequestState::Navigation { pending, failure } => {
             let pending = *pending;
             emit_devtools_empty_success(out);
             let token = pending.document_navigation_token;
@@ -692,7 +692,7 @@ pub(super) async fn complete_fail_request_command_async(
             let navigation = network::materialize_navigation_load_result(
                 conn,
                 &navigation_state,
-                Err(anyhow::Error::msg(error_text)),
+                Err(failure.into()),
             );
             complete_tokened_materialized_navigation_as_background_events_async(
                 conn,
@@ -784,12 +784,9 @@ pub(super) async fn complete_fail_request_command_async(
             .await;
             out.extend_background_events(events);
         }
-        PendingFailRequestState::ResponseTransfer {
-            transfer,
-            error_text,
-        } => {
+        PendingFailRequestState::ResponseTransfer { transfer, failure } => {
             let transfer = *transfer;
-            let (token, navigation_state, navigation) = transfer.fail(error_text);
+            let (token, navigation_state, navigation) = transfer.fail(failure.into());
             let navigation =
                 network::materialize_navigation_load_result(conn, &navigation_state, navigation);
             emit_devtools_empty_success(out);
@@ -1890,7 +1887,7 @@ fn continue_streaming_document_response_in_background(
             let _ = sender.send(page::BackgroundNavigationCompletion::new(
                 document_navigation_token,
                 navigation,
-                Err(anyhow::anyhow!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT)),
+                Err(moli_fetch::FetchCancelled.into()),
             ));
             return;
         }
@@ -1912,6 +1909,23 @@ fn continue_streaming_document_response_in_background(
 
 #[cfg(test)]
 mod protocol_neutral_tests {
+    use crate::devtools_runtime::DevToolsRequestFailure;
+
+    #[test]
+    fn cdp_abort_reason_is_preserved_as_a_typed_cause() {
+        use super::{ErrorReason, navigation_fail_request_failure};
+        let failure = navigation_fail_request_failure(Some(ErrorReason::Aborted));
+        let error = anyhow::Error::new(failure).context("interception continuation");
+        assert!(matches!(
+            error.downcast_ref::<DevToolsRequestFailure>(),
+            Some(DevToolsRequestFailure::Aborted)
+        ));
+        assert_eq!(
+            navigation_fail_request_failure(Some(ErrorReason::ConnectionAborted)),
+            DevToolsRequestFailure::Failed("ConnectionAborted".to_owned()),
+        );
+    }
+
     use crate::devtools_runtime::{AutomationEvent, DevToolsCommand, DevToolsProtocol};
     use moli_core::page::SubresourceResourceType;
     use serde_json::{Value, json};
@@ -2473,7 +2487,7 @@ mod protocol_neutral_tests {
             &conn,
             &cmd,
             "interception-job-2".to_owned(),
-            "net::ERR_BLOCKED_BY_CLIENT".to_owned(),
+            DevToolsRequestFailure::Failed("net::ERR_BLOCKED_BY_CLIENT".to_owned()),
         );
 
         assert_eq!(command.context.protocol, DevToolsProtocol::Cdp);
@@ -2484,7 +2498,10 @@ mod protocol_neutral_tests {
         assert_eq!(command.context.target_id, None);
         assert_eq!(command.context.browser_context_id, None);
         assert_eq!(command.request_id.as_str(), "interception-job-2");
-        assert_eq!(command.error_text, "net::ERR_BLOCKED_BY_CLIENT");
+        assert_eq!(
+            command.failure,
+            DevToolsRequestFailure::Failed("net::ERR_BLOCKED_BY_CLIENT".to_owned())
+        );
     }
 
     #[test]

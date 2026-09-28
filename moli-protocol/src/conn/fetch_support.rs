@@ -1214,7 +1214,7 @@ impl PausedDocumentTransfer {
 
     pub(crate) fn fail(
         self,
-        error_text: String,
+        error: anyhow::Error,
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
@@ -1227,13 +1227,9 @@ impl PausedDocumentTransfer {
                 body,
             } => {
                 let _ = body;
-                (
-                    document_navigation_token,
-                    navigation,
-                    Err(anyhow::Error::msg(error_text)),
-                )
+                (document_navigation_token, navigation, Err(error))
             }
-            PausedDocumentTransferState::ActiveBodyStream { stream, .. } => stream.fail(error_text),
+            PausedDocumentTransferState::ActiveBodyStream { stream, .. } => stream.fail(error),
         }
     }
 }
@@ -1339,17 +1335,13 @@ impl ActiveDocumentBodyStreamState {
 
     fn fail(
         self,
-        error_text: String,
+        error: anyhow::Error,
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
         anyhow::Result<NavigationLoadOutcome>,
     ) {
-        (
-            self.document_navigation_token,
-            self.navigation,
-            Err(anyhow::Error::msg(error_text)),
-        )
+        (self.document_navigation_token, self.navigation, Err(error))
     }
 }
 

@@ -40,7 +40,9 @@ pub use cancellation::FetchCancelHandle;
 pub use client::{FetchClient, FetchClientHandle};
 pub use config::FetchConfig;
 pub use cors::validate_cors_response_for_origin;
-pub use error::{NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success};
+pub use error::{
+    FetchCancelled, NET_ERR_ABORTED_ERROR_TEXT, ensure_http_status_success, is_fetch_cancelled,
+};
 pub use fetch_url_list::FetchUrlList;
 pub use headers::{
     cors_unsafe_request_header_names, is_cors_safelisted_method,

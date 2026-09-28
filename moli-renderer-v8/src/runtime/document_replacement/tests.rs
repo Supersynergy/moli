@@ -234,9 +234,7 @@ async fn canceled_replacement_is_rejected_before_renderer_admission() {
     let input = replacement(&pause);
     input.cancellation.cancel();
     let result = prepare(&runtime, reservation, Some(input)).await;
-    assert!(
-        matches!(result, Err(error) if error.to_string() == moli_fetch::NET_ERR_ABORTED_ERROR_TEXT)
-    );
+    assert!(matches!(result, Err(error) if error.is::<moli_fetch::FetchCancelled>()));
     assert_debugging_enabled(&pause);
     assert!(matches!(
         output_rx.try_recv(),

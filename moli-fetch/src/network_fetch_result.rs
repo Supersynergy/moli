@@ -591,6 +591,11 @@ mod tests {
     fn network_failure_reason_preserves_curl_code_and_details() {
         for (code, detail, network_error_text) in [
             (
+                curl_sys::CURLE_ABORTED_BY_CALLBACK,
+                "transfer cancelled",
+                crate::NET_ERR_ABORTED_ERROR_TEXT,
+            ),
+            (
                 curl_sys::CURLE_PEER_FAILED_VERIFICATION,
                 "SSL certificate problem: unable to get local issuer certificate",
                 "net::ERR_CERT_AUTHORITY_INVALID",

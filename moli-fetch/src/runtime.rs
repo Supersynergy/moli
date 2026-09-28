@@ -864,7 +864,11 @@ impl RuntimeOwner {
         mut job: RuntimeJob,
     ) -> std::result::Result<JobOutcome, (RuntimeResponseTx, anyhow::Error)> {
         if job.cancel_handle.is_cancelled() {
-            return Err((job.response_tx, anyhow!("fetch runtime request cancelled")));
+            return Err((
+                job.response_tx,
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime request cancelled"),
+            ));
         }
         if let Err(error) = job.request.validate_request_mode_for_url(&job.current_url) {
             return Err((job.response_tx, error));
@@ -1428,12 +1432,17 @@ impl RuntimeOwner {
         if self.shutdown_requested.load(Ordering::SeqCst) {
             return Err((
                 job.response_tx,
-                anyhow!("fetch runtime request cancelled during shutdown"),
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime request cancelled during shutdown"),
             ));
         }
         if let Err(error) = result {
             if job.cancel_handle.is_cancelled() {
-                return Err((job.response_tx, anyhow!("fetch runtime request cancelled")));
+                return Err((
+                    job.response_tx,
+                    anyhow::Error::new(crate::FetchCancelled)
+                        .context("fetch runtime request cancelled"),
+                ));
             }
             if let Some(response) = easy.as_mut().and_then(take_failed_proxy_connect_response) {
                 let response = proxy_connect_raw_response(
@@ -1648,7 +1657,8 @@ impl RuntimeOwner {
             fail_streaming_job_with_easy(
                 job,
                 Some(easy),
-                anyhow!("fetch runtime streaming request cancelled during shutdown"),
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime streaming request cancelled during shutdown"),
             );
             return;
         }
@@ -1959,7 +1969,8 @@ impl RuntimeOwner {
             fail_raw_streaming_job_with_easy(
                 job,
                 Some(easy),
-                anyhow!("fetch runtime raw streaming request cancelled during shutdown"),
+                anyhow::Error::new(crate::FetchCancelled)
+                    .context("fetch runtime raw streaming request cancelled during shutdown"),
             );
             return;
         }

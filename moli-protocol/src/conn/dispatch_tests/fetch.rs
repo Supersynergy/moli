@@ -19,7 +19,9 @@ async fn devtools_fetch_control_command_routes_through_fetch_owner() {
             DevToolsFailInterceptedRequestCommand {
                 context: context.clone(),
                 request_id: DevToolsRequestId::from("INT-99"),
-                error_text: "Failed".to_owned(),
+                failure: crate::devtools_runtime::DevToolsRequestFailure::Failed(
+                    "Failed".to_owned(),
+                ),
             },
         ))
         .await;

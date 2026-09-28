@@ -871,6 +871,9 @@ impl BackgroundNavigationLoadJob {
                                     failure.observation_journal(),
                                 );
                         }
+                        if moli_fetch::is_fetch_cancelled(&error) {
+                            return Err(error);
+                        }
                         tracing::debug!(
                             url = %self.raw_url,
                             error = ?error,
@@ -1528,7 +1531,7 @@ impl CdpConnection {
                     && token.loader_id == navigation.loader_id
                     && self.accepts_pending_document_navigation_for_owner(&navigation.owner, token)
             })
-            .ok_or_else(|| anyhow::anyhow!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT))?;
+            .ok_or(moli_fetch::FetchCancelled)?;
         let mut inputs = self.navigation_request_load_inputs(navigation);
         inputs.document_replacement = self
             .runtime_session_owner_slot_for_owner(&navigation.owner)
@@ -3901,6 +3904,21 @@ mod tests {
         inline_html_navigation_source,
     };
     use serde_json::json;
+
+    #[tokio::test]
+    async fn shared_body_cancellation_keeps_a_typed_cause_for_both_consumers() {
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let error = anyhow::Error::new(moli_fetch::FetchCancelled)
+            .context("failed to read page body from stream");
+        let navigation_error = super::complete_body_capture(Err(error), completion_tx)
+            .expect_err("cancelled body capture must fail navigation");
+        let renderer_error = completion_rx.await.unwrap().unwrap_err();
+        for error in [navigation_error, renderer_error] {
+            let error = error.context("consumer context");
+            assert!(moli_fetch::is_fetch_cancelled(&error));
+            assert!(error.root_cause().is::<moli_fetch::FetchCancelled>());
+        }
+    }
 
     #[tokio::test]
     async fn streaming_body_failure_preserves_source_for_renderer_and_navigation() {
