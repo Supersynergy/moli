@@ -50,17 +50,19 @@ pub fn arm_background_navigation_request_for_target(
     target_id: &str,
     loader_id: &str,
 ) -> BackgroundNavigationRequestFixture {
-    let token = conn
+    let context = conn
         .browser_context
         .as_mut()
-        .and_then(|context| {
-            context.start_document_navigation_for_target(target_id, loader_id.to_owned())
-        })
+        .expect("a navigation request fixture requires a browser context");
+    let token = context
+        .start_document_navigation_for_target(target_id, loader_id.to_owned())
         .expect("the active target must accept a navigation request fixture");
-    let cancellation = conn
-        .document_navigation_cancellation_handle(&token)
-        .expect("the target-owned request must expose its cancellation handle");
-    assert!(conn.arm_background_navigation_completion(&token, None));
+    let cancellation = context
+        .page_target_mut(target_id)
+        .expect("the fixture's target must remain installed")
+        .runtime_slot
+        .claim_background_navigation_completion(&token, None)
+        .expect("the fixture must claim its new request's background completion");
     BackgroundNavigationRequestFixture {
         token,
         cancellation,

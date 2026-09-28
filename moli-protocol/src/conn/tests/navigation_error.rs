@@ -1,7 +1,8 @@
 use super::*;
 use crate::conn::{
-    CommandOwnerScope, DocumentNavigationToken, NavigationLoadOutcome, NavigationNetworkError,
-    NavigationNetworkErrorKind, NavigationRequestLoadPolicy,
+    BackgroundNavigationClaimError, CommandOwnerScope, DocumentNavigationToken,
+    NavigationLoadOutcome, NavigationNetworkError, NavigationNetworkErrorKind,
+    NavigationRequestLoadPolicy,
 };
 use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceAuthTarget};
 
@@ -146,7 +147,10 @@ fn streaming_response_job(
     token: &DocumentNavigationToken,
     navigation: &NavigationDispatchState,
 ) -> (
-    Option<crate::conn::runtime_load::BackgroundStreamingResponseNavigationLoadJob>,
+    Result<
+        crate::conn::runtime_load::BackgroundStreamingResponseNavigationLoadJob,
+        BackgroundNavigationClaimError,
+    >,
     moli_fetch::FetchCancelHandle,
 ) {
     let crate::conn::DocumentBodySource::StreamingRaw { response, .. } =
@@ -235,18 +239,26 @@ async fn superseded_streaming_response_cannot_arm_the_current_navigation() {
 
     let (job, stale_cancellation) = streaming_response_job(&mut ctx.conn, &stale, &navigation);
     assert!(
-        job.is_none(),
+        matches!(job, Err(BackgroundNavigationClaimError::Stale)),
         "stale responses must not create renderer preparation jobs"
     );
     assert!(stale_cancellation.is_cancelled());
     assert!(!current_cancellation.is_cancelled());
     assert!(!ctx.conn.has_inflight_background_navigation());
 
-    let (job, _) = streaming_response_job(&mut ctx.conn, &current, &navigation);
-    assert!(
-        job.is_some(),
-        "the matching response must still be accepted"
-    );
+    let (job, current_response_cancellation) =
+        streaming_response_job(&mut ctx.conn, &current, &navigation);
+    assert!(job.is_ok(), "the matching response must still be accepted");
+    assert!(ctx.conn.has_inflight_background_navigation());
+
+    let (stale_job, stale_cancellation) =
+        streaming_response_job(&mut ctx.conn, &stale, &navigation);
+    assert!(matches!(
+        stale_job,
+        Err(BackgroundNavigationClaimError::Stale)
+    ));
+    assert!(stale_cancellation.is_cancelled());
+    assert!(!current_response_cancellation.is_cancelled());
     assert!(ctx.conn.has_inflight_background_navigation());
 }
 
@@ -254,16 +266,228 @@ async fn superseded_streaming_response_cannot_arm_the_current_navigation() {
 async fn duplicate_streaming_response_does_not_cancel_the_armed_navigation() {
     let (mut ctx, token, navigation) = navigation_fixture();
     let (first, first_cancellation) = streaming_response_job(&mut ctx.conn, &token, &navigation);
-    assert!(first.is_some());
+    assert!(first.is_ok());
     let (duplicate, duplicate_cancellation) =
         streaming_response_job(&mut ctx.conn, &token, &navigation);
     assert!(
-        duplicate.is_none(),
-        "an already armed request must not spawn another job"
+        matches!(
+            duplicate,
+            Err(BackgroundNavigationClaimError::AlreadyClaimed)
+        ),
+        "an already claimed request must not spawn another job"
     );
     assert!(duplicate_cancellation.is_cancelled());
     assert!(!first_cancellation.is_cancelled());
     assert!(ctx.conn.has_inflight_background_navigation());
+    assert!(matches!(
+        ctx.conn.background_navigation_load_job_for_navigation(
+            &token,
+            &navigation,
+            Default::default(),
+            None,
+        ),
+        Err(BackgroundNavigationClaimError::AlreadyClaimed)
+    ));
+    assert!(!first_cancellation.is_cancelled());
+}
+
+#[tokio::test]
+async fn duplicate_background_jobs_preserve_the_original_renderer_reservation() {
+    let (mut ctx, token, navigation) = navigation_fixture();
+    let original_page = crate::conn::RendererPageResidenceIdentity::new(
+        moli_core::RendererOwnerLocalHostId::new_for_testing(41),
+        moli_core::PageId::new_for_testing(17),
+    );
+    let slot = ctx
+        .conn
+        .runtime_session_owner_slot_mut(Some("SID-1"))
+        .unwrap();
+    let cancellation = slot
+        .claim_background_navigation_completion(&token, None)
+        .unwrap();
+    assert!(
+        slot.page_slot_mut()
+            .bind_pending_document_navigation_renderer_page(&token, original_page)
+    );
+
+    assert!(matches!(
+        ctx.conn.background_navigation_load_job_for_navigation(
+            &token,
+            &navigation,
+            Default::default(),
+            None,
+        ),
+        Err(BackgroundNavigationClaimError::AlreadyClaimed)
+    ));
+    let (response, response_cancellation) =
+        streaming_response_job(&mut ctx.conn, &token, &navigation);
+    assert!(matches!(
+        response,
+        Err(BackgroundNavigationClaimError::AlreadyClaimed)
+    ));
+    assert!(response_cancellation.is_cancelled());
+    assert!(!cancellation.is_cancelled());
+    assert!(ctx.conn.has_inflight_background_navigation());
+    assert!(
+        ctx.conn
+            .runtime_session_owner_slot(Some("SID-1"))
+            .unwrap()
+            .page_slot()
+            .routes_renderer_page(original_page),
+        "rejecting duplicate work must not reserve a new renderer Page and replace the original binding"
+    );
+}
+
+#[tokio::test]
+async fn background_claim_checks_dispatch_identity_and_owner_before_claiming() {
+    let (mut ctx, token, navigation) = navigation_fixture();
+    let mut other = BrowserContext::new("BID-other".to_owned());
+    other.set_active_target_id("TID-other");
+    other.attach_active_session("SID-other");
+    other
+        .start_document_navigation_for_active_target(token.loader_id.clone())
+        .unwrap();
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(other);
+    let cancellation = ctx
+        .conn
+        .document_navigation_cancellation_handle(&token)
+        .unwrap();
+    for mismatch in [
+        NavigationDispatchState {
+            frame_id: "other frame".into(),
+            ..navigation.clone()
+        },
+        NavigationDispatchState {
+            loader_id: "other loader".into(),
+            ..navigation.clone()
+        },
+        NavigationDispatchState {
+            owner: CommandOwnerScope::for_session("missing session"),
+            ..navigation.clone()
+        },
+        NavigationDispatchState {
+            owner: CommandOwnerScope::for_session("SID-other"),
+            ..navigation.clone()
+        },
+    ] {
+        let (response, response_cancellation) =
+            streaming_response_job(&mut ctx.conn, &token, &mismatch);
+        assert!(matches!(
+            response,
+            Err(BackgroundNavigationClaimError::Stale)
+        ));
+        assert!(response_cancellation.is_cancelled());
+        assert!(matches!(
+            ctx.conn.background_navigation_load_job_for_navigation(
+                &token,
+                &mismatch,
+                Default::default(),
+                None,
+            ),
+            Err(BackgroundNavigationClaimError::Stale)
+        ));
+        assert!(!ctx.conn.has_inflight_background_navigation());
+        assert!(!cancellation.is_cancelled());
+    }
+    let job = ctx
+        .conn
+        .background_navigation_load_job_for_navigation(
+            &token,
+            &navigation,
+            Default::default(),
+            None,
+        )
+        .expect("rejected claims must leave the matching navigation available");
+    assert!(
+        ctx.conn
+            .has_inflight_background_navigation_for_target(&token.target_id)
+    );
+    assert!(
+        !ctx.conn
+            .has_inflight_background_navigation_for_target("TID-other")
+    );
+    drop(job);
+}
+
+#[tokio::test]
+async fn streaming_claim_rejects_committed_and_cleared_requests() {
+    for (background, committed) in [(false, false), (false, true), (true, true)] {
+        let (mut ctx, token, navigation) = navigation_fixture();
+        let slot = ctx
+            .conn
+            .runtime_session_owner_slot_mut(Some("SID-1"))
+            .unwrap()
+            .page_slot_mut();
+        if background {
+            slot.claim_background_navigation_completion(&token, None)
+                .unwrap();
+        }
+        if committed {
+            assert!(slot.commit_pending_document_navigation_if_matches(&token));
+        } else {
+            slot.clear_document_navigation_state();
+        }
+        let (response, response_cancellation) =
+            streaming_response_job(&mut ctx.conn, &token, &navigation);
+        assert!(matches!(
+            response,
+            Err(BackgroundNavigationClaimError::Stale)
+        ));
+        assert!(response_cancellation.is_cancelled());
+        assert_eq!(ctx.conn.has_inflight_background_navigation(), background);
+    }
+}
+
+#[tokio::test]
+async fn background_claims_are_target_owned_in_inactive_browser_contexts() {
+    let (mut ctx, token, navigation) = navigation_fixture();
+    let mut other = BrowserContext::new("BID-other".to_owned());
+    other.set_active_target_id("TID-other");
+    other.attach_active_session("SID-other");
+    let other_token = other
+        .start_document_navigation_for_active_target(token.loader_id.clone())
+        .unwrap();
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(other);
+    let other_navigation = NavigationDispatchState {
+        owner: CommandOwnerScope::for_session("SID-other"),
+        frame_id: other_token.target_id.clone(),
+        session_id: Some("SID-other".into()),
+        ..navigation.clone()
+    };
+    let (other_job, other_cancellation) =
+        streaming_response_job(&mut ctx.conn, &other_token, &other_navigation);
+    assert!(other_job.is_ok());
+    assert!(
+        !ctx.conn
+            .has_inflight_background_navigation_for_target(&token.target_id)
+    );
+    let job = ctx
+        .conn
+        .background_navigation_load_job_for_navigation(
+            &token,
+            &navigation,
+            Default::default(),
+            None,
+        )
+        .unwrap();
+    ctx.conn
+        .runtime_session_owner_slot_mut(Some("SID-1"))
+        .unwrap()
+        .page_slot_mut()
+        .clear_document_navigation_state();
+    assert!(!other_cancellation.is_cancelled());
+    assert!(
+        ctx.conn
+            .has_inflight_background_navigation_for_target(&other_token.target_id)
+    );
+    assert!(!ctx.conn.settle_background_navigation_completion(&token));
+    assert!(
+        ctx.conn
+            .has_inflight_background_navigation_for_target(&other_token.target_id)
+    );
+    drop(job);
 }
 
 #[tokio::test(flavor = "multi_thread")]

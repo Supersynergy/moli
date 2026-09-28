@@ -553,13 +553,13 @@ impl TargetRuntimeSlot {
             .document_navigation_cancellation_handle(token)
     }
 
-    pub(crate) fn arm_background_navigation_completion(
+    pub(crate) fn claim_background_navigation_completion(
         &mut self,
         token: &DocumentNavigationToken,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) -> bool {
+    ) -> Result<moli_fetch::FetchCancelHandle, super::BackgroundNavigationClaimError> {
         self.page_slot
-            .arm_background_navigation_completion(token, additional_cancellation)
+            .claim_background_navigation_completion(token, additional_cancellation)
     }
 
     pub(crate) fn settle_background_navigation_completion(

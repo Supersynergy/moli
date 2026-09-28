@@ -614,6 +614,13 @@ fn complete_body_capture(
     }
 }
 
+/// Inputs captured by the same synchronous transition that claims completion.
+/// The target-owned request retains the claim until completion or supersession.
+struct BackgroundNavigationClaim {
+    load_inputs: TargetNavigationLoadInputs,
+    cancellation: FetchCancelHandle,
+}
+
 pub(crate) struct BackgroundNavigationLoadJob {
     engine: NavigationEngine,
     page_reservation: RendererPageReservationToken,
@@ -1477,6 +1484,39 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
 }
 
 impl CdpConnection {
+    fn claim_background_navigation(
+        &mut self,
+        token: &DocumentNavigationToken,
+        navigation: &NavigationDispatchState,
+        additional_cancellation: Option<FetchCancelHandle>,
+    ) -> Result<BackgroundNavigationClaim, BackgroundNavigationClaimError> {
+        if token.target_id != navigation.frame_id || token.loader_id != navigation.loader_id {
+            return Err(BackgroundNavigationClaimError::Stale);
+        }
+        let (browser_context_id, _) = self
+            .target_owner_identity_for_owner(&navigation.owner)
+            .filter(|(_, target_id)| target_id.as_deref() == Some(token.target_id.as_str()))
+            .ok_or(BackgroundNavigationClaimError::Stale)?;
+        let slot = &mut self
+            .browser_context_by_id_mut(&browser_context_id)
+            .and_then(|context| context.page_target_mut(&token.target_id))
+            .ok_or(BackgroundNavigationClaimError::Stale)?
+            .runtime_slot;
+        // This is the only pending-request lookup. Capture replacement authority
+        // from its returned cancellation handle, never from an ambient request.
+        let cancellation =
+            slot.claim_background_navigation_completion(token, additional_cancellation)?;
+        let document_replacement = slot
+            .loaded_page()
+            .map(|page| page.document_replacement(cancellation.clone()));
+        let mut load_inputs = self.navigation_request_load_inputs(navigation);
+        load_inputs.document_replacement = document_replacement;
+        Ok(BackgroundNavigationClaim {
+            load_inputs,
+            cancellation,
+        })
+    }
+
     fn navigation_load_inputs_for_navigation(
         &self,
         token: Option<&DocumentNavigationToken>,
@@ -2275,6 +2315,23 @@ impl CdpConnection {
         let load_inputs = self
             .navigation_load_inputs_for_navigation(Some(token), navigation)
             .ok()?;
+        Some(self.navigation_load_job_with_inputs(
+            navigation,
+            load_inputs,
+            cancellation,
+            body_progress_source,
+            early_result,
+        ))
+    }
+
+    fn navigation_load_job_with_inputs(
+        &mut self,
+        navigation: &NavigationDispatchState,
+        load_inputs: TargetNavigationLoadInputs,
+        cancellation: FetchCancelHandle,
+        body_progress_source: MainDocumentBodyProgressSource,
+        early_result: Option<BackgroundNavigationEarlyResult>,
+    ) -> BackgroundNavigationLoadJob {
         // Ensure the target's resident browser resource runtime exists before
         // cloning its engine handle. The job shares the target Page policy and
         // retains this exact transport/cache owner for the captured navigation.
@@ -2283,7 +2340,7 @@ impl CdpConnection {
         let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_reservation =
             self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
-        Some(BackgroundNavigationLoadJob {
+        BackgroundNavigationLoadJob {
             engine,
             page_reservation,
             cancellation,
@@ -2295,7 +2352,7 @@ impl CdpConnection {
             request_headers: navigation.request_headers.clone(),
             body_progress_source,
             shared_resource_runtime,
-        })
+        }
     }
 
     pub(crate) fn background_navigation_load_job_for_navigation(
@@ -2304,15 +2361,18 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
         early_result: Option<BackgroundNavigationEarlyResult>,
-    ) -> Option<BackgroundNavigationLoadJob> {
-        let job = self.navigation_load_job_for_navigation(
-            token,
+    ) -> Result<BackgroundNavigationLoadJob, BackgroundNavigationClaimError> {
+        let BackgroundNavigationClaim {
+            load_inputs,
+            cancellation,
+        } = self.claim_background_navigation(token, navigation, None)?;
+        Ok(self.navigation_load_job_with_inputs(
             navigation,
+            load_inputs,
+            cancellation,
             body_progress_source,
             early_result,
-        )?;
-        self.arm_background_navigation_completion(token, None)
-            .then_some(job)
+        ))
     }
 
     pub(crate) fn background_streaming_response_navigation_load_job_for_navigation(
@@ -2324,21 +2384,20 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers_override: Vec<(String, Vec<u8>)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Option<BackgroundStreamingResponseNavigationLoadJob> {
-        // Reject stale work before reserving a renderer Page or arming completion.
+    ) -> Result<BackgroundStreamingResponseNavigationLoadJob, BackgroundNavigationClaimError> {
+        // Reject stale or duplicate work before reserving a renderer Page.
         // Dropping the rejected response cancels only its own transport.
-        let load_inputs = self
-            .navigation_load_inputs_for_navigation(Some(token), navigation)
-            .ok()?;
-        if !self.arm_background_navigation_completion(token, Some(response.cancellation_handle())) {
-            return None;
-        }
+        let BackgroundNavigationClaim { load_inputs, .. } = self.claim_background_navigation(
+            token,
+            navigation,
+            Some(response.cancellation_handle()),
+        )?;
         let shared_resource_runtime =
             self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
         let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_reservation =
             self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
-        Some(BackgroundStreamingResponseNavigationLoadJob {
+        Ok(BackgroundStreamingResponseNavigationLoadJob {
             engine,
             page_reservation,
             load_inputs,

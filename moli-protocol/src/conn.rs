@@ -547,29 +547,22 @@ pub use scheduler_state::{CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTur
 pub(crate) use site_data_manager_surface::{
     BrowserContextReservedSiteDataOwnerState, BrowserContextSiteDataManagerOwnerState,
 };
-pub use state::{
-    BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity, DocumentStartScript,
-    DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
-    EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
-    LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
-    RuntimeBindingDefinition, TargetInfo, URL_BASE,
-};
 pub(crate) use state::{
-    BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
-    BrowserContextStoragePartitionHandles, CommittedRendererAgentAttachment,
-    CommittedRendererDocumentBinding, CompletedDownloadBody, CompletedDownloadBodyArtifact,
-    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
-    DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DocumentNavigationToken,
-    DuplicatePendingRendererCommand, EffectiveTargetEmulationState,
-    EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions, EmulatedViewportSurface,
-    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationResultProjection,
-    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
-    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
-    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
-    ProfilerInspectorCommand, RendererCommandCorrelation, RendererCommandDescriptor,
-    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    BackgroundNavigationClaimError, BrowserContextPageStorageHandles,
+    BrowserContextResourceStorageHandles, BrowserContextStoragePartitionHandles,
+    CommittedRendererAgentAttachment, CommittedRendererDocumentBinding, CompletedDownloadBody,
+    CompletedDownloadBodyArtifact, DedicatedWorkerMainScriptOutcome,
+    DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride,
+    DevToolsConsoleOutputSessionState, DevToolsEmulationSessionState,
+    DevToolsLogViolationThreshold, DocumentNavigationToken, DuplicatePendingRendererCommand,
+    EffectiveTargetEmulationState, EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions,
+    EmulatedViewportSurface, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL,
+    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
+    NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
+    PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
+    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
+    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
+    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
     SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,
@@ -582,6 +575,14 @@ pub(crate) use state::{
     TargetServiceWorkerRuntimeAttachmentIdentity, TargetServiceWorkerVersionIdentity,
     TargetServiceWorkerVersionRetirement, TargetSharedWorkerProtocolAttachmentIdentity,
     TargetSharedWorkerProtocolAttachmentRetirement, TargetWindowSurfaceState,
+};
+pub use state::{
+    BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity, DocumentStartScript,
+    DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
+    EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
+    LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
+    PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
+    RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 #[cfg(test)]
 pub(crate) use state::{
@@ -1585,26 +1586,6 @@ impl CdpConnection {
         let browser_context_id = self.browser_context_id_for_target(&token.target_id)?;
         self.browser_context_by_id(browser_context_id)?
             .document_navigation_cancellation_handle(token)
-    }
-
-    pub(crate) fn arm_background_navigation_completion(
-        &mut self,
-        token: &DocumentNavigationToken,
-        additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) -> bool {
-        let browser_context_id = self
-            .browser_context_id_for_target(&token.target_id)
-            .map(str::to_owned);
-        let Some(browser_context_id) = browser_context_id else {
-            if let Some(cancellation) = additional_cancellation {
-                cancellation.cancel();
-            }
-            return false;
-        };
-        self.browser_context_by_id_mut(&browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context.arm_background_navigation_completion(token, additional_cancellation)
-            })
     }
 
     pub(crate) fn settle_background_navigation_completion(

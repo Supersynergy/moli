@@ -70,6 +70,14 @@ impl Hash for DocumentNavigationToken {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackgroundNavigationClaimError {
+    /// No matching request remains eligible to start background work.
+    Stale,
+    /// The matching request already has an owner for its completion.
+    AlreadyClaimed,
+}
+
 /// The target-owned lifetime of one cross-Document navigation request.
 ///
 /// The exact token remains here from navigation admission until the request
@@ -101,21 +109,8 @@ impl PendingNavigationRequest {
         self.token == *token
     }
 
-    fn cancellation_handle(&self) -> moli_fetch::FetchCancelHandle {
-        self.cancellation_handles
-            .first()
-            .expect("a pending navigation request must own cancellation authority")
-            .clone()
-    }
-
-    fn arm_background_completion(
-        &mut self,
-        additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) {
-        if let Some(cancellation) = additional_cancellation {
-            self.cancellation_handles.push(cancellation);
-        }
-        self.background_completion_pending = true;
+    fn cancellation_handle(&self) -> Option<moli_fetch::FetchCancelHandle> {
+        self.cancellation_handles.first().cloned()
     }
 
     fn settle_background_completion(&mut self) {
@@ -685,24 +680,33 @@ impl TargetPageSlot {
         self.pending_navigation_request
             .as_ref()
             .filter(|request| request.matches(token) && !request.committed)
-            .map(PendingNavigationRequest::cancellation_handle)
+            .and_then(PendingNavigationRequest::cancellation_handle)
     }
 
-    pub(crate) fn arm_background_navigation_completion(
+    /// Claims the exact request's sole background completion and returns its
+    /// cancellation authority. Rejection leaves the request unchanged; the
+    /// caller still owns (and must drop) any rejected response.
+    pub(crate) fn claim_background_navigation_completion(
         &mut self,
         token: &DocumentNavigationToken,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) -> bool {
-        let Some(request) = self.pending_navigation_request.as_mut().filter(|request| {
-            request.matches(token) && !request.committed && !request.background_completion_pending
-        }) else {
-            if let Some(cancellation) = additional_cancellation {
-                cancellation.cancel();
-            }
-            return false;
-        };
-        request.arm_background_completion(additional_cancellation);
-        true
+    ) -> Result<moli_fetch::FetchCancelHandle, BackgroundNavigationClaimError> {
+        let request = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| request.matches(token) && !request.committed)
+            .ok_or(BackgroundNavigationClaimError::Stale)?;
+        if request.background_completion_pending {
+            return Err(BackgroundNavigationClaimError::AlreadyClaimed);
+        }
+        let cancellation = request
+            .cancellation_handle()
+            .ok_or(BackgroundNavigationClaimError::Stale)?;
+        if let Some(additional_cancellation) = additional_cancellation {
+            request.cancellation_handles.push(additional_cancellation);
+        }
+        request.background_completion_pending = true;
+        Ok(cancellation)
     }
 
     pub(crate) fn settle_background_navigation_completion(
@@ -1483,6 +1487,9 @@ impl TargetPageSlot {
             })
     }
 }
+
+#[cfg(test)]
+mod navigation_claim_tests;
 
 #[cfg(test)]
 mod page_residence_tests {
