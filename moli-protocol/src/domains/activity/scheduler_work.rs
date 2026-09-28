@@ -53,6 +53,16 @@ pub enum ProtocolSchedulerWorkKind {
     PageTargetTerminationOwnerAction,
 }
 
+/// Relationship to an outstanding load on this work's exact target. This
+/// controls selection only: owner identity and terminal response correlation
+/// remain with their existing owners.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtocolNavigationDependency {
+    AfterLoad,
+    Independent,
+    ReplacesPendingLoad,
+}
+
 /// Durable protocol-owned work with concrete payload, exact route and one
 /// connection-local publication sequence.
 ///
@@ -304,23 +314,19 @@ impl ProtocolSchedulerWork {
         }
     }
 
-    /// Reports work whose transition is independent of an in-flight document
-    /// load on the same target.
-    ///
-    /// Foreground selection happens when Chromium accepts a user activation,
-    /// not when the selected target finishes loading. This also lets a target
-    /// paused by `waitForDebuggerOnStart` become active before its initial
-    /// navigation is released. The exact target id above still preserves
-    /// target-local ordering against earlier scheduler residences.
-    /// A navigation requested by the current Document must also reach the
-    /// browser while a previous response is pending, so it can supersede that
-    /// request instead of waiting for the request it needs to cancel.
-    pub fn bypasses_inflight_navigation_gate(&self) -> bool {
-        matches!(
-            &self.payload,
-            ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_)
-                | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
-        )
+    /// A current-document navigation must reach the owner that cancels the
+    /// old request, including when earlier observations are waiting on it.
+    /// Independent activation still preserves ordering with earlier work.
+    pub fn navigation_dependency(&self) -> ProtocolNavigationDependency {
+        match &self.payload {
+            ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_) => {
+                ProtocolNavigationDependency::ReplacesPendingLoad
+            }
+            ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => {
+                ProtocolNavigationDependency::Independent
+            }
+            _ => ProtocolNavigationDependency::AfterLoad,
+        }
     }
 
     pub fn is_top_level_location_navigation_owner_action(&self) -> bool {

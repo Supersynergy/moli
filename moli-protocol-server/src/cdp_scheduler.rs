@@ -1883,12 +1883,11 @@ impl CdpScheduler {
                 return out;
             }
             let target_ids = self.protocol_residence_navigation_gate_target_ids(&residence);
-            let blocked_by_prior_residence = target_ids
-                .iter()
-                .any(|target_id| blocked_target_ids.contains(target_id));
-            let blocked_by_navigation = !residence.bypasses_inflight_navigation_gate()
-                && self.protocol_targets_have_inflight_background_navigation(&target_ids);
-            if blocked_by_prior_residence || blocked_by_navigation {
+            if self.protocol_residence_waits_for_navigation(
+                &residence,
+                &target_ids,
+                &blocked_target_ids,
+            ) {
                 if target_ids.is_empty() {
                     retained.push_back(residence);
                     retained.append(&mut snapshot);
@@ -1946,6 +1945,30 @@ impl CdpScheduler {
         })
     }
 
+    /// Share this decision between readiness probing and snapshot draining.
+    /// Otherwise a load-blocked observation in front can indirectly reapply
+    /// the very gate that a replacement navigation is allowed to bypass.
+    fn protocol_residence_waits_for_navigation(
+        &self,
+        residence: &ProtocolSchedulerResidence,
+        target_ids: &[String],
+        blocked_target_ids: &[String],
+    ) -> bool {
+        use moli_protocol::ProtocolNavigationDependency;
+        let pending_load = self.protocol_targets_have_inflight_background_navigation(target_ids);
+        let dependency = residence.navigation_dependency();
+        if dependency == ProtocolNavigationDependency::ReplacesPendingLoad
+            && pending_load
+            && !target_ids.is_empty()
+        {
+            return false;
+        }
+        target_ids
+            .iter()
+            .any(|target| blocked_target_ids.contains(target))
+            || (dependency == ProtocolNavigationDependency::AfterLoad && pending_load)
+    }
+
     fn next_ungated_protocol_residence_index(&self) -> Option<usize> {
         // A target-local navigation is an ordering barrier only for later
         // work from the same target. Keep those lanes ordered while allowing
@@ -1954,15 +1977,11 @@ impl CdpScheduler {
         let mut blocked_target_ids = Vec::new();
         for (index, residence) in self.queues.protocol_residences.iter().enumerate() {
             let target_ids = self.protocol_residence_navigation_gate_target_ids(residence);
-            if target_ids
-                .iter()
-                .any(|target_id| blocked_target_ids.contains(target_id))
-            {
-                continue;
-            }
-            if !residence.bypasses_inflight_navigation_gate()
-                && self.protocol_targets_have_inflight_background_navigation(&target_ids)
-            {
+            if self.protocol_residence_waits_for_navigation(
+                residence,
+                &target_ids,
+                &blocked_target_ids,
+            ) {
                 if target_ids.is_empty() {
                     return None;
                 }

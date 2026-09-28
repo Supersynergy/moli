@@ -577,6 +577,17 @@ async fn websocket_cdp_renderer_navigation_replaces_pending_response_without_cli
     let replacement_url = format!("http://{fixture_addr}/replacement");
     cdp_navigate_and_wait_for_load(&mut socket, 5, &session.session_id, &source_url).await;
 
+    // Emit a real Runtime observation before the replacement owner action.
+    // With Runtime disabled the console call below creates no blocked residence.
+    let _ = send_cdp_command(
+        &mut socket,
+        60,
+        "Runtime.enable",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
+
     // The response to /ready proves the first navigation reached the server.
     // Both navigations run outside the Runtime command, and no further client
     // command may be needed to publish or execute the replacement action.

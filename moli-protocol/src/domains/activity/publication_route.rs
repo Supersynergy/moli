@@ -51,6 +51,34 @@ pub(crate) enum RendererPublicationProjection {
     RetiringNetworkAndResponses,
 }
 
+impl RendererPublicationProjection {
+    /// Retirement revokes new document actions and notifications, not the
+    /// obligation to deliver a terminal response. The pending-call registry
+    /// still decides whether its exact attachment/call is owed, and consumes
+    /// that correlation once. Network records retain their own document check.
+    pub(super) fn admit_record(self, item: &mut moli_core::RendererOutputItem) -> bool {
+        use moli_core::{RendererOutputItem, RendererProtocolObservation};
+        if self == Self::CurrentOwner {
+            return true;
+        }
+        match item {
+            RendererOutputItem::Observation(RendererProtocolObservation::Network { .. }) => true,
+            RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
+                batch,
+            )) => {
+                batch.messages.retain(|message| {
+                    matches!(message,
+                        moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
+                            if message.renderer_call_id().is_some()
+                    )
+                });
+                !batch.messages.is_empty()
+            }
+            _ => false,
+        }
+    }
+}
+
 impl RendererPublicationRoute {
     fn for_target(
         browser_context_id: String,

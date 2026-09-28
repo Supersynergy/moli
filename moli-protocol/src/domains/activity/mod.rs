@@ -32,7 +32,8 @@ pub use runtime_command_barrier::{
 };
 pub(crate) use scheduler_work::ReadyProtocolSchedulerWork;
 pub use scheduler_work::{
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, ProtocolWorkPublishSequence,
+    ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
+    ProtocolWorkPublishSequence,
 };
 pub(in crate::domains) use subresource::{
     PreparedSubresourceContinueAction,

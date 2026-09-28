@@ -1252,6 +1252,74 @@ fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request()
     assert!(!conn.has_inflight_background_navigation());
 }
 
+#[tokio::test]
+async fn replacement_navigation_passes_load_blocked_observations_but_checks_its_owner() {
+    for snapshot_drain in [false, true] {
+        let mut conn = CdpConnection::new();
+        let navigation = arm_background_navigation_request(&mut conn, "LOADER-pending");
+        let target = navigation.target_id().to_owned();
+        let context = conn.default_browser_context_id().to_owned();
+        let mut scheduler = CdpScheduler::new(conn);
+        scheduler.apply_scheduler_events(vec![
+            CdpSchedulerEvent::ProtocolWorkPublished {
+                work: root_frame_stopped_loading_work_for_target(
+                    1,
+                    vec![None],
+                    context.clone(),
+                    target.clone(),
+                    "FRAME-pending".to_owned(),
+                    "LOADER-pending".to_owned(),
+                ),
+            },
+            CdpSchedulerEvent::ProtocolWorkPublished {
+                work: moli_protocol::test_support::retired_location_navigation_work_for_target(
+                    2,
+                    context,
+                    target,
+                    root_document_lifecycle_identity(PageId::new_for_testing(99), 1),
+                ),
+            },
+        ]);
+        assert_eq!(
+            scheduler.next_ungated_protocol_residence_index(),
+            Some(1),
+            "replacement must reach its owner even behind a load-blocked observation"
+        );
+        if snapshot_drain {
+            let snapshot = std::mem::take(&mut scheduler.queues.protocol_residences);
+            assert!(
+                scheduler
+                    .complete_protocol_residence_snapshot(snapshot)
+                    .await
+                    .is_empty()
+            );
+        } else {
+            scheduler.satisfy_front_protocol_residence_client_turn_predecessor();
+            assert!(
+                scheduler
+                    .complete_next_protocol_residence()
+                    .await
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            scheduler.queues.protocol_residences.len(),
+            1,
+            "the held observation remains, while the replacement action is consumed"
+        );
+        assert!(
+            !navigation.is_cancelled(),
+            "an action from a retired owner has no execution authority"
+        );
+        assert!(scheduler.conn.has_inflight_background_navigation());
+        assert!(settle_background_navigation_request(
+            &mut scheduler.conn,
+            &navigation
+        ));
+        assert_eq!(scheduler.next_ungated_protocol_residence_index(), Some(0));
+    }
+}
+
 #[test]
 fn scheduler_defers_subresource_network_events_until_background_navigation_gate_clears() {
     let mut conn = CdpConnection::new();
