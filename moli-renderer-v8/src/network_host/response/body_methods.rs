@@ -6,7 +6,7 @@ use super::super::fetch_surface::{
 };
 use super::*;
 use moli_web_mime::{
-    is_form_urlencoded_mime, multipart_form_data_boundary, response_blob_mime_type,
+    extract_response_mime_type, is_form_urlencoded_mime, multipart_form_data_boundary,
     response_content_type,
 };
 
@@ -198,7 +198,8 @@ fn response_blob_mime_type_from_object<'s>(
 ) -> String {
     body_headers(scope, consumption.object, consumption.receiver)
         .as_deref()
-        .map(response_blob_mime_type)
+        .and_then(extract_response_mime_type)
+        .map(|mime| mime.to_string())
         .unwrap_or_default()
 }
 
