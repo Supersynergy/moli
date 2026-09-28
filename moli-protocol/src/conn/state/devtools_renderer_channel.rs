@@ -91,27 +91,14 @@ pub(crate) struct DevToolsRendererChannel {
     lifecycle: DevToolsRendererChannelLifecycle,
     current: Option<RendererAgentAttachment>,
     inflight_cross_document_navigations: HashSet<DocumentNavigationToken>,
-    suspended_attachment: Option<RendererAgentAttachment>,
-    latest_started_navigation: Option<DocumentNavigationToken>,
-    committed_latest_navigation: Option<DocumentNavigationToken>,
+    latest_navigation: Option<LatestChannelNavigation>,
     buffered_output: Vec<BufferedRendererInspectorBatch>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RendererChannelResume {
-    suspended_attachment: Option<RendererAgentAttachment>,
-    current_attachment: Option<RendererAgentAttachment>,
-}
-
-impl RendererChannelResume {
-    #[cfg(test)]
-    pub(crate) fn replacement(
-        self,
-    ) -> Option<(RendererAgentAttachmentId, RendererAgentAttachmentId)> {
-        let suspended = self.suspended_attachment?;
-        let current = self.current_attachment?;
-        (suspended.id() != current.id()).then_some((suspended.id(), current.id()))
-    }
+#[derive(Debug)]
+struct LatestChannelNavigation {
+    token: DocumentNavigationToken,
+    attachment_committed: bool,
 }
 
 #[derive(Debug)]
@@ -140,18 +127,16 @@ impl DevToolsRendererChannel {
         navigation: DocumentNavigationToken,
     ) -> Result<(), DevToolsRendererChannelError> {
         self.ensure_open()?;
-        let was_suspended = self.output_is_suspended();
         if !self
             .inflight_cross_document_navigations
             .insert(navigation.clone())
         {
             return Err(DevToolsRendererChannelError::DuplicateNavigation);
         }
-        if !was_suspended {
-            self.suspended_attachment = self.current;
-        }
-        self.latest_started_navigation = Some(navigation);
-        self.committed_latest_navigation = None;
+        self.latest_navigation = Some(LatestChannelNavigation {
+            token: navigation,
+            attachment_committed: false,
+        });
         Ok(())
     }
 
@@ -192,15 +177,17 @@ impl DevToolsRendererChannel {
         {
             return Err(DevToolsRendererChannelError::UnknownNavigation);
         }
-        if self.latest_started_navigation.as_ref() != Some(candidate.navigation()) {
-            return Err(DevToolsRendererChannelError::SupersededNavigation);
-        }
-        if self.committed_latest_navigation.as_ref() == Some(candidate.navigation()) {
+        let latest = self
+            .latest_navigation
+            .as_mut()
+            .filter(|latest| &latest.token == candidate.navigation())
+            .ok_or(DevToolsRendererChannelError::SupersededNavigation)?;
+        if latest.attachment_committed {
             return Err(DevToolsRendererChannelError::NavigationAlreadyCommitted);
         }
         self.inflight_cross_document_navigations
             .retain(|navigation| navigation == candidate.navigation());
-        self.committed_latest_navigation = Some(candidate.navigation.clone());
+        latest.attachment_committed = true;
         let current = candidate.attachment;
         let previous = self.current.replace(current);
         Ok(CommittedRendererAgentAttachment {
@@ -215,13 +202,18 @@ impl DevToolsRendererChannel {
         transaction: CommittedRendererAgentAttachment,
     ) -> Result<(), DevToolsRendererChannelError> {
         self.ensure_open()?;
-        if self.committed_latest_navigation.as_ref() != Some(transaction.navigation())
-            || self.current != Some(transaction.current())
-        {
+        let latest = self
+            .latest_navigation
+            .as_mut()
+            .filter(|latest| {
+                latest.attachment_committed && &latest.token == transaction.navigation()
+            })
+            .ok_or(DevToolsRendererChannelError::CommittedCandidateMismatch)?;
+        if self.current != Some(transaction.current()) {
             return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
         }
         self.current = transaction.previous;
-        self.committed_latest_navigation = None;
+        latest.attachment_committed = false;
         Ok(())
     }
 
@@ -253,7 +245,9 @@ impl DevToolsRendererChannel {
         {
             return Err(DevToolsRendererChannelError::UnknownNavigation);
         }
-        if self.latest_started_navigation.as_ref() != Some(candidate.navigation()) {
+        if self.latest_navigation.as_ref().map(|latest| &latest.token)
+            != Some(candidate.navigation())
+        {
             return Err(DevToolsRendererChannelError::SupersededNavigation);
         }
         if batches
@@ -266,20 +260,14 @@ impl DevToolsRendererChannel {
         Ok(Vec::new())
     }
 
+    /// Returns whether this completion made the channel usable again.
     pub(crate) fn navigation_finished(
         &mut self,
         navigation: &DocumentNavigationToken,
-    ) -> Result<Option<RendererChannelResume>, DevToolsRendererChannelError> {
+    ) -> Result<bool, DevToolsRendererChannelError> {
         self.ensure_open()?;
-        if !self.inflight_cross_document_navigations.remove(navigation)
-            || self.output_is_suspended()
-        {
-            return Ok(None);
-        }
-        Ok(Some(RendererChannelResume {
-            suspended_attachment: self.suspended_attachment.take(),
-            current_attachment: self.current,
-        }))
+        Ok(self.inflight_cross_document_navigations.remove(navigation)
+            && !self.output_is_suspended())
     }
 
     pub(crate) fn output_is_suspended(&self) -> bool {
@@ -320,9 +308,7 @@ impl DevToolsRendererChannel {
         }
         self.lifecycle = DevToolsRendererChannelLifecycle::Closed(reason);
         self.inflight_cross_document_navigations.clear();
-        self.suspended_attachment = None;
-        self.latest_started_navigation = None;
-        self.committed_latest_navigation = None;
+        self.latest_navigation = None;
         self.buffered_output.clear();
         self.current.take()
     }
@@ -550,8 +536,7 @@ mod tests {
         assert!(
             channel
                 .navigation_finished(&request)
-                .expect("navigation finish")
-                .is_some(),
+                .expect("navigation finish"),
             "a failed load finishes without committing its candidate"
         );
 
@@ -605,9 +590,8 @@ mod tests {
             channel
                 .navigation_finished(&request_b)
                 .expect("committed navigation finish")
-                .is_some()
         );
-        assert_eq!(channel.navigation_finished(&request_a), Ok(None));
+        assert_eq!(channel.navigation_finished(&request_a), Ok(false));
     }
 
     #[test]
@@ -637,8 +621,12 @@ mod tests {
             .rollback_committed_candidate(transaction)
             .expect("matching transaction should roll back");
         assert_eq!(channel.current(), Some(initial));
-        assert_eq!(
-            channel.committed_latest_navigation, None,
+        assert!(
+            !channel
+                .latest_navigation
+                .as_ref()
+                .unwrap()
+                .attachment_committed,
             "a rolled-back candidate is no longer committed"
         );
         assert!(
@@ -649,7 +637,6 @@ mod tests {
             channel
                 .navigation_finished(&request)
                 .expect("rolled-back navigation finish")
-                .is_some()
         );
     }
 
@@ -668,13 +655,12 @@ mod tests {
         assert_eq!(channel.inflight_navigation_count(), 2);
         assert!(channel.output_is_suspended());
 
-        assert_eq!(channel.navigation_finished(&request_b), Ok(None));
+        assert_eq!(channel.navigation_finished(&request_b), Ok(false));
         assert!(channel.output_is_suspended());
         assert!(
             channel
                 .navigation_finished(&request_a)
                 .expect("final overlapping navigation")
-                .is_some()
         );
         assert!(!channel.output_is_suspended());
     }
@@ -695,7 +681,7 @@ mod tests {
             channel.attach_candidate(&unknown, RendererDevToolsAgentToken::allocate()),
             Err(DevToolsRendererChannelError::UnknownNavigation)
         ));
-        assert_eq!(channel.navigation_finished(&unknown), Ok(None));
+        assert_eq!(channel.navigation_finished(&unknown), Ok(false));
 
         let first = channel
             .attach_candidate(&request, RendererDevToolsAgentToken::allocate())
@@ -708,6 +694,41 @@ mod tests {
             channel.commit_candidate(second),
             Err(DevToolsRendererChannelError::NavigationAlreadyCommitted)
         );
+    }
+
+    #[test]
+    fn new_navigation_resets_commit_phase_but_preserves_rollback_identity() {
+        let mut channel = DevToolsRendererChannel::default();
+        let first = navigation(1);
+        let second = navigation(2);
+        channel.navigation_started(first.clone()).unwrap();
+        let candidate = channel
+            .attach_candidate(&first, RendererDevToolsAgentToken::allocate())
+            .unwrap();
+        let first_commit = channel.commit_candidate_transaction(candidate).unwrap();
+        let first_attachment = first_commit.current();
+
+        channel.navigation_started(second.clone()).unwrap();
+        assert_eq!(
+            channel.rollback_committed_candidate(first_commit),
+            Err(DevToolsRendererChannelError::CommittedCandidateMismatch)
+        );
+        assert_eq!(channel.current(), Some(first_attachment));
+
+        let candidate = channel
+            .attach_candidate(&second, RendererDevToolsAgentToken::allocate())
+            .unwrap();
+        let second_commit = channel.commit_candidate_transaction(candidate).unwrap();
+        assert_eq!(second_commit.previous(), Some(first_attachment));
+        channel.rollback_committed_candidate(second_commit).unwrap();
+        assert_eq!(channel.current(), Some(first_attachment));
+        let retry = channel
+            .attach_candidate(&second, RendererDevToolsAgentToken::allocate())
+            .unwrap();
+        assert_eq!(channel.commit_candidate(retry), Ok(Some(first_attachment)));
+        assert_eq!(channel.navigation_finished(&second), Ok(true));
+        assert_eq!(channel.navigation_finished(&second), Ok(false));
+        assert_eq!(channel.navigation_finished(&first), Ok(false));
     }
 
     #[test]
@@ -792,14 +813,13 @@ mod tests {
         channel
             .commit_candidate(candidate)
             .expect("candidate commit");
-        let resume = channel
-            .navigation_finished(&request)
-            .expect("navigation finish")
-            .expect("channel resume");
-        assert_eq!(
-            resume.replacement(),
-            Some((old_attachment.id(), channel.current().unwrap().id()))
+        assert!(
+            channel
+                .navigation_finished(&request)
+                .expect("navigation finish")
         );
+        assert_ne!(old_attachment.id(), channel.current().unwrap().id());
+        assert_eq!(channel.current().unwrap().agent_token(), new_agent);
 
         let released = channel.take_released_output();
         assert_eq!(released.len(), 1);
@@ -823,11 +843,12 @@ mod tests {
                 .is_empty()
         );
 
-        let resume = channel
-            .navigation_finished(&request)
-            .expect("navigation finish")
-            .expect("channel resume");
-        assert_eq!(resume.replacement(), None);
+        assert!(
+            channel
+                .navigation_finished(&request)
+                .expect("navigation finish")
+        );
+        assert_eq!(channel.current(), Some(attachment));
         let released = channel.take_released_output();
         assert_eq!(released.len(), 1);
         assert_eq!(batch_marker(&released[0]), Some("retained"));

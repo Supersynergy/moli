@@ -454,9 +454,8 @@ impl TargetRuntimeSlot {
         &mut self,
         token: &DocumentNavigationToken,
     ) -> Result<FinishedRendererDocumentNavigation, DevToolsRendererChannelError> {
-        let resume = self.devtools_renderer_channel.navigation_finished(token)?;
-        let renderer_call_replacements = resume
-            .is_some()
+        let resumed = self.devtools_renderer_channel.navigation_finished(token)?;
+        let renderer_call_replacements = resumed
             .then(|| std::mem::take(&mut self.pending_renderer_call_replacements))
             .filter(|replacements| !replacements.is_empty());
         Ok(FinishedRendererDocumentNavigation {
