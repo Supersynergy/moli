@@ -1,6 +1,6 @@
 //! Public geometry request/answer types and the batch dispatcher.
 
-use std::{fmt::Debug, hash::Hash, ops::Range};
+use std::{collections::HashMap, fmt::Debug, hash::Hash, ops::Range};
 
 use crate::LayoutError;
 
@@ -205,12 +205,79 @@ where
         batch: &LayoutQueryBatch<N>,
         metrics: LayoutPassMetrics,
     ) -> LayoutAnswers<N> {
+        self.answer_queries_with(batch, metrics, |_| None)
+    }
+
+    /// Answers a batch while letting the renderer specialize queries such as
+    /// shadow-tree offsetParent visibility before their default is computed.
+    /// Source lookup belongs to this operation, never to the retained tree.
+    pub fn answer_queries_with(
+        &self,
+        batch: &LayoutQueryBatch<N>,
+        metrics: LayoutPassMetrics,
+        mut specialize: impl FnMut(&LayoutQuery<N>) -> Option<LayoutQueryAnswer<N>>,
+    ) -> LayoutAnswers<N> {
+        let mut outputs = HashMap::new();
+        // Tiny batches keep the allocation-free direct source lookup. Count
+        // eligible queries, including repeats of a source used by many ranges.
+        if batch
+            .queries
+            .iter()
+            .filter_map(LayoutQuery::fragment_source)
+            .take(4)
+            .count()
+            == 4
+        {
+            outputs.extend(
+                batch
+                    .queries
+                    .iter()
+                    .filter_map(LayoutQuery::fragment_source)
+                    .map(|source| (source, None)),
+            );
+            self.source_outputs(&mut outputs);
+        }
         let answers = batch
             .queries
             .iter()
-            .map(|query| self.answer_query(query))
+            .map(|query| {
+                if let Some(answer) = specialize(query) {
+                    return answer;
+                }
+                if let Some(output) = query
+                    .fragment_source()
+                    .and_then(|source| outputs.get(&source))
+                {
+                    return self.answer_fragment_query(query, output.as_ref());
+                }
+                self.answer_query(query)
+            })
             .collect();
         LayoutAnswers { answers, metrics }
+    }
+
+    fn answer_fragment_query(
+        &self,
+        query: &LayoutQuery<N>,
+        output: Option<&LayoutNodeOutput>,
+    ) -> LayoutQueryAnswer<N> {
+        match query {
+            LayoutQuery::BoxModel { .. } => LayoutQueryAnswer::BoxModel(
+                output.and_then(|output| self.box_model_for_output(output)),
+            ),
+            LayoutQuery::ClientRects { .. } => LayoutQueryAnswer::ClientRects(
+                output.map_or_else(Vec::new, |output| self.client_rects_for_output(output)),
+            ),
+            LayoutQuery::ContentQuads { .. } => LayoutQueryAnswer::ContentQuads(
+                output.map_or_else(Vec::new, |output| self.content_quads_for_output(output)),
+            ),
+            LayoutQuery::TextRangeRects { utf16_range, .. } => {
+                LayoutQueryAnswer::TextRangeRects(output.map_or_else(Vec::new, |output| {
+                    self.text_range_rects_for_output(output, utf16_range.clone())
+                }))
+            }
+            _ => unreachable!("fragment-source query"),
+        }
     }
 
     /// Answers one query without allocating a batch. Consumers can specialize
@@ -269,6 +336,18 @@ where
             LayoutQuery::EventOffset { source, point } => {
                 LayoutQueryAnswer::EventOffset(self.event_offset_for_source(*source, *point))
             }
+        }
+    }
+}
+
+impl<N: Copy> LayoutQuery<N> {
+    fn fragment_source(&self) -> Option<N> {
+        match self {
+            Self::BoxModel { source }
+            | Self::ClientRects { source }
+            | Self::ContentQuads { source }
+            | Self::TextRangeRects { source, .. } => Some(*source),
+            _ => None,
         }
     }
 }

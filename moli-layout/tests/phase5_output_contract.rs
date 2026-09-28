@@ -158,6 +158,43 @@ fn build_with_request(
     build_layout_pass(source, styles, &mut DocumentLayoutServices::new(), request).unwrap()
 }
 
+fn assert_fragment_batches_match_direct_queries(
+    output: &LayoutPassResult<usize>,
+    sources: std::ops::Range<usize>,
+) {
+    let queries = LayoutQueryBatch::new(
+        sources
+            .flat_map(|source| {
+                [
+                    LayoutQuery::BoxModel { source },
+                    LayoutQuery::ClientRects { source },
+                    LayoutQuery::ContentQuads { source },
+                    LayoutQuery::TextRangeRects {
+                        source,
+                        utf16_range: 0..2,
+                    },
+                    LayoutQuery::TextRangeRects {
+                        source,
+                        utf16_range: 1..1,
+                    },
+                    LayoutQuery::TextRangeRects {
+                        source,
+                        utf16_range: 2..usize::MAX,
+                    },
+                ]
+            })
+            .collect(),
+    );
+    let expected = queries
+        .queries
+        .iter()
+        .map(|query| output.answer_query(query))
+        .collect::<Vec<_>>();
+    let answers = output.answer_queries(&queries);
+    assert_eq!(answers.answers, expected);
+    assert_eq!(answers.metrics, output.metrics);
+}
+
 fn assert_close(actual: f32, expected: f32) {
     assert!(
         (actual - expected).abs() <= 0.05,
@@ -2509,6 +2546,7 @@ fn display_contents_has_no_css_box_but_can_scroll_its_rendered_contents_into_vie
         .insert(2, resolved(LayoutDisplay::Inline, Style::default()));
 
     let output = build(&source, &mut styles);
+    assert_fragment_batches_match_direct_queries(&output, 0..5);
     let contents = output.source_output(1).expect("display: contents source");
     assert!(contents.principal_box.is_none());
     assert!(contents.fragments.is_empty());
@@ -2659,6 +2697,7 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
         .insert(4, resolved(LayoutDisplay::Inline, Style::default()));
 
     let output = build(&source, &mut styles);
+    assert_fragment_batches_match_direct_queries(&output, 0..7);
     let rects = output.client_rects_for_source(1);
     assert_eq!(rects.len(), 2, "{rects:?}");
     let first = rects[0].bounding_rect();
