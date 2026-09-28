@@ -1,4 +1,3 @@
-use super::*;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -40,22 +39,6 @@ pub(super) fn install_file_list_template_bindings<'s>(
         scope,
         template.prototype_template(scope),
     );
-}
-
-pub(in crate::context_bootstrap) fn file_list_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'FileList': Please use the 'new' operator.",
-        );
-        return;
-    }
-    initialize_file_list_object(scope, args.this(), args.get(0));
-    rv.set(args.this().into());
 }
 
 pub(crate) fn build_file_list_object<'s>(
@@ -184,35 +167,4 @@ fn file_list_length_from_object<'s>(
 ) -> Option<f64> {
     get_private_value(scope, object, FILE_LIST_LENGTH_SLOT)
         .and_then(|value| value.number_value(scope))
-}
-
-fn initialize_file_list_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    files_value: v8::Local<'s, v8::Value>,
-) {
-    let files = if files_value.is_null_or_undefined() {
-        None
-    } else {
-        files_value.to_object(scope)
-    };
-    let length = files
-        .and_then(|value| value.get(scope, v8str(scope, "length").into()))
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as u32)
-        .unwrap_or(0);
-    let mut contents = Vec::new();
-    for index in 0..length {
-        let file = files.and_then(|files| files.get_index(scope, index));
-        contents.push(file.unwrap_or_else(|| v8::undefined(scope).into()));
-        if let Some(file) = file {
-            let _ = object.set_index(scope, index, file);
-        }
-    }
-    let contents = v8::Array::new_with_elements(scope, &contents);
-    set_private_value(scope, object, FILE_LIST_FILES_SLOT, contents.into());
-    FileListObjectDeclaration::new(length as f64)
-        .initialize(scope, object)
-        .expect("FileList declaration should initialize object");
 }
