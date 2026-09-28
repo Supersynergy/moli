@@ -345,7 +345,7 @@ impl NativeDom {
             false,
         );
         if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment();
+            let fragment = self.create_template_contents_fragment(handle);
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -384,7 +384,7 @@ impl NativeDom {
             false,
         );
         if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment();
+            let fragment = self.create_template_contents_fragment(handle);
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -488,20 +488,21 @@ impl NativeDom {
         owner_document: NativeNodeId,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::DocumentFragment(DocumentFragment),
+            NodeData::DocumentFragment(DocumentFragment::default()),
             Some(owner_document),
             false,
             false,
         )
     }
 
-    pub fn create_template_contents_fragment(&mut self) -> NativeNodeId {
-        self.create_template_contents_fragment_for_document(self.document_node_id)
+    pub fn create_template_contents_fragment(&mut self, host: NativeNodeId) -> NativeNodeId {
+        self.create_template_contents_fragment_for_document(self.document_node_id, Some(host))
     }
 
     pub fn create_template_contents_fragment_for_document(
         &mut self,
         document_handle: NativeNodeId,
+        host: Option<NativeNodeId>,
     ) -> NativeNodeId {
         let url = self
             .node(document_handle)
@@ -514,7 +515,30 @@ impl NativeDom {
             false,
             false,
         );
-        self.create_document_fragment_for_document(owner_document)
+        self.create_node(
+            NodeData::DocumentFragment(DocumentFragment::new(host)),
+            Some(owner_document),
+            false,
+            false,
+        )
+    }
+
+    pub fn set_document_fragment_host(
+        &mut self,
+        fragment: NativeNodeId,
+        host: NativeNodeId,
+    ) -> bool {
+        let Some(fragment) = self
+            .node_mut(fragment)
+            .and_then(|node| node.data_mut().as_document_fragment_mut())
+        else {
+            return false;
+        };
+        if fragment.host() == Some(host) {
+            return false;
+        }
+        fragment.set_host(host);
+        true
     }
 
     pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> NativeNodeId {
@@ -554,6 +578,28 @@ impl NativeDom {
                 return true;
             }
             current = self.parent_node(parent);
+        }
+        false
+    }
+
+    pub fn is_host_including_inclusive_ancestor(
+        &self,
+        candidate_ancestor: NativeNodeId,
+        node_id: NativeNodeId,
+    ) -> bool {
+        let mut current = Some(node_id);
+        while let Some(handle) = current {
+            if handle == candidate_ancestor {
+                return true;
+            }
+            let Some(node) = self.node(handle) else {
+                return false;
+            };
+            current = node.parent_node().or_else(|| {
+                node.data()
+                    .as_document_fragment()
+                    .and_then(DocumentFragment::host)
+            });
         }
         false
     }
@@ -2306,6 +2352,46 @@ mod tests {
     }
 
     #[test]
+    fn template_content_host_participates_in_hierarchy_checks() {
+        let mut dom = NativeDom::new_html(test_url());
+        let document = dom.document_node_id();
+        let parent = dom.create_element("div");
+        let template = dom.create_element("template");
+        let content = dom
+            .node(template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .expect("template content");
+        let span = dom.create_element("span");
+
+        assert!(dom.append_child(document, parent));
+        assert!(dom.append_child(parent, template));
+        assert!(dom.append_child(content, span));
+        assert_eq!(
+            dom.node(content)
+                .map(Node::data)
+                .and_then(NodeData::as_document_fragment)
+                .and_then(DocumentFragment::host),
+            Some(template)
+        );
+        assert!(dom.is_host_including_inclusive_ancestor(template, span));
+        assert!(dom.is_host_including_inclusive_ancestor(parent, span));
+
+        for (insertion_parent, child) in [
+            (content, parent),
+            (content, template),
+            (span, parent),
+            (span, template),
+        ] {
+            assert!(!dom.append_child(insertion_parent, child));
+        }
+
+        assert_eq!(dom.parent_node(parent), Some(document));
+        assert_eq!(dom.parent_node(template), Some(parent));
+        assert_eq!(dom.parent_node(span), Some(content));
+    }
+
+    #[test]
     fn cloned_template_content_keeps_template_owner_document() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let template = host.create_element("template");
@@ -2331,6 +2417,17 @@ mod tests {
             .node(cloned_content)
             .and_then(Node::first_child)
             .expect("cloned template content child");
+
+        assert_eq!(
+            host.node(cloned_content)
+                .map(Node::data)
+                .and_then(NodeData::as_document_fragment)
+                .and_then(DocumentFragment::host),
+            Some(clone)
+        );
+        assert!(host.is_host_including_inclusive_ancestor(clone, cloned_child));
+        assert!(!host.is_host_including_inclusive_ancestor(template, cloned_child));
+        assert!(!host.append_child(cloned_child, clone));
 
         assert_ne!(cloned_content_owner, host.document_handle());
         assert_eq!(
