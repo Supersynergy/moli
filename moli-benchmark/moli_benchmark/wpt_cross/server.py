@@ -41,6 +41,7 @@ from collections.abc import Callable, Mapping
 from html import escape as html_escape
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import product
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlparse, urlsplit, urlunsplit
 
@@ -831,6 +832,21 @@ _REQUEST_TEMPLATE_RE = re.compile(
 )
 _UUID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*):uuid\(\)\}\}")
 _ID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}")
+_HOST_TEMPLATE_RE = re.compile(
+    rb"\{\{(?:domains\[(?P<domain>[^\]\r\n]*)\]|"
+    rb"hosts\[(?P<namespace>[^\]\r\n]*)\]\[(?P<subdomain>[^\]\r\n]*)\])\}\}"
+)
+# wptserve configures these labels and their two-label combinations. Template
+# keys retain Unicode while the resulting hostnames use ASCII IDNA labels.
+_WPT_SUBDOMAIN_LABELS = ("www", "www1", "www2", "天気の良い日", "élève")
+_WPT_SUBDOMAIN_PREFIXES = {
+    b"": b"",
+    **{
+        ".".join(labels).encode("utf-8"): ".".join(labels).encode("idna") + b"."
+        for depth in (1, 2)
+        for labels in product(_WPT_SUBDOMAIN_LABELS, repeat=depth)
+    },
+}
 _HTTP_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _TRICKLE_DELAY_RE = re.compile(r"d([0-9]+(?:\.[0-9]+)?)")
 _MAX_TRICKLE_DELAY_SECONDS = 10.0
@@ -1390,15 +1406,6 @@ def _substitute_wpt_template_variables(
         b"{{location[host]}}": request_host_bytes,
         b"{{location[hostname]}}": request_hostname_bytes,
         b"{{location[path]}}": request_path_bytes,
-        b"{{hosts[][]}}": b"localhost",
-        b"{{hosts[][www]}}": b"www.localhost",
-        b"{{hosts[][www1]}}": b"www1.localhost",
-        b"{{hosts[][www2]}}": b"www2.localhost",
-        b"{{hosts[alt][]}}": b"alt.localhost",
-        b"{{hosts[alt][www]}}": b"www.alt.localhost",
-        b"{{domains[www]}}": b"www.localhost",
-        b"{{domains[www1]}}": b"www1.localhost",
-        b"{{domains[www2]}}": b"www2.localhost",
         b"{{location[port]}}": str(port).encode("ascii"),
         b"{{ports[http][0]}}": str(port).encode("ascii"),
         b"{{ports[http][1]}}": str(alternate_port).encode("ascii"),
@@ -1460,6 +1467,20 @@ def _substitute_wpt_template_variables(
     }
     for marker, value in replacements.items():
         body = body.replace(marker, value)
+
+    def replace_host(match: re.Match[bytes]) -> bytes:
+        subdomain = match.group("domain")
+        namespace = b""
+        if subdomain is None:
+            subdomain = match.group("subdomain")
+            namespace = match.group("namespace")
+        prefix = _WPT_SUBDOMAIN_PREFIXES.get(subdomain)
+        host = {b"": b"localhost", b"alt": b"alt.localhost"}.get(namespace)
+        if prefix is None or host is None:
+            return match.group(0)
+        return prefix + host
+
+    body = _HOST_TEMPLATE_RE.sub(replace_host, body)
     if template_ids is None:
         template_ids = {}
 

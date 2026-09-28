@@ -372,6 +372,67 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b" ws-url=ws://example.test:12345/socket"
             b" wss-url=ws://example.test:12345/socket",
         )
+    def test_fixture_server_substitutes_idna_domain_aliases(self) -> None:
+        cases = [
+            ("{{domains[天気の良い日]}}", b"xn--n8j6ds53lwwkrqhv28a.localhost"),
+            ("{{hosts[][天気の良い日]}}", b"xn--n8j6ds53lwwkrqhv28a.localhost"),
+            ("{{domains[élève]}}", b"xn--lve-6lad.localhost"),
+            ("{{hosts[alt][élève]}}", b"xn--lve-6lad.alt.localhost"),
+            ("{{domains[www.élève]}}", b"www.xn--lve-6lad.localhost"),
+            ("{{hosts[alt][www1.www2]}}", b"www1.www2.alt.localhost"),
+            ("{{hosts[alt][www2]}}", b"www2.alt.localhost"),
+            ("{{hosts[unknown][élève]}}", "{{hosts[unknown][élève]}}".encode()),
+            ("{{domains[unconfigured]}}", b"{{domains[unconfigured]}}"),
+        ]
+        for marker, expected in cases:
+            with self.subTest(marker=marker):
+                self.assertEqual(
+                    _substitute_wpt_template_variables(
+                        b"\xff" + marker.encode("utf-8") + b"\xfe",
+                        port=12345,
+                        request_hostname="www1.localhost",
+                        primary_hostname="localhost",
+                    ),
+                    b"\xff" + expected + b"\xfe",
+                )
+
+    def test_fixture_server_serves_idna_domain_aliases_in_body_and_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text("", encoding="utf-8")
+            body = (
+                "{{domains[élève]}} {{hosts[alt][天気の良い日]}} {{GET[value]}}"
+            ).encode("utf-8")
+            for name in ("aliases.sub.js", "aliases.txt"):
+                (root_path / name).write_bytes(body)
+                (root_path / (name + ".sub.headers")).write_text(
+                    "Access-Control-Allow-Origin: http://{{hosts[alt][élève]}}:{{ports[http][0]}}\n",
+                    encoding="utf-8",
+                )
+            with WptFixtureServer(root_path) as server:
+                for path in ("aliases.sub.js?", "aliases.txt?pipe=sub&"):
+                    with self.subTest(path=path):
+                        connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                        try:
+                            connection.request(
+                                "GET", "/" + path + "value=%7B%7Bdomains%5Bwww%5D%7D%7D",
+                                headers={"Host": f"www1.localhost:{server.port}"},
+                            )
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(
+                                response.read(),
+                                b"xn--lve-6lad.localhost "
+                                b"xn--n8j6ds53lwwkrqhv28a.alt.localhost {{domains[www]}}",
+                            )
+                            self.assertEqual(
+                                response.getheader("Access-Control-Allow-Origin"),
+                                f"http://xn--lve-6lad.alt.localhost:{server.port}",
+                            )
+                        finally:
+                            connection.close()
+
     def test_fixture_server_pipe_sub_requests_template_substitution(self) -> None:
         self.assertTrue(
             _needs_wpt_template_substitution(
