@@ -427,8 +427,11 @@ pub(crate) fn cancel_readable_stream<'s>(
             Ok(result) => result.unwrap_or_else(|| v8::undefined(scope).into()),
             Err(error) => return rejected_promise_value(scope, error),
         };
-        if let Some(promise) = promise_then_undefined(scope, result) {
-            return Some(promise);
+        if let Ok(promise) = v8::Local::<v8::Promise>::try_from(result) {
+            let on_fulfilled =
+                v8::Function::builder(super::utils::promise_return_undefined_callback)
+                    .build(scope)?;
+            return promise.then(scope, on_fulfilled).map(Into::into);
         }
     }
     resolved_promise_value(scope, v8::undefined(scope).into())
