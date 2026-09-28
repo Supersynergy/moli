@@ -472,6 +472,7 @@ interfaces! {
     SVGLinearGradientElement: SVGGradientElement;
     SVGMatrix: DOMMatrix;
     SVGMetadataElement: SVGElement;
+    SVGMPathElement: SVGElement;
     SVGNumber;
     SVGNumberList;
     SVGPathElement: SVGGeometryElement;
@@ -484,6 +485,7 @@ interfaces! {
     SVGSVGElement: SVGGraphicsElement;
     SVGScriptElement: SVGElement;
     SVGStyleElement: SVGElement;
+    SVGSwitchElement: SVGGraphicsElement;
     SVGSymbolElement: SVGGraphicsElement;
     SVGTSpanElement: SVGTextPositioningElement;
     SVGTextContentElement: SVGGraphicsElement;

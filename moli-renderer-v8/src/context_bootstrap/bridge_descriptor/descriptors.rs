@@ -285,6 +285,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         ELEMENT_GROUPS,
     ),
     descriptor(
+        web_api_interfaces::SVGMPathElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
         web_api_interfaces::SVGScriptElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
@@ -294,6 +298,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor(
         web_api_interfaces::SVGStyleElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGSwitchElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
     specialized_descriptor(
