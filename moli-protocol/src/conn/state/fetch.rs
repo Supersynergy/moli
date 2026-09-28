@@ -16,6 +16,7 @@ use super::super::fetch_support::{
 pub(super) use super::super::fetch_support::{
     FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, OpenBodyStreamError,
 };
+use super::DocumentNavigationToken;
 use super::navigation_outcome::NavigationDispatchState;
 use super::runtime_slot::TargetRuntimeSlot;
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
@@ -34,6 +35,36 @@ pub struct TargetFetchState {
 }
 
 impl TargetFetchState {
+    fn take_superseded_document_navigations(
+        &mut self,
+        current: &DocumentNavigationToken,
+    ) -> Vec<(Option<DocumentNavigationToken>, NavigationDispatchState)> {
+        let mut retired = Vec::new();
+        for (id, pending) in self
+            .pending_fetch_navigations
+            .extract_if(|_, pending| pending.document_navigation_token.as_ref() != Some(current))
+        {
+            self.pending_fetch_request_ids.remove(&id);
+            retired.push((pending.document_navigation_token, pending.navigation));
+        }
+        for (id, pending) in self
+            .pending_fetch_auth_navigations
+            .extract_if(|_, pending| pending.document_navigation_token.as_ref() != Some(current))
+        {
+            self.pending_fetch_request_ids.remove(&id);
+            retired.push((pending.document_navigation_token, pending.navigation));
+        }
+        for transfer in self
+            .pending_fetch_response_transfers
+            .drain_superseded(current)
+        {
+            self.pending_fetch_request_ids
+                .remove(transfer.fetch_request_id());
+            retired.push(transfer.into_navigation());
+        }
+        retired
+    }
+
     fn pending_action_matches(
         pending: &PendingSubresourceFetchRequest,
         session_id: Option<&str>,
@@ -643,20 +674,45 @@ impl TargetFetchState {
     ) -> PendingFetchResponseBodyStreamRead {
         let request_id = completed.request_id().to_owned();
         let handle = completed.handle().to_owned();
-        match completed.into_completed() {
-            Ok((bytes, eof, transfer)) => {
-                self.register_pending_fetch_response_transfer(request_id, transfer);
-                if eof {
-                    runtime_slot.insert_io_stream(handle, Vec::new(), 0);
-                }
-                PendingFetchResponseBodyStreamRead::Read { bytes, eof }
-            }
+        let (transfer, read) = match completed.into_completed() {
+            Ok((bytes, eof, transfer)) => (
+                transfer,
+                PendingFetchResponseBodyStreamRead::Read { bytes, eof },
+            ),
             Err(completed) => {
                 let (transfer, message) = *completed;
-                self.register_pending_fetch_response_transfer(request_id, transfer);
-                PendingFetchResponseBodyStreamRead::Failed(message)
+                (
+                    transfer,
+                    PendingFetchResponseBodyStreamRead::Failed(message),
+                )
             }
+        };
+        if let Some(token) = transfer.navigation_token()
+            && !runtime_slot
+                .page_slot()
+                .accepts_pending_document_navigation_event(token)
+        {
+            self.pending_fetch_request_ids.remove(&request_id);
+            match runtime_slot.finish_renderer_document_navigation(token) {
+                Ok(finish) => {
+                    debug_assert!(finish.released_output.is_empty());
+                    debug_assert!(finish.renderer_call_replacements.is_none());
+                }
+                Err(error) => {
+                    tracing::debug!(%error, "renderer channel closed before obsolete body read completed")
+                }
+            }
+            let (_, navigation) = transfer.into_navigation();
+            return PendingFetchResponseBodyStreamRead::SupersededNavigation(Box::new(navigation));
         }
+        self.register_pending_fetch_response_transfer(request_id, transfer);
+        if matches!(
+            read,
+            PendingFetchResponseBodyStreamRead::Read { eof: true, .. }
+        ) {
+            runtime_slot.insert_io_stream(handle, Vec::new(), 0);
+        }
+        read
     }
 
     pub(crate) fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
@@ -1853,6 +1909,13 @@ impl TargetFetchOwner {
         }
     }
 
+    pub(crate) fn take_superseded_document_navigations(
+        &mut self,
+        current: &DocumentNavigationToken,
+    ) -> Vec<(Option<DocumentNavigationToken>, NavigationDispatchState)> {
+        self.pending.take_superseded_document_navigations(current)
+    }
+
     pub(crate) fn consume_pending_request_action(
         &mut self,
         request_id: &str,
@@ -2211,6 +2274,7 @@ impl TargetFetchOwner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod supersession;
     use crate::conn::{
         CapturedBody, FetchAuthChallenge, NavigationResultProjection,
         PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,

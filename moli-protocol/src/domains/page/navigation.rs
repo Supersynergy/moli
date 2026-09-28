@@ -1329,6 +1329,32 @@ pub(crate) fn push_superseded_navigation_result(
     }
 }
 
+pub(crate) fn superseded_intercepted_navigation_events(
+    conn: &mut CdpConnection,
+    state: &NavigationDispatchState,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut events = Vec::new();
+    let mut progress =
+        network::failed_navigation_progress_gate(conn, state, NET_ERR_ABORTED_ERROR_TEXT);
+    network::MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
+        &mut events,
+        &mut progress,
+    );
+    network::record_failed_main_document_response_body(
+        conn,
+        state,
+        NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+    );
+    let mut output = CommandOutputBuffer::default();
+    push_superseded_navigation_result(&mut output, state);
+    events.extend(
+        output
+            .into_plan()
+            .into_background_events(state.navigate_id, state.owner.session_id()),
+    );
+    events
+}
+
 fn fill_navigation_id_from_current_loader_for_route(
     conn: &mut CdpConnection,
     route: &CdpSessionRoute,
@@ -2798,6 +2824,11 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             "TargetNotLoaded",
         ));
     };
+    for superseded in
+        conn.take_superseded_intercepted_document_navigations(owner, &document_navigation_token)
+    {
+        out.extend(superseded_intercepted_navigation_events(conn, &superseded));
+    }
     if let Some(pending) = pending_fetch_navigation.as_mut() {
         pending.document_navigation_token = Some(document_navigation_token.clone());
     }

@@ -1,5 +1,7 @@
 use super::*;
 
+mod superseded_interception;
+
 type TestSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -461,37 +463,43 @@ async fn assert_intercepted_navigation_while_paused(
         .find(|message| message["method"] == "Fetch.requestPaused")
         .unwrap()["params"]["requestId"]
         .clone();
-    let navigation_id = if let Some(stale_action) = stale_response {
-        send_cdp_command_without_wait(
-            &mut socket,
-            20,
-            "Page.navigate",
-            Some(&session_id),
-            json!({"url": format!("http://{fixture_addr}/?replacement")}),
-        )
-        .await;
-        let replacement = recv_until_match(&mut socket, |message| {
-            message["method"] == "Fetch.requestPaused"
-        })
-        .await;
-        let replacement_id = replacement
-            .iter()
-            .find(|message| message["method"] == "Fetch.requestPaused")
-            .unwrap()["params"]["requestId"]
-            .clone();
-        assert_ne!(request_id, replacement_id);
-        let (method, params) = stale_action.command(request_id);
-        let stale = send_cdp_command(&mut socket, 21, method, Some(&session_id), params).await;
-        assert!(
-            stale
+    let navigation_id =
+        if let Some(stale_action) = stale_response {
+            send_cdp_command_without_wait(
+                &mut socket,
+                20,
+                "Page.navigate",
+                Some(&session_id),
+                json!({"url": format!("http://{fixture_addr}/?replacement")}),
+            )
+            .await;
+            let replacement = recv_until_match(&mut socket, |message| {
+                message["method"] == "Fetch.requestPaused"
+            })
+            .await;
+            let replacement_id = replacement
                 .iter()
-                .any(|message| message["id"] == 21 && message.get("error").is_none())
-        );
-        request_id = replacement_id;
-        20
-    } else {
-        9
-    };
+                .find(|message| message["method"] == "Fetch.requestPaused")
+                .unwrap()["params"]["requestId"]
+                .clone();
+            assert_ne!(request_id, replacement_id);
+            assert!(
+                replacement.iter().any(|message| {
+                    message["id"] == 9 && message["result"]["errorText"] == "net::ERR_ABORTED"
+                }),
+                "supersession must reply to A without a client action: {replacement:#?}"
+            );
+            let (method, params) = stale_action.command(request_id);
+            let stale = send_cdp_command(&mut socket, 21, method, Some(&session_id), params).await;
+            assert!(
+                stale.iter().any(|message| message["id"] == 21
+                    && message["error"]["message"] == "RequestNotFound")
+            );
+            request_id = replacement_id;
+            20
+        } else {
+            9
+        };
     let (method, params) = action.command(request_id);
     let mut completed = send_cdp_command(&mut socket, 10, method, Some(&session_id), params).await;
     if !completed

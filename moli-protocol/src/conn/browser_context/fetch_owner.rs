@@ -1182,6 +1182,36 @@ impl CdpConnection {
                 .drain_fetch_pending_state(),
         )
     }
+
+    pub(crate) fn take_superseded_intercepted_document_navigations(
+        &mut self,
+        owner: &CommandOwnerScope,
+        current: &crate::conn::DocumentNavigationToken,
+    ) -> Vec<crate::conn::NavigationDispatchState> {
+        let Some(mut target) = self.target_session_owner_mut_for_owner(owner) else {
+            return Vec::new();
+        };
+        let Some(mut fetch) = target.pending_fetch_owner_mut() else {
+            return Vec::new();
+        };
+        let retired = fetch.take_superseded_document_navigations(current);
+        retired
+            .into_iter()
+            .map(|(token, navigation)| {
+                if let Some(token) = token {
+                    let finish = target
+                        .runtime_slot_mut()
+                        .finish_renderer_document_navigation(&token)
+                        .expect("a newly admitted navigation keeps the renderer channel open");
+                    // The replacement was registered before retiring its predecessors.
+                    // Finishing old work must not release output or replay calls yet.
+                    debug_assert!(finish.released_output.is_empty());
+                    debug_assert!(finish.renderer_call_replacements.is_none());
+                }
+                navigation
+            })
+            .collect()
+    }
 }
 
 fn pending_fetch_request_route(
@@ -1274,6 +1304,15 @@ impl TargetSessionOwnerMut<'_> {
         navigation: crate::conn::NavigationDispatchState,
         body: crate::conn::DocumentBodySource,
     ) -> bool {
+        if let Some(token) = document_navigation_token.as_ref()
+            && let crate::conn::DocumentBodySource::StreamingRaw { response, .. } = &body
+        {
+            // Supersession must cancel the transport even while an IO.read
+            // task temporarily owns the response outside the Fetch maps.
+            self.runtime_slot_mut()
+                .page_slot_mut()
+                .add_document_navigation_cancellation(token, response.cancellation_handle());
+        }
         let Some(mut owner) = self.pending_fetch_owner_mut() else {
             return false;
         };

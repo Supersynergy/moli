@@ -266,12 +266,18 @@ impl DevToolsRendererChannel {
         navigation: &DocumentNavigationToken,
     ) -> Result<bool, DevToolsRendererChannelError> {
         self.ensure_open()?;
-        Ok(self.inflight_cross_document_navigations.remove(navigation)
-            && !self.output_is_suspended())
+        let was_suspended = self.output_is_suspended();
+        self.inflight_cross_document_navigations.remove(navigation);
+        Ok(was_suspended && !self.output_is_suspended())
     }
 
     pub(crate) fn output_is_suspended(&self) -> bool {
-        !self.inflight_cross_document_navigations.is_empty()
+        // Older work may still need a terminal reply or resource cleanup, but
+        // only the current navigation can keep the renderer channel suspended.
+        self.latest_navigation.as_ref().is_some_and(|latest| {
+            self.inflight_cross_document_navigations
+                .contains(&latest.token)
+        })
     }
 
     pub(crate) fn inflight_navigation_count(&self) -> usize {
@@ -641,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn output_remains_suspended_until_all_overlapping_navigations_finish() {
+    fn only_current_navigation_can_keep_output_suspended() {
         let request_a = navigation(1);
         let request_b = navigation(2);
         let mut channel = DevToolsRendererChannel::default();
@@ -655,14 +661,37 @@ mod tests {
         assert_eq!(channel.inflight_navigation_count(), 2);
         assert!(channel.output_is_suspended());
 
-        assert_eq!(channel.navigation_finished(&request_b), Ok(false));
-        assert!(channel.output_is_suspended());
-        assert!(
-            channel
-                .navigation_finished(&request_a)
-                .expect("final overlapping navigation")
-        );
+        assert_eq!(channel.navigation_finished(&request_b), Ok(true));
         assert!(!channel.output_is_suspended());
+        assert_eq!(channel.inflight_navigation_count(), 1);
+        assert_eq!(channel.navigation_finished(&request_a), Ok(false));
+        assert_eq!(channel.inflight_navigation_count(), 0);
+        assert!(!channel.output_is_suspended());
+    }
+
+    #[test]
+    fn late_completion_cannot_release_a_subsequent_navigation() {
+        let mut channel = DevToolsRendererChannel::default();
+        let a = navigation(1);
+        let b = navigation(2);
+        let c = navigation(3);
+        channel.navigation_started(a.clone()).unwrap();
+        let candidate_a = channel
+            .attach_candidate(&a, RendererDevToolsAgentToken::allocate())
+            .unwrap();
+        channel.navigation_started(b.clone()).unwrap();
+        assert_eq!(channel.navigation_finished(&b), Ok(true));
+        assert_eq!(
+            channel.commit_candidate(candidate_a),
+            Err(DevToolsRendererChannelError::SupersededNavigation)
+        );
+        channel.navigation_started(c.clone()).unwrap();
+        assert_eq!(channel.navigation_finished(&a), Ok(false));
+        assert_eq!(channel.navigation_finished(&b), Ok(false));
+        assert!(channel.output_is_suspended());
+        assert_eq!(channel.navigation_finished(&c), Ok(true));
+        assert_eq!(channel.navigation_finished(&c), Ok(false));
+        assert_eq!(channel.inflight_navigation_count(), 0);
     }
 
     #[test]

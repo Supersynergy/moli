@@ -108,7 +108,7 @@ pub(crate) use main_document_progress::{
     MaterializedLoadedDocumentProgress, MaterializedNavigationLoadOutcome,
     emit_child_document_navigation_network_background_events,
     emit_fetch_navigation_initial_request_for_pause_background_events,
-    materialize_loaded_navigation_progress,
+    failed_navigation_progress_gate, materialize_loaded_navigation_progress,
     materialize_navigation_failure_preserving_committed_document,
     materialize_navigation_load_result, record_completed_main_document_response_body,
     record_failed_main_document_response_body, record_main_document_request_body,

@@ -959,6 +959,16 @@ async fn assert_interleaved_response_heads(pause_old_document: bool) {
         "params": { "url": format!("http://{addr}/second") }
     }))
     .await;
+    let superseded = take_response_by_id(&mut ctx, 365);
+    assert!(superseded.get("error").is_none());
+    assert_eq!(superseded["result"]["errorText"], "net::ERR_ABORTED");
+    let failed = ctx.take_one();
+    assert_eq!(failed["method"], "Network.loadingFailed");
+    assert_eq!(
+        failed["params"]["requestId"],
+        first_pause["params"]["networkId"]
+    );
+    assert_eq!(failed["params"]["canceled"], true);
     let second_pause = take_main_document_request_pause(&mut ctx).await;
     let second_request_id = second_pause["params"]["requestId"]
         .as_str()
@@ -986,10 +996,14 @@ async fn assert_interleaved_response_heads(pause_old_document: bool) {
         "params": { "requestId": first_request_id }
     }))
     .await;
-    ctx.expect_result(367, json!({}), Some("SID-1"));
-    let superseded = take_response_by_id(&mut ctx, 365);
-    assert!(superseded.get("error").is_none());
-    assert_eq!(superseded["result"]["errorText"], "net::ERR_ABORTED");
+    assert_eq!(
+        take_response_by_id(&mut ctx, 367)["error"]["message"],
+        "RequestNotFound"
+    );
+    assert!(
+        !ctx.sent.iter().any(|message| message["id"] == 365),
+        "stale actions must not reply to A twice"
+    );
     assert_eq!(
         ctx.conn.browser_context.as_ref().and_then(|bc| bc
             .active_page_target()

@@ -690,6 +690,22 @@ impl TargetPageSlot {
             .and_then(PendingNavigationRequest::cancellation_handle)
     }
 
+    pub(crate) fn add_document_navigation_cancellation(
+        &mut self,
+        token: &DocumentNavigationToken,
+        cancellation: moli_fetch::FetchCancelHandle,
+    ) {
+        if let Some(request) = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|request| request.matches(token) && !request.committed)
+        {
+            request.cancellation_handles.push(cancellation);
+        } else {
+            cancellation.cancel();
+        }
+    }
+
     /// Claims the exact request's sole background completion and returns its
     /// cancellation authority. Rejection leaves the request unchanged; the
     /// caller still owns (and must drop) any rejected response.
