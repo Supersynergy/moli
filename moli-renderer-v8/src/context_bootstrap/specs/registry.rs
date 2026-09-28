@@ -685,6 +685,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::CssRule,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::CSSStartingStyleRule::DESCRIPTOR,
+        kind: ConstructorKind::CssRule,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::CSSImportRule::DESCRIPTOR,
         kind: ConstructorKind::CssRule,
     },

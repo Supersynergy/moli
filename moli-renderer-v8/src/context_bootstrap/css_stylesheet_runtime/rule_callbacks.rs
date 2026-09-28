@@ -207,6 +207,7 @@ pub(crate) fn build_detached_css_rule_object_from_snapshot<'s>(
         }
     };
     let _ = set_detached_css_rule_snapshot_text(scope, rule, &snapshot.css_text);
+    set_css_rule_snapshot_type(scope, rule, Some(snapshot.rule_type));
     set_detached_css_rule_child_snapshot_array(scope, rule, child_snapshots);
     rule
 }
@@ -258,6 +259,7 @@ pub(crate) fn build_css_generic_at_rule_object_from_stylo_rule_type<'s>(
         declaration,
         stylo_rule_type == CssRuleType::Keyframes,
     );
+    set_css_rule_snapshot_type(scope, object, Some(stylo_rule_type));
     web_api_interfaces::initialize(scope, object, prototype_name)
         .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, prototype_name) {
@@ -281,12 +283,12 @@ pub(crate) fn sync_local_css_at_rule_wrapper_slots_from_css_text<'s>(
     rule: v8::Local<'s, v8::Object>,
     css_text: &str,
 ) {
-    set_private_u32(
-        scope,
-        rule,
-        CSS_AT_RULE_TYPE_SLOT,
-        css_at_rule_type(css_at_rule_kind(css_text)),
-    );
+    let stylo_rule_type = css_text_single_stylo_rule_type(css_text);
+    set_css_rule_snapshot_type(scope, rule, stylo_rule_type);
+    let kind = stylo_rule_type
+        .and_then(css_at_rule_kind_for_stylo_rule_type)
+        .unwrap_or_else(|| css_at_rule_kind(css_text));
+    set_private_u32(scope, rule, CSS_AT_RULE_TYPE_SLOT, css_at_rule_type(kind));
     if get_private_value(scope, rule, CSS_PROPERTY_RULE_NAME_SLOT).is_some() {
         if let Some(view) = parse_property_rule_view_with_stylo(css_text) {
             sync_css_property_rule_slots_from_stylo_view(scope, rule, &view);
@@ -299,7 +301,7 @@ pub(crate) fn sync_local_css_at_rule_wrapper_slots_from_css_text<'s>(
 
     if let Some(style) = get_private_value(scope, rule, CSS_AT_RULE_STYLE_OBJECT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        && let Some(rule_type) = css_text_single_stylo_rule_type(css_text)
+        && let Some(rule_type) = stylo_rule_type
     {
         let style_text = match rule_type {
             CssRuleType::FontFace => css_font_face_rule_style_text_from_css_text(css_text),
@@ -536,8 +538,8 @@ pub(crate) fn build_css_rule_object_with_rule_context<'s>(
     } else {
         canonical_css_at_rule_text(css_text, rule_kind)
     };
+    let stylo_rule_type = stylo_rule_type.or_else(|| css_text_single_stylo_rule_type(&css_text));
     let prototype_name = stylo_rule_type
-        .or_else(|| css_text_single_stylo_rule_type(&css_text))
         .map(css_at_rule_prototype_name_for_stylo_rule_type)
         .unwrap_or_else(|| css_at_rule_prototype_name(rule_kind));
     let rule_type = stylo_rule_type
@@ -552,6 +554,7 @@ pub(crate) fn build_css_rule_object_with_rule_context<'s>(
     };
     let object =
         bind_css_at_rule_declaration(scope, declaration, rule_kind == CssAtRuleKind::Keyframes);
+    set_css_rule_snapshot_type(scope, object, stylo_rule_type);
     web_api_interfaces::initialize(scope, object, prototype_name)
         .expect("CSS rule interface identity should initialize");
     if let Some(prototype) = global_constructor_prototype(scope, prototype_name) {
@@ -607,6 +610,7 @@ pub(crate) fn css_at_rule_prototype_name_for_stylo_rule_type(
         CssRuleType::LayerStatement => "CSSLayerStatementRule",
         CssRuleType::Container => "CSSContainerRule",
         CssRuleType::Scope => "CSSScopeRule",
+        CssRuleType::StartingStyle => "CSSStartingStyleRule",
         _ => "CSSRule",
     }
 }
@@ -626,9 +630,8 @@ pub(crate) fn css_at_rule_prototype_name(kind: CssAtRuleKind) -> &'static str {
         CssAtRuleKind::CounterStyle => "CSSCounterStyleRule",
         CssAtRuleKind::Supports => "CSSSupportsRule",
         CssAtRuleKind::Container => "CSSContainerRule",
-        CssAtRuleKind::StartingStyle | CssAtRuleKind::Property | CssAtRuleKind::Function => {
-            "CSSRule"
-        }
+        CssAtRuleKind::StartingStyle => "CSSStartingStyleRule",
+        CssAtRuleKind::Property | CssAtRuleKind::Function => "CSSRule",
     }
 }
 
@@ -697,6 +700,11 @@ pub(crate) fn css_rule_current_stylo_rule_type_from_object<'s>(
     object: v8::Local<'s, v8::Object>,
 ) -> Option<CssRuleType> {
     if let Some(rule_type) = css_rule_attached_native_rule_type(scope, object) {
+        return Some(rule_type);
+    }
+    // New rule kinds share CSSRule.type == 0. Retain their native kind when
+    // detaching so child lists, parent links, and parsing contexts survive.
+    if let Some(rule_type) = css_rule_snapshot_type(scope, object) {
         return Some(rule_type);
     }
     if get_private_value(scope, object, CSS_KEYFRAME_RULE_KEY_TEXT_SLOT).is_some() {

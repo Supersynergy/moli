@@ -541,7 +541,7 @@ pub struct CssRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSGroupingRule, enumerable)]
+#[webapi(interface = web_api_interfaces::CSSGroupingRule, enumerable, receiver)]
 pub struct CssGroupingRulePrototypeDeclaration {
     #[webapi(accessor_property, getter = css_grouping_rule_css_rules_getter_callback)]
     pub css_rules: (),

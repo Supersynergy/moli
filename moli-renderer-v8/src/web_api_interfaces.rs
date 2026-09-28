@@ -71,6 +71,7 @@ interfaces! {
     CSSRule;
     CSSRuleList;
     CSSScopeRule: CSSGroupingRule;
+    CSSStartingStyleRule: CSSGroupingRule;
     CSSStyleDeclaration;
     CSSStyleProperties: CSSStyleDeclaration;
     CSSStyleRule: CSSGroupingRule;

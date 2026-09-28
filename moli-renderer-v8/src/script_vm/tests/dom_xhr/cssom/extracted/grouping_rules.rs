@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn css_starting_style_rules_share_native_grouping_lifecycle_and_realms() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-starting-style.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_starting_style.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn css_grouping_rule_native_receivers_share_child_lists() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-grouping-receivers.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_grouping_receivers.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn css_grouping_rule_insert_delete_materializes_stylo_mutation_children() {
     let mut vm = new_storage_test_vm("https://css-grouping-rule-mutation-tree.test/");
 

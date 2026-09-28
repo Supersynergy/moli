@@ -7,6 +7,27 @@ const SNAPSHOT_SELECTOR_TEXT_INDEX: u32 = 3;
 const SNAPSHOT_DECLARATION_TEXT_INDEX: u32 = 4;
 const SNAPSHOT_CHILDREN_INDEX: u32 = 5;
 const SNAPSHOT_FIELD_COUNT: i32 = 6;
+const CSS_RULE_SNAPSHOT_TYPE_SLOT: &str = "__moliCssRuleSnapshotType";
+
+pub(crate) fn set_css_rule_snapshot_type<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+    rule_type: Option<CssRuleType>,
+) {
+    set_private_u32(
+        scope,
+        rule,
+        CSS_RULE_SNAPSHOT_TYPE_SLOT,
+        rule_type.map(css_rule_type_snapshot_code).unwrap_or(0),
+    );
+}
+
+pub(crate) fn css_rule_snapshot_type<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rule: v8::Local<'s, v8::Object>,
+) -> Option<CssRuleType> {
+    private_u32(scope, rule, CSS_RULE_SNAPSHOT_TYPE_SLOT).and_then(css_rule_type_from_snapshot_code)
+}
 
 pub(crate) struct DetachedCssRuleSnapshotEntry<'s> {
     pub(crate) snapshot: CssRuleSnapshot,
@@ -48,6 +69,7 @@ pub(crate) fn clear_css_rule_detached_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,
 ) {
+    set_css_rule_snapshot_type(scope, rule, None);
     set_private_string(scope, rule, CSS_RULE_DETACHED_SNAPSHOT_TEXT_SLOT, "");
     set_private_value(
         scope,

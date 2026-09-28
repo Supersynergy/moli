@@ -652,6 +652,7 @@ fn freeze_css_rule_wrapper_from_native_snapshot<'s>(
     child_snapshots: v8::Local<'s, v8::Array>,
     exposed_parent_style_sheet: Option<v8::Local<'s, v8::Object>>,
 ) {
+    set_css_rule_snapshot_type(scope, rule, Some(snapshot.rule_type));
     if snapshot.rule_type == CssRuleType::Keyframe {
         sync_css_keyframe_rule_object_from_native_snapshot(scope, rule, snapshot);
         sync_css_rule_pdb_style_wrapper_from_snapshot(
