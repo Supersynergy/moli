@@ -1562,6 +1562,9 @@ globalThis.__lm_after_blocked_parser_script = true;
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    // Blocked URL contributions are active only while Network is enabled.
+    // Otherwise this fixture waits for an actual external DNS/request failure.
+    enable_network_domain(&mut ctx, 70_009, Some("SID-1")).await;
 
     ctx.process_async(json!({
         "id": 70_010,
@@ -1581,17 +1584,36 @@ globalThis.__lm_after_blocked_parser_script = true;
     .await;
     let _ = ctx.take_response_by_id(70_011);
 
-    wait_until_messages(
+    crate::testing::wait_until_scheduler_message(
         &mut ctx,
-        Some("SID-1"),
         "parser blocked external script load completion",
-        |messages| {
-            messages
-                .iter()
-                .any(|message| message["method"] == json!("Page.loadEventFired"))
-        },
+        |message| message["method"] == "Page.loadEventFired" && message["sessionId"] == "SID-1",
     )
     .await;
+    let blocked_request = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["sessionId"] == "SID-1"
+                && message["params"]["request"]["url"]
+                    == "http://example.test/blocked/parser-script.js"
+        })
+        .expect("parser script request should be observed");
+    let request_id = &blocked_request["params"]["requestId"];
+    let failure = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == "Network.loadingFailed"
+                && message["sessionId"] == "SID-1"
+                && &message["params"]["requestId"] == request_id
+        })
+        .expect("the exact parser script must fail through the blocked URL policy");
+    assert_eq!(
+        failure["params"]["errorText"],
+        "failed to fetch script `http://example.test/blocked/parser-script.js`: net::ERR_BLOCKED_BY_CLIENT"
+    );
 
     ctx.process_async(json!({
         "id": 70_012,
