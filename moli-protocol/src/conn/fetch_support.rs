@@ -587,6 +587,22 @@ impl PausedDocumentTransfers {
             .collect()
     }
 
+    pub(crate) fn drain_superseded(
+        &mut self,
+        current: &DocumentNavigationToken,
+    ) -> Vec<PausedDocumentTransfer> {
+        let request_ids = self
+            .transfers
+            .iter()
+            .filter(|(_, transfer)| transfer.navigation_token() != Some(current))
+            .map(|(request_id, _)| request_id.clone())
+            .collect::<Vec<_>>();
+        request_ids
+            .into_iter()
+            .filter_map(|id| self.take(&id))
+            .collect()
+    }
+
     pub(crate) fn drain_pending_transfers_for_session(
         &mut self,
         session_id: Option<&str>,
@@ -698,6 +714,7 @@ pub(crate) enum PendingFetchResponseBodyStreamRead {
     NotFound,
     Read { bytes: Vec<u8>, eof: bool },
     Failed(anyhow::Error),
+    SupersededNavigation(Box<NavigationDispatchState>),
 }
 
 #[derive(Debug)]
@@ -793,6 +810,45 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
 }
 
 impl PausedDocumentTransfer {
+    pub(crate) fn navigation_token(&self) -> Option<&DocumentNavigationToken> {
+        match &self.state {
+            PausedDocumentTransferState::Pending {
+                document_navigation_token,
+                ..
+            }
+            | PausedDocumentTransferState::ActiveBodyStream {
+                stream:
+                    ActiveDocumentBodyStreamState {
+                        document_navigation_token,
+                        ..
+                    },
+                ..
+            } => document_navigation_token.as_ref(),
+        }
+    }
+
+    pub(crate) fn into_navigation(
+        self,
+    ) -> (Option<DocumentNavigationToken>, NavigationDispatchState) {
+        // Dropping the remaining body also cancels an unfinished transport.
+        match self.state {
+            PausedDocumentTransferState::Pending {
+                document_navigation_token,
+                navigation,
+                ..
+            }
+            | PausedDocumentTransferState::ActiveBodyStream {
+                stream:
+                    ActiveDocumentBodyStreamState {
+                        document_navigation_token,
+                        navigation,
+                        ..
+                    },
+                ..
+            } => (document_navigation_token, navigation),
+        }
+    }
+
     pub(crate) fn pending(
         fetch_request_id: String,
         document_navigation_token: Option<DocumentNavigationToken>,
@@ -1220,17 +1276,8 @@ impl PausedDocumentTransfer {
         NavigationDispatchState,
         anyhow::Result<NavigationLoadOutcome>,
     ) {
-        match self.state {
-            PausedDocumentTransferState::Pending {
-                document_navigation_token,
-                navigation,
-                body,
-            } => {
-                let _ = body;
-                (document_navigation_token, navigation, Err(error))
-            }
-            PausedDocumentTransferState::ActiveBodyStream { stream, .. } => stream.fail(error),
-        }
+        let (token, navigation) = self.into_navigation();
+        (token, navigation, Err(error))
     }
 }
 
@@ -1331,17 +1378,6 @@ impl ActiveDocumentBodyStreamState {
             )
             .await;
         (self.document_navigation_token, navigation_state, navigation)
-    }
-
-    fn fail(
-        self,
-        error: anyhow::Error,
-    ) -> (
-        Option<DocumentNavigationToken>,
-        NavigationDispatchState,
-        anyhow::Result<NavigationLoadOutcome>,
-    ) {
-        (self.document_navigation_token, self.navigation, Err(error))
     }
 }
 

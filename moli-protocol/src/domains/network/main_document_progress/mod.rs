@@ -274,7 +274,7 @@ impl CompletedDownloadBodyNetworkProgress {
     }
 }
 
-fn failed_navigation_progress_gate(
+pub(crate) fn failed_navigation_progress_gate(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
     error_text: &str,
