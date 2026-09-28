@@ -1177,22 +1177,6 @@ impl BrowserContext {
         })
     }
 
-    pub(crate) fn arm_background_navigation_completion(
-        &mut self,
-        token: &DocumentNavigationToken,
-        additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) -> bool {
-        let Some(target) = self.page_target_mut(&token.target_id) else {
-            if let Some(cancellation) = additional_cancellation {
-                cancellation.cancel();
-            }
-            return false;
-        };
-        target
-            .runtime_slot
-            .arm_background_navigation_completion(token, additional_cancellation)
-    }
-
     pub(crate) fn settle_background_navigation_completion(
         &mut self,
         token: &DocumentNavigationToken,

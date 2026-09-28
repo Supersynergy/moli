@@ -460,8 +460,13 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
     let navigation_a = target_a
         .start_document_navigation_for_active_target("LOADER-A".to_owned())
         .expect("target A should accept a navigation request");
+    target_a
+        .active_page_target_mut()
+        .runtime_slot
+        .page_slot_mut()
+        .claim_background_navigation_completion(&navigation_a, None)
+        .unwrap();
     conn.install_browser_context_fixture_for_test(target_a);
-    assert!(conn.arm_background_navigation_completion(&navigation_a, None));
 
     let mut target_b = BrowserContext::new("BID-B".to_owned());
     target_b.set_active_target_id("TID-B");

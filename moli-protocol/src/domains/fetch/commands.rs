@@ -1,6 +1,7 @@
 use crate::conn::{
-    BackgroundNavigationBodyCompletionSink, CapturedBody, CdpConnection, Cmd, CommandOwnerScope,
-    DEFAULT_LOADER_ID, PendingStreamingDocumentResponseNavigation, monotonic_timestamp_seconds,
+    BackgroundNavigationBodyCompletionSink, BackgroundNavigationClaimError, CapturedBody,
+    CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID,
+    PendingStreamingDocumentResponseNavigation, monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
@@ -1874,7 +1875,7 @@ fn continue_streaming_document_response_in_background(
         network_observation_journal,
         body_progress_source,
     } = pending;
-    let Some(job) = conn.background_streaming_response_navigation_load_job_for_navigation(
+    let job = match conn.background_streaming_response_navigation_load_job_for_navigation(
         &document_navigation_token,
         &navigation,
         response,
@@ -1882,19 +1883,17 @@ fn continue_streaming_document_response_in_background(
         response_code,
         response_headers,
         body_progress_source,
-    ) else {
-        // An already-armed current request keeps its original completion.
-        if !conn.accepts_pending_document_navigation_for_owner(
-            &navigation.owner,
-            &document_navigation_token,
-        ) {
+    ) {
+        Ok(job) => job,
+        Err(BackgroundNavigationClaimError::AlreadyClaimed) => return,
+        Err(BackgroundNavigationClaimError::Stale) => {
             let _ = sender.send(page::BackgroundNavigationCompletion::new(
                 document_navigation_token,
                 navigation,
                 Err(anyhow::anyhow!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT)),
             ));
+            return;
         }
-        return;
     };
     tokio::task::spawn_local(async move {
         let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(

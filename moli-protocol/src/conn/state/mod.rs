@@ -66,8 +66,8 @@ pub(crate) use page_resource::MainDocumentResourceSnapshot;
 #[cfg(test)]
 pub(crate) use page_slot::TargetPageSlot;
 pub(crate) use page_slot::{
-    CommittedRendererDocumentBinding, DocumentNavigationToken, InitialDocumentPageBuildWaiter,
-    RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
+    BackgroundNavigationClaimError, CommittedRendererDocumentBinding, DocumentNavigationToken,
+    InitialDocumentPageBuildWaiter, RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
 };
 pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBindingDefinition};
 

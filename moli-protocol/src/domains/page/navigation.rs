@@ -17,11 +17,12 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::conn::{
-    BackgroundNavigationLoadJob, BackgroundProtocolEvent, CapturedBody, CdpConnection,
-    CdpSessionRoute, Cmd, CommandDispatchContext, CommandOwnerScope, DocumentNavigationToken,
-    FetchRequestStage, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    NavigationResultProjection, NavigationSourceDocumentSecurityContext, PendingFetchNavigation,
-    ResponseStageUrlMatchPolicy, monotonic_timestamp_seconds,
+    BackgroundNavigationClaimError, BackgroundNavigationLoadJob, BackgroundProtocolEvent,
+    CapturedBody, CdpConnection, CdpSessionRoute, Cmd, CommandDispatchContext, CommandOwnerScope,
+    DocumentNavigationToken, FetchRequestStage, NavigationDispatchState, NavigationLoadOutcome,
+    NavigationRequestLoadPolicy, NavigationResultProjection,
+    NavigationSourceDocumentSecurityContext, PendingFetchNavigation, ResponseStageUrlMatchPolicy,
+    monotonic_timestamp_seconds,
 };
 use moli_cookie_jar::{NetworkCookieRequestContext, StoredCookieQueryReport};
 
@@ -2924,40 +2925,48 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 )
             })
         });
-        let Some(job) = conn.background_navigation_load_job_for_navigation(
+        match conn.background_navigation_load_job_for_navigation(
             &document_navigation_token,
             &completion_state,
             body_progress_source,
             early_result,
-        ) else {
-            return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
-                -31998,
-                "NavigationRequestNotCurrent",
-            ));
-        };
-        tokio::task::spawn_local(async move {
-            let body_completion_sink = crate::conn::BackgroundNavigationBodyCompletionSink::new(
-                sender.clone(),
-                document_navigation_token.clone(),
-                completion_state.clone(),
-            );
-            let (navigation, early_result_sent) = job.run(Some(body_completion_sink)).await;
-            if early_result_sent {
-                completion_state.navigate_id = None;
+        ) {
+            Err(BackgroundNavigationClaimError::Stale) => {
+                return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
+                    -31998,
+                    "NavigationRequestNotCurrent",
+                ));
             }
-            if moli_trace::cdp_nav_timing_enabled() {
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    url = %completion_state.requested_url,
-                    stage = "background_lifecycle_completion_send",
-                );
+            Err(BackgroundNavigationClaimError::AlreadyClaimed) => {
+                // The original job owns both completion and the command reply.
             }
-            let _ = sender.send(BackgroundNavigationCompletion::new(
-                document_navigation_token,
-                completion_state,
-                navigation,
-            ));
-        });
+            Ok(job) => {
+                tokio::task::spawn_local(async move {
+                    let body_completion_sink =
+                        crate::conn::BackgroundNavigationBodyCompletionSink::new(
+                            sender.clone(),
+                            document_navigation_token.clone(),
+                            completion_state.clone(),
+                        );
+                    let (navigation, early_result_sent) = job.run(Some(body_completion_sink)).await;
+                    if early_result_sent {
+                        completion_state.navigate_id = None;
+                    }
+                    if moli_trace::cdp_nav_timing_enabled() {
+                        tracing::info!(
+                            target: "moli_cdp_nav_timing",
+                            url = %completion_state.requested_url,
+                            stage = "background_lifecycle_completion_send",
+                        );
+                    }
+                    let _ = sender.send(BackgroundNavigationCompletion::new(
+                        document_navigation_token,
+                        completion_state,
+                        navigation,
+                    ));
+                });
+            }
+        }
         let mut output = CommandOutputBuffer::default();
         output.extend_background_events_after_messages(out);
         return NavigateCommandStart::CompleteImmediate(output.into_plan());
