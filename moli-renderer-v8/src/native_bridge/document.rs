@@ -129,6 +129,8 @@ pub(super) use construction::{
 };
 pub(crate) use cookies::{document_cookie_for_receiver, set_document_cookie_for_receiver};
 pub(crate) use css_state::install_adopted_style_sheets_array_primordials;
+#[cfg(test)]
+pub(crate) use css_state::take_owner_font_face_projection_count_for_test;
 pub(in crate::native_bridge) use css_state::{
     AdoptedStyleSheetsArrayOwner, install_adopted_style_sheets_array_mutation_methods,
     normalize_adopted_style_sheets_assignment,

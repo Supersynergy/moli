@@ -23,6 +23,16 @@ const FONT_FACE_STYLESHEET_RULE_IDENTITY_SLOT: &str = "__moliFontFaceStylesheetR
 const FONT_FACE_STYLESHEET_RULE_FINGERPRINT_SLOT: &str = "__moliFontFaceStylesheetRuleFingerprint";
 const FONT_FACE_STYLESHEET_ID_SLOT: &str = "__moliFontFaceStylesheetId";
 
+#[cfg(test)]
+thread_local! {
+    static OWNER_FONT_FACE_PROJECTION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_owner_font_face_projection_count_for_test() -> usize {
+    OWNER_FONT_FACE_PROJECTION_COUNT.with(|count| count.replace(0))
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum OwnerFontFaceProjection {
     Descriptors(std::sync::Arc<[StylesheetFontFaceDescriptor]>),
@@ -36,6 +46,8 @@ pub(super) fn owner_font_face_projection(
     host: &JsContextHost,
     owner: DomHandle,
 ) -> Option<OwnerFontFaceProjection> {
+    #[cfg(test)]
+    OWNER_FONT_FACE_PROJECTION_COUNT.with(|count| count.set(count.get() + 1));
     let dom_host = host.dom_host();
     let element = dom_host.node(owner)?.as_element()?;
     if !dom_host.is_connected(owner)
@@ -144,13 +156,19 @@ pub(super) fn sync_document_fonts<'s>(
 pub(super) fn apply_font_face_owner_projection<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
     owner: DomHandle,
-    projection: Option<&OwnerFontFaceProjection>,
+    refresh: bool,
 ) -> bool {
     let Some(fonts) = object_property_as_object(scope, holder, FONTS_SLOT) else {
         return false;
     };
-    set_owner_font_face_contribution(scope, fonts, owner, projection);
+    // Native CSS preparation and resource discovery have already run. Only
+    // construct the JS collection's projection when that collection exists.
+    let projection = refresh
+        .then(|| owner_font_face_projection(host, owner))
+        .flatten();
+    set_owner_font_face_contribution(scope, fonts, owner, projection.as_ref());
     true
 }
 

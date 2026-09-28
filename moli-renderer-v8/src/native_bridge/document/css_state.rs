@@ -3,6 +3,8 @@ mod font_faces;
 mod projection;
 mod shared;
 mod style_sheets;
+#[cfg(test)]
+pub(crate) use font_faces::take_owner_font_face_projection_count_for_test;
 
 pub(super) use accessors::detached_document_fonts_getter;
 pub(in crate::native_bridge) use accessors::{
