@@ -1,6 +1,7 @@
 mod constructor;
 mod detached_mutations;
 mod detached_snapshot;
+mod font_palette_values;
 mod grouping_rule;
 mod install;
 mod media_list;

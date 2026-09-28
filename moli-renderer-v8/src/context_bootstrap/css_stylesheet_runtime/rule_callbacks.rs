@@ -597,6 +597,7 @@ pub(crate) fn css_at_rule_prototype_name_for_stylo_rule_type(
         CssRuleType::Media => "CSSMediaRule",
         CssRuleType::FontFace => "CSSFontFaceRule",
         CssRuleType::FontFeatureValues => "CSSFontFeatureValuesRule",
+        CssRuleType::FontPaletteValues => "CSSFontPaletteValuesRule",
         CssRuleType::Keyframes => "CSSKeyframesRule",
         CssRuleType::Page => "CSSPageRule",
         CssRuleType::Namespace => "CSSNamespaceRule",

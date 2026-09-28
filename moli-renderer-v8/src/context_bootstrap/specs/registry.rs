@@ -697,6 +697,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::CssRule,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::CSSFontPaletteValuesRule::DESCRIPTOR,
+        kind: ConstructorKind::CssRule,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::CSSPropertyRule::DESCRIPTOR,
         kind: ConstructorKind::CssRule,
     },

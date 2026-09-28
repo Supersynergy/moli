@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn css_font_palette_values_rules_preserve_native_values_and_lifecycle() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-font-palette-values.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_font_palette_values.js")).unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn css_font_palette_values_getters_validate_native_receivers_across_realms() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-font-palette-receivers.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_font_palette_receivers.js"))
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn attached_rule_sync_writes_snapshot_only_when_the_rule_detaches() {
     crate::context_bootstrap::css_stylesheet_runtime::reset_detached_css_rule_snapshot_write_count_for_test();
     let mut vm = new_storage_test_vm("https://css-attached-rule-snapshot.test/");

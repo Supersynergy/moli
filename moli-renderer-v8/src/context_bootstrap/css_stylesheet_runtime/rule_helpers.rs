@@ -127,6 +127,7 @@ pub(crate) fn css_stylo_rule_type_is_insertable(rule_type: CssRuleType) -> Optio
         | CssRuleType::StartingStyle
         | CssRuleType::FontFace
         | CssRuleType::FontFeatureValues
+        | CssRuleType::FontPaletteValues
         | CssRuleType::Keyframes
         | CssRuleType::Page
         | CssRuleType::CounterStyle
