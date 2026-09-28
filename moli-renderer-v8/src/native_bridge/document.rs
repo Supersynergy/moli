@@ -166,9 +166,10 @@ pub(in crate::native_bridge::document) use detached_objects::*;
 pub(crate) use detached_objects::{
     build_detached_cdata_section_object, build_detached_document_object_from_dom_host,
     build_detached_document_object_from_dom_host_with_content_type, detached_node_is_connected,
-    is_valid_pi_target, preserve_detached_element_bridge_for_custom_prototype,
-    read_detached_native_attribute, read_detached_native_attribute_names,
-    read_detached_native_attribute_snapshot, read_detached_native_has_attribute,
+    detached_record_native_tree_mutations, is_valid_pi_target,
+    preserve_detached_element_bridge_for_custom_prototype, read_detached_native_attribute,
+    read_detached_native_attribute_names, read_detached_native_attribute_snapshot,
+    read_detached_native_has_attribute,
     remove_detached_native_attribute_appending_to_current_reaction_queue,
     remove_detached_native_attribute_ns_appending_to_current_reaction_queue,
     with_detached_native_element_reaction_scope,
@@ -289,8 +290,9 @@ pub(super) use queries::{
     bridge_detached_get_elements_by_tag_name_ns_callback, bridge_detached_matches_callback,
     bridge_detached_query_selector_all_callback, bridge_detached_query_selector_callback,
     bridge_document_getter, bridge_get_element_by_id_callback, node_create_node_iterator_callback,
-    node_create_tree_walker_callback, node_document_create_ns_resolver_callback,
-    node_document_evaluate_callback, node_get_element_by_id_callback,
+    node_create_tree_walker_callback, node_document_create_expression_callback,
+    node_document_create_ns_resolver_callback, node_document_evaluate_callback,
+    node_get_element_by_id_callback,
 };
 pub(super) use state::{
     node_document_active_element_getter_function, throw_document_domain_security_error,
@@ -1472,7 +1474,9 @@ struct DocumentPrototypeMethodsDeclaration {
         callback = node_document_create_ns_resolver_callback
     )]
     create_ns_resolver: (),
-    #[webapi(method, length = 5, callback = node_document_evaluate_callback)]
+    #[webapi(method, length = 1, callback = node_document_create_expression_callback)]
+    create_expression: (),
+    #[webapi(method, length = 2, callback = node_document_evaluate_callback)]
     evaluate: (),
     #[webapi(
         method = "hasStorageAccess",

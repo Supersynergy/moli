@@ -273,10 +273,18 @@ where
 {
     let expression = parse(expression, namespace_resolver, is_in_html_document)
         .map_err(SnapshotXPathEvaluationError::Parse)?;
+    evaluate_parsed_snapshot_xpath(snapshot, &expression, context_node)
+}
+
+pub fn evaluate_parsed_snapshot_xpath(
+    snapshot: &Snapshot,
+    expression: &crate::Expression,
+    context_node: SnapshotNodeId,
+) -> Result<SnapshotValue, SnapshotXPathEvaluationError> {
     let context = snapshot
         .node(context_node)
         .ok_or(SnapshotXPathEvaluationError::ContextNodeNotInSnapshot)?;
-    let value = evaluate_parsed_xpath::<SnapshotDom>(&expression, context)
+    let value = evaluate_parsed_xpath::<SnapshotDom>(expression, context)
         .map_err(SnapshotXPathEvaluationError::Evaluation)?;
     Ok(snapshot_value(value))
 }

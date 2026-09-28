@@ -45,9 +45,12 @@ fn detached_xpath_native_node_info<'s>(
             DetachedXPathNativeNodeInfo::Element {
                 tag_name: element.local_name().to_owned(),
                 prefix: element.prefix().map(str::to_owned),
-                is_html_element: namespace
-                    .as_deref()
-                    .is_none_or(|namespace| namespace == "http://www.w3.org/1999/xhtml"),
+                is_html_element: namespace.as_deref() == Some("http://www.w3.org/1999/xhtml")
+                    && node
+                        .owner_document()
+                        .and_then(|owner| dom_host.node(owner))
+                        .and_then(crate::dom::native::Node::as_document)
+                        .is_some_and(|document| document.is_html_document()),
                 namespace,
             }
         }

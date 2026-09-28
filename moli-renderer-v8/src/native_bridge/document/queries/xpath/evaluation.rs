@@ -1,6 +1,5 @@
 use super::super::*;
-use super::live_dom::{LiveXPathResultNode, LiveXPathValue, evaluate_live_xpath};
-use super::resolver::V8XPathNamespaceResolver;
+use super::live_dom::{LiveXPathResultNode, LiveXPathValue, evaluate_live_parsed_xpath};
 use super::result::{
     XPathIteratorMutationState, build_xpath_nodes_result, build_xpath_scalar_result,
 };
@@ -9,35 +8,28 @@ use crate::native_bridge::document::{
     detached_node_type, detached_tree_query_version, detached_tree_root_object,
     live_get_attribute_node_ns_object, live_get_attribute_node_object,
 };
-use moli_xpath::{
-    ParserError, SnapshotValue, SnapshotXPathEvaluationError,
-    evaluate_snapshot_xpath_with_resolver_detailed,
-};
+use moli_xpath::{SnapshotValue, evaluate_parsed_snapshot_xpath};
 
 use super::XPathEvaluationError;
+use super::types::{XPATH_NUMBER_TYPE, XPATH_STRING_TYPE};
 
 pub(super) fn evaluate_xpath_over_live_dom<'s, 'i>(
     scope: &mut v8::PinScope<'s, 'i>,
     runtime_ptr: *mut JsContextHost,
-    expression: &str,
+    expression: &moli_xpath::Expression,
     context_handle: DomHandle,
-    namespace_resolver: Option<V8XPathNamespaceResolver<'s, 'i>>,
     requested_result_type: u32,
 ) -> Result<Option<v8::Local<'s, v8::Object>>, XPathEvaluationError> {
-    let runtime = unsafe { &*runtime_ptr };
-    let document_handle = runtime.dom_host().document_handle();
-    let is_in_html_document = runtime
-        .dom_host()
-        .node(document_handle)
-        .and_then(crate::dom::native::Node::as_document)
-        .is_some_and(|document| document.is_html_document());
-    let value = evaluate_live_xpath(
-        runtime.dom_host(),
-        expression,
-        context_handle,
-        is_in_html_document,
-        namespace_resolver,
-    )?;
+    let (value, baseline_query_version) = {
+        let runtime = unsafe { &*runtime_ptr };
+        let value = evaluate_live_parsed_xpath(
+            runtime.dom_host(),
+            expression,
+            context_handle,
+            requested_result_type,
+        )?;
+        (value, runtime.dom_host().query_version())
+    };
 
     match value {
         LiveXPathValue::Nodes(handles) => {
@@ -48,7 +40,6 @@ pub(super) fn evaluate_xpath_over_live_dom<'s, 'i>(
                 };
                 resolved.push(node);
             }
-            let baseline_query_version = runtime.dom_host().query_version();
             Ok(build_xpath_nodes_result(
                 scope,
                 &resolved,
@@ -110,9 +101,8 @@ fn live_xpath_result_node_object<'s>(
 pub(super) fn evaluate_xpath_over_object_tree<'s, 'i>(
     scope: &mut v8::PinScope<'s, 'i>,
     root: v8::Local<'s, v8::Object>,
-    expression: &str,
+    expression: &moli_xpath::Expression,
     context_node: Option<v8::Local<'s, v8::Object>>,
-    namespace_resolver: Option<V8XPathNamespaceResolver<'s, 'i>>,
     requested_result_type: u32,
 ) -> Result<Option<v8::Local<'s, v8::Object>>, XPathEvaluationError> {
     let root_node_type = detached_node_type(scope, root).unwrap_or_default();
@@ -135,21 +125,24 @@ pub(super) fn evaluate_xpath_over_object_tree<'s, 'i>(
         ));
     };
 
-    let value = evaluate_snapshot_xpath_with_resolver_detailed::<V8XPathNamespaceResolver<'s, 'i>>(
-        &snapshot.snapshot,
-        expression,
-        context_id,
-        true,
-        namespace_resolver,
-    )
-    .map_err(|error| match error {
-        SnapshotXPathEvaluationError::Parse(ParserError::FailedToResolveNamespacePrefix) => {
-            XPathEvaluationError::Namespace
-        }
-        _ => XPathEvaluationError::InvalidExpression,
-    })?;
+    let value = evaluate_parsed_snapshot_xpath(&snapshot.snapshot, expression, context_id)
+        .map_err(|_| XPathEvaluationError::InvalidExpression)?;
 
     match value {
+        SnapshotValue::Nodes(nodes)
+            if matches!(requested_result_type, XPATH_NUMBER_TYPE | XPATH_STRING_TYPE) =>
+        {
+            let text = nodes
+                .first()
+                .and_then(|id| snapshot.snapshot.node(*id))
+                .map(|node| moli_xpath::Node::text_content(&node))
+                .unwrap_or_default();
+            Ok(build_xpath_scalar_result(
+                scope,
+                SnapshotValue::String(text),
+                requested_result_type,
+            ))
+        }
         SnapshotValue::Nodes(nodes) => {
             let mut resolved = Vec::new();
             for node_id in nodes {

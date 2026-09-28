@@ -1,3 +1,4 @@
+use super::types::{XPATH_ANY_TYPE, XPATH_BOOLEAN_TYPE, XPATH_NUMBER_TYPE, XPATH_STRING_TYPE};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
@@ -86,9 +87,24 @@ pub(super) fn evaluate_live_xpath(
                 XPathEvaluationError::InvalidExpression
             }
         })?;
+    evaluate_live_parsed_xpath(dom, &expression, context, XPATH_ANY_TYPE)
+}
+
+pub(super) fn evaluate_live_parsed_xpath(
+    dom: &DomHost,
+    expression: &moli_xpath::Expression,
+    context: DomHandle,
+    requested_result_type: u32,
+) -> Result<LiveXPathValue, XPathEvaluationError> {
     let context = LiveXPathNode::new(dom, context);
-    let value = evaluate_parsed_xpath::<LiveXPathDom>(&expression, context)
+    let value = evaluate_parsed_xpath::<LiveXPathDom>(expression, context)
         .map_err(|_| XPathEvaluationError::InvalidExpression)?;
+    let value = match requested_result_type {
+        XPATH_NUMBER_TYPE => Value::Number(value.convert_to_number()),
+        XPATH_STRING_TYPE => Value::String(value.convert_to_string()),
+        XPATH_BOOLEAN_TYPE => Value::Boolean(value.convert_to_boolean()),
+        _ => value,
+    };
     Ok(live_xpath_value(value))
 }
 

@@ -1,19 +1,23 @@
+use std::borrow::Cow;
+
 use super::super::*;
 use super::XPathEvaluationError;
 use super::evaluation::{evaluate_xpath_over_live_dom, evaluate_xpath_over_object_tree};
+use super::expression::{expression_for_receiver, new_xpath_expression};
 use super::resolver::V8XPathNamespaceResolver;
 use super::result::is_supported_xpath_result_type;
 use crate::native_bridge::{
-    document::{detached_node_type, detached_tree_root_object},
-    node_runtime_and_handle_from_object,
+    document::detached_tree_root_object, node_runtime_and_handle_from_object,
 };
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::XPathEvaluator, enumerable)]
+#[webapi(interface = web_api_interfaces::XPathEvaluator, enumerable, receiver)]
 struct XPathEvaluatorPrototypeDeclaration {
+    #[webapi(method, length = 1, callback = xpath_evaluator_create_expression_callback)]
+    create_expression: (),
     #[webapi(method, length = 2, callback = xpath_evaluator_evaluate_callback)]
     evaluate: (),
     #[webapi(
@@ -22,6 +26,42 @@ struct XPathEvaluatorPrototypeDeclaration {
         callback = xpath_evaluator_create_ns_resolver_callback
     )]
     create_ns_resolver: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::XPathExpression, enumerable, receiver)]
+struct XPathExpressionPrototypeDeclaration {
+    #[webapi(method, length = 1, callback = xpath_expression_evaluate_callback)]
+    evaluate: (),
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Document.createExpression")]
+struct DocumentCreateExpressionArgs {
+    #[webidl(required)]
+    expression: String,
+    #[webidl(index = 1, converter = "callback_interface", nullable)]
+    namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "XPathEvaluator.createExpression")]
+struct XPathEvaluatorCreateExpressionArgs {
+    #[webidl(required)]
+    expression: String,
+    #[webidl(index = 1, converter = "callback_interface", nullable)]
+    namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "XPathExpression.evaluate")]
+struct XPathExpressionEvaluateArgs<'s> {
+    #[webidl(required, with = document_evaluate_context_node_arg)]
+    context_node: v8::Local<'s, v8::Object>,
+    #[webidl(index = 1, default = 0)]
+    result_type: u16,
+    #[webidl(index = 2, with = document_evaluate_existing_result_arg)]
+    _existing_result: Option<v8::Local<'s, v8::Object>>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -94,7 +134,7 @@ fn document_evaluate_context_node_arg<'s>(
             "Document.evaluate requires a context Node",
         ));
     };
-    if detached_node_type(scope, object).is_some_and(|node_type| node_type > 0) {
+    if web_api_interfaces::Node::is_instance(scope, object) {
         Ok(object)
     } else {
         Err(webidl::WebIdlError::custom_message(
@@ -151,15 +191,41 @@ pub(super) fn install_xpath_evaluator_template_bindings<'s>(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) fn install_xpath_expression_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    XPathExpressionPrototypeDeclaration::initialize_prototype_template(
+        scope,
+        template.prototype_template(scope),
+    );
+}
+
+enum XPathInput<'a> {
+    Source(&'a str, Option<webidl::WebIdlCallbackInterface>),
+    Compiled(&'a moli_xpath::Expression),
+}
+
+fn compile_xpath(
+    scope: &mut v8::PinScope<'_, '_>,
+    expression: &str,
+    namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
+) -> Result<moli_xpath::Expression, XPathEvaluationError> {
+    let namespace_resolver =
+        namespace_resolver.map(|callback| V8XPathNamespaceResolver::new(scope, callback));
+    // Preserve local-name case: the evaluated node's document determines HTML
+    // matching, even when this expression is created by an HTML Document.
+    moli_xpath::parse(expression, namespace_resolver, false).map_err(|error| match error {
+        moli_xpath::ParserError::FailedToResolveNamespacePrefix => XPathEvaluationError::Namespace,
+        _ => XPathEvaluationError::InvalidExpression,
+    })
+}
+
 fn evaluate_xpath<'a>(
     scope: &mut v8::PinScope<'a, '_>,
     receiver: v8::Local<'a, v8::Object>,
-    root: v8::Local<'a, v8::Object>,
-    live_runtime_ptr: Option<*mut JsContextHost>,
-    expression: &str,
+    input: XPathInput<'_>,
     context_node: v8::Local<'a, v8::Object>,
-    namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
     requested_result_type: u32,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
@@ -179,34 +245,56 @@ fn evaluate_xpath<'a>(
     };
     let result = {
         let scope = &mut v8::ContextScope::new(scope, context);
-        let namespace_resolver =
-            namespace_resolver.map(|callback| V8XPathNamespaceResolver::new(scope, callback));
-        if let Some(runtime_ptr) = live_runtime_ptr
-            && let Some(context_handle) = node_arg_handle(scope, runtime_ptr, context_node.into())
-        {
-            evaluate_xpath_over_live_dom(
+        // Resolver callbacks may adopt or mutate the context node. Select its
+        // current tree only after compilation, with no DOM borrow or snapshot
+        // retained across author code. Compiled expressions reuse their AST.
+        let expression = match input {
+            XPathInput::Source(source, resolver) => {
+                compile_xpath(scope, source, resolver).map(Cow::Owned)
+            }
+            XPathInput::Compiled(expression) => Ok(Cow::Borrowed(expression)),
+        };
+        expression.and_then(|expression| {
+            evaluate_parsed_xpath_for_context(
                 scope,
-                runtime_ptr,
-                expression,
-                context_handle,
-                namespace_resolver,
+                &expression,
+                context_node,
                 requested_result_type,
             )
-        } else {
-            evaluate_xpath_over_object_tree(
-                scope,
-                root,
-                expression,
-                Some(context_node),
-                namespace_resolver,
-                requested_result_type,
-            )
-        }
+        })
     };
     match result {
         Ok(Some(result)) => rv.set(result.into()),
         Ok(None) => rv.set_null(),
         Err(error) => throw_xpath_evaluation_error(scope, error),
+    }
+}
+
+fn evaluate_parsed_xpath_for_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    expression: &moli_xpath::Expression,
+    context_node: v8::Local<'s, v8::Object>,
+    requested_result_type: u32,
+) -> Result<Option<v8::Local<'s, v8::Object>>, XPathEvaluationError> {
+    if let Ok((runtime_ptr, context_handle)) =
+        node_runtime_and_handle_from_object(scope, context_node)
+    {
+        evaluate_xpath_over_live_dom(
+            scope,
+            runtime_ptr,
+            expression,
+            context_handle,
+            requested_result_type,
+        )
+    } else {
+        let root = detached_tree_root_object(scope, context_node).unwrap_or(context_node);
+        evaluate_xpath_over_object_tree(
+            scope,
+            root,
+            expression,
+            Some(context_node),
+            requested_result_type,
+        )
     }
 }
 
@@ -248,11 +336,8 @@ pub(in crate::native_bridge) fn bridge_detached_document_evaluate_callback<'a>(
     evaluate_xpath(
         scope,
         root,
-        root,
-        None,
-        &parsed.expression,
+        XPathInput::Source(&parsed.expression, parsed.namespace_resolver),
         parsed.context_node,
-        parsed.namespace_resolver,
         u32::from(parsed.result_type),
         rv,
     );
@@ -267,17 +352,11 @@ pub(in crate::native_bridge) fn node_document_evaluate_callback<'a>(
     let Some(parsed) = webidl::parse_args::<DocumentEvaluateArgs<'a>>(scope, &args) else {
         return;
     };
-    let live_runtime_ptr = node_runtime_and_handle_from_object(scope, root)
-        .ok()
-        .map(|(runtime_ptr, _)| runtime_ptr);
     evaluate_xpath(
         scope,
         root,
-        root,
-        live_runtime_ptr,
-        &parsed.expression,
+        XPathInput::Source(&parsed.expression, parsed.namespace_resolver),
         parsed.context_node,
-        parsed.namespace_resolver,
         u32::from(parsed.result_type),
         rv,
     );
@@ -291,22 +370,89 @@ fn xpath_evaluator_evaluate_callback<'a>(
     let Some(parsed) = webidl::parse_args::<XPathEvaluatorEvaluateArgs<'a>>(scope, &args) else {
         return;
     };
-    let live_runtime_ptr = node_runtime_and_handle_from_object(scope, parsed.context_node)
-        .ok()
-        .map(|(runtime_ptr, _)| runtime_ptr);
-    let root = if live_runtime_ptr.is_some() {
-        parsed.context_node
-    } else {
-        detached_tree_root_object(scope, parsed.context_node).unwrap_or(parsed.context_node)
+    evaluate_xpath(
+        scope,
+        args.this(),
+        XPathInput::Source(&parsed.expression, parsed.namespace_resolver),
+        parsed.context_node,
+        u32::from(parsed.result_type),
+        rv,
+    );
+}
+
+fn create_xpath_expression<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    expression: &str,
+    namespace_resolver: Option<webidl::WebIdlCallbackInterface>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return;
+    };
+    let result = {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        compile_xpath(scope, expression, namespace_resolver)
+            .map(|expression| new_xpath_expression(scope, expression))
+    };
+    match result {
+        Ok(Some(expression)) => rv.set(expression.into()),
+        Ok(None) => {}
+        Err(error) => throw_xpath_evaluation_error(scope, error),
+    }
+}
+
+pub(in crate::native_bridge) fn node_document_create_expression_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<DocumentCreateExpressionArgs>(scope, &args) else {
+        return;
+    };
+    create_xpath_expression(
+        scope,
+        args.this(),
+        &parsed.expression,
+        parsed.namespace_resolver,
+        rv,
+    );
+}
+
+fn xpath_evaluator_create_expression_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<XPathEvaluatorCreateExpressionArgs>(scope, &args)
+    else {
+        return;
+    };
+    create_xpath_expression(
+        scope,
+        args.this(),
+        &parsed.expression,
+        parsed.namespace_resolver,
+        rv,
+    );
+}
+
+fn xpath_expression_evaluate_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(parsed) = webidl::parse_args::<XPathExpressionEvaluateArgs<'s>>(scope, &args) else {
+        return;
+    };
+    let Some(expression) = expression_for_receiver(scope, args.this()) else {
+        return;
     };
     evaluate_xpath(
         scope,
         args.this(),
-        root,
-        live_runtime_ptr,
-        &parsed.expression,
+        XPathInput::Compiled(&expression),
         parsed.context_node,
-        parsed.namespace_resolver,
         u32::from(parsed.result_type),
         rv,
     );

@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn xpath_compiled_expressions_preserve_namespaces_brands_and_realms() {
+    let mut vm = new_parsed_test_vm(
+        "https://xpath-expression.test/",
+        "<html><body></body></html>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("xpath_compiled_expressions.js"))
+            .expect("compiled XPath expression fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
+fn xpath_evaluation_uses_context_document_after_resolver_callbacks() {
+    let mut vm = new_parsed_test_vm("https://xpath-context.test/", "<html><body></body></html>");
+    assert_eq!(
+        vm.eval(include_str!("xpath_context_documents.js"))
+            .expect("XPath context document fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn xpath_evaluator_constructor_requires_new() {
     let mut vm = new_parsed_test_vm(
         "https://xpath-evaluator-constructor.test/",

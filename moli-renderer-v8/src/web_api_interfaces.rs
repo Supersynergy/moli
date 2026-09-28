@@ -506,6 +506,7 @@ interfaces! {
     XMLHttpRequestUpload: XMLHttpRequestEventTarget;
     XMLSerializer;
     XPathEvaluator;
+    XPathExpression;
     XPathResult;
 }
 

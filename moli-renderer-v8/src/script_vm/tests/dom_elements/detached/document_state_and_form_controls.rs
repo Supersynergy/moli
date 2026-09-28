@@ -1005,7 +1005,8 @@ fn document_template_methods_keep_declared_reflection_shape() {
     ["createNodeIterator", 1],
     ["createTreeWalker", 1],
     ["createNSResolver", 1],
-    ["evaluate", 5],
+    ["createExpression", 1],
+    ["evaluate", 2],
     ["hasStorageAccess", 0],
     ["requestStorageAccess", 0]
   ];

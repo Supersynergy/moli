@@ -1717,6 +1717,7 @@ pub(crate) fn finish_context_bootstrap(
         ("NodeIterator", "NodeIterator"),
         ("TreeWalker", "TreeWalker"),
         ("XPathEvaluator", "XPathEvaluator"),
+        ("XPathExpression", "XPathExpression"),
         ("XPathResult", "XPathResult"),
         ("SVGLength", "SVGLength"),
         ("SVGNumber", "SVGNumber"),

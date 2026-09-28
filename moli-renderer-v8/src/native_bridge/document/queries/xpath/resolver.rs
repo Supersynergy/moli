@@ -17,7 +17,7 @@ use moli_xpath::NamespaceResolver;
 /// `moli-xpath` may clone its resolver while parsing, so the independently
 /// rooted callback snapshot is shared with `Rc`. The raw scope pointer is safe
 /// only because the entire adapter remains inside one `Document.evaluate` /
-/// `XPathEvaluator.evaluate` V8 callback and never crosses an await, task, or
+/// `XPathEvaluator.evaluate` / `createExpression` V8 callback and never crosses an await, task, or
 /// thread boundary.
 #[derive(Clone)]
 pub(super) struct V8XPathNamespaceResolver<'s, 'i> {

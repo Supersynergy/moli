@@ -21,7 +21,7 @@ use markup5ever::{LocalName, Namespace, Prefix};
 pub use parser::{Error as ParserError, parse};
 pub use snapshot::{
     Snapshot, SnapshotBuilder, SnapshotNodeId, SnapshotValue, SnapshotXPathEvaluationError,
-    evaluate_snapshot_xpath, evaluate_snapshot_xpath_with_resolver,
+    evaluate_parsed_snapshot_xpath, evaluate_snapshot_xpath, evaluate_snapshot_xpath_with_resolver,
     evaluate_snapshot_xpath_with_resolver_detailed,
 };
 pub use value::{NodeSet, Value};
