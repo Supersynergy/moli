@@ -2,6 +2,40 @@ use super::*;
 use moli_fetch::FetchCancelHandle;
 
 #[test]
+fn background_phase_tracks_result_receipt_independently_of_document_commit() {
+    for commit_first in [false, true] {
+        let mut slot = TargetPageSlot::default();
+        let token = slot.start_document_navigation("target".into(), "loader".into());
+        assert_eq!(
+            slot.pending_navigation_request
+                .as_ref()
+                .unwrap()
+                .background_work,
+            BackgroundWorkState::NotStarted
+        );
+        assert!(!slot.settle_background_navigation_completion(&token));
+        slot.claim_background_navigation_completion(&token, None)
+            .unwrap();
+        if commit_first {
+            assert!(slot.commit_pending_document_navigation_if_matches(&token));
+        }
+        let request = slot.pending_navigation_request.as_ref().unwrap();
+        assert_eq!(request.background_work, BackgroundWorkState::Running);
+        assert_eq!(request.committed, commit_first);
+        assert!(slot.settle_background_navigation_completion(&token));
+        assert!(!slot.settle_background_navigation_completion(&token));
+        if !commit_first {
+            let request = slot.pending_navigation_request.as_ref().unwrap();
+            assert_eq!(request.background_work, BackgroundWorkState::ResultReceived);
+            assert!(!request.committed);
+            assert!(request.cancellation_handles.is_empty());
+            assert!(slot.commit_pending_document_navigation_if_matches(&token));
+        }
+        assert!(slot.pending_navigation_request.is_none());
+    }
+}
+
+#[test]
 fn claim_requires_the_exact_live_request() {
     let mut slot = TargetPageSlot::default();
     let old = slot.start_document_navigation("target".into(), "loader".into());

@@ -78,6 +78,13 @@ pub(crate) enum BackgroundNavigationClaimError {
     AlreadyClaimed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackgroundWorkState {
+    NotStarted,
+    Running,
+    ResultReceived,
+}
+
 /// The target-owned lifetime of one cross-Document navigation request.
 ///
 /// The exact token remains here from navigation admission until the request
@@ -90,7 +97,7 @@ pub(crate) struct PendingNavigationRequest {
     token: DocumentNavigationToken,
     page_attachment_id: TargetPageAttachmentId,
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
-    background_completion_pending: bool,
+    background_work: BackgroundWorkState,
     committed: bool,
 }
 
@@ -100,7 +107,7 @@ impl PendingNavigationRequest {
             token,
             page_attachment_id: TargetPageAttachmentId::allocate(),
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
-            background_completion_pending: false,
+            background_work: BackgroundWorkState::NotStarted,
             committed: false,
         }
     }
@@ -114,7 +121,7 @@ impl PendingNavigationRequest {
     }
 
     fn settle_background_completion(&mut self) {
-        self.background_completion_pending = false;
+        self.background_work = BackgroundWorkState::ResultReceived;
         self.cancellation_handles.clear();
     }
 
@@ -696,16 +703,22 @@ impl TargetPageSlot {
             .as_mut()
             .filter(|request| request.matches(token) && !request.committed)
             .ok_or(BackgroundNavigationClaimError::Stale)?;
-        if request.background_completion_pending {
-            return Err(BackgroundNavigationClaimError::AlreadyClaimed);
+        match request.background_work {
+            BackgroundWorkState::NotStarted => {}
+            BackgroundWorkState::Running => {
+                return Err(BackgroundNavigationClaimError::AlreadyClaimed);
+            }
+            BackgroundWorkState::ResultReceived => {
+                return Err(BackgroundNavigationClaimError::Stale);
+            }
         }
         let cancellation = request
             .cancellation_handle()
-            .ok_or(BackgroundNavigationClaimError::Stale)?;
+            .expect("an unstarted navigation owns cancellation authority");
         if let Some(additional_cancellation) = additional_cancellation {
             request.cancellation_handles.push(additional_cancellation);
         }
-        request.background_completion_pending = true;
+        request.background_work = BackgroundWorkState::Running;
         Ok(cancellation)
     }
 
@@ -713,11 +726,9 @@ impl TargetPageSlot {
         &mut self,
         token: &DocumentNavigationToken,
     ) -> bool {
-        let Some(request) = self
-            .pending_navigation_request
-            .as_mut()
-            .filter(|request| request.matches(token) && request.background_completion_pending)
-        else {
+        let Some(request) = self.pending_navigation_request.as_mut().filter(|request| {
+            request.matches(token) && request.background_work == BackgroundWorkState::Running
+        }) else {
             return false;
         };
         request.settle_background_completion();
@@ -730,7 +741,7 @@ impl TargetPageSlot {
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.pending_navigation_request
             .as_ref()
-            .is_some_and(|request| request.background_completion_pending)
+            .is_some_and(|request| request.background_work == BackgroundWorkState::Running)
     }
 
     pub(crate) fn bind_pending_document_navigation_renderer_page(
@@ -839,7 +850,7 @@ impl TargetPageSlot {
         };
         self.committed_document_navigation = Some(token.clone());
         request.committed = true;
-        if !request.background_completion_pending {
+        if request.background_work != BackgroundWorkState::Running {
             request.retire_without_cancellation();
             self.pending_navigation_request = None;
         }
