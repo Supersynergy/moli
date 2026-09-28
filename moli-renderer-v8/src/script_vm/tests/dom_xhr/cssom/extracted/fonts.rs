@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn css_font_feature_rule_receivers_use_native_brands_before_conversion() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-font-feature-receivers.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_font_feature_rule_receivers.js"))
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn css_font_feature_map_receivers_preserve_cross_realm_native_operations() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-font-feature-map-receivers.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("css_font_feature_map_receivers.js"))
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn css_font_face_rule_style_exposes_font_descriptors() {
     let mut vm = new_storage_test_vm("https://css-font-face-rule-style.test/");
 

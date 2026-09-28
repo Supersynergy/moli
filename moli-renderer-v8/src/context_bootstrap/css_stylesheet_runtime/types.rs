@@ -654,7 +654,7 @@ pub struct CssMarginRulePrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CSSFontFeatureValuesRule, enumerable)]
+#[webapi(interface = web_api_interfaces::CSSFontFeatureValuesRule, enumerable, receiver)]
 pub struct CssFontFeatureValuesRulePrototypeDeclaration {
     #[webapi(
         accessor_property,
