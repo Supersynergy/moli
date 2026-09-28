@@ -89,7 +89,7 @@ pub fn response_headers_indicate_attachment_download(headers: &[(String, Vec<u8>
 }
 
 pub fn response_headers_indicate_binary_document(headers: &[(String, Vec<u8>)]) -> bool {
-    response_content_type(headers)
+    response_document_content_type(headers)
         .as_deref()
         .is_some_and(is_binary_document_mime_type)
 }
@@ -100,12 +100,7 @@ pub fn response_headers_indicate_raw_document(headers: &[(String, Vec<u8>)]) -> 
 }
 
 pub fn response_document_content_type(headers: &[(String, Vec<u8>)]) -> Option<String> {
-    let content_type = response_header_values(headers, "content-type")
-        .into_iter()
-        .last()?;
-    (!content_type.trim().is_empty())
-        .then(|| mime_essence(&content_type))
-        .flatten()
+    extract_response_mime_essence(headers)
 }
 
 pub fn effective_response_mime_type(
