@@ -146,6 +146,31 @@ struct WindowComputedStyleMethodDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
+struct WindowLegacySurfaceAccessorsDeclaration<'scope> {
+    navigator_slot: v8::Local<'scope, v8::Value>,
+    external_slot: v8::Local<'scope, v8::Value>,
+    #[webapi(
+        accessor_property = "clientInformation",
+        enumerable,
+        getter = window_surface_slot_getter,
+        setter = window_surface_replaceable_setter,
+        data = self.navigator_slot,
+        setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("clientInformation").unwrap())
+    )]
+    client_information: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = window_surface_slot_getter,
+        setter = window_surface_replaceable_setter,
+        data = self.external_slot,
+        setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("external").unwrap())
+    )]
+    external: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
 struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
     history_slot: v8::Local<'scope, v8::Value>,
     navigation_slot: v8::Local<'scope, v8::Value>,
@@ -837,6 +862,18 @@ fn window_surface_slot_getter<'s>(
         }
         return;
     }
+    // Lightweight popup shells share their opener's V8 realm but have their
+    // own associated objects. Do not materialize the opener's lazy surface.
+    if matches!(slot, WINDOW_NAVIGATOR_SLOT | WINDOW_EXTERNAL_SLOT)
+        && crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some()
+    {
+        rv.set(
+            get_private_value(scope, receiver, slot)
+                .or(detached_fallback)
+                .unwrap_or_else(|| v8::undefined(scope).into()),
+        );
+        return;
+    }
     match super::window_lazy_surface::ensure_window_lazy_surface_value(scope, receiver, slot) {
         Ok(Some(value)) => {
             rv.set(value);
@@ -911,6 +948,7 @@ fn install_public_window_surface_accessors<'s>(
     let history_slot = window_surface_callback_data(scope, global, WINDOW_HISTORY_SLOT);
     let navigation_slot = window_surface_callback_data(scope, global, WINDOW_NAVIGATION_SLOT);
     let navigator_slot = window_surface_callback_data(scope, global, WINDOW_NAVIGATOR_SLOT);
+    let external_slot = window_surface_callback_data(scope, global, WINDOW_EXTERNAL_SLOT);
     let screen_slot = window_surface_callback_data(scope, global, WINDOW_SCREEN_SLOT);
     let speech_synthesis_slot =
         window_surface_callback_data(scope, global, WINDOW_SPEECH_SYNTHESIS_SLOT);
@@ -935,6 +973,7 @@ fn install_public_window_surface_accessors<'s>(
             performance_slot,
             visual_viewport_slot,
             indexed_db_slot,
+            external_slot,
         ],
     );
     set_private_value(
@@ -1030,6 +1069,13 @@ fn install_public_window_surface_accessors<'s>(
         name: (),
     }
     .initialize(scope, global)?;
+    WindowLegacySurfaceAccessorsDeclaration {
+        navigator_slot,
+        external_slot,
+        client_information: (),
+        external: (),
+    }
+    .initialize(scope, global)?;
     WindowAdditionalReplaceableAccessorsDeclaration {
         origin_name,
         inner_width_name,
@@ -1053,6 +1099,33 @@ fn install_public_window_surface_accessors<'s>(
         screen_y: (),
     }
     .initialize(scope, global)?;
+    Ok(())
+}
+
+pub(crate) fn install_lightweight_popup_legacy_objects<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    navigator: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    let external = super::external::build_external_object(scope)?;
+    set_private_value(scope, window, WINDOW_NAVIGATOR_SLOT, navigator.into());
+    set_private_value(scope, window, WINDOW_EXTERNAL_SLOT, external.into());
+    let navigator_slot = window_surface_callback_data(scope, window, WINDOW_NAVIGATOR_SLOT);
+    let external_slot = window_surface_callback_data(scope, window, WINDOW_EXTERNAL_SLOT);
+    WindowLegacySurfaceAccessorsDeclaration {
+        navigator_slot,
+        external_slot,
+        client_information: (),
+        external: (),
+    }
+    .initialize(scope, window)?;
+    let constructor = super::ensure_intrinsic_interface_constructor(scope, "External")?;
+    crate::util::define_non_enumerable_static_property(
+        scope,
+        window,
+        "External",
+        constructor.into(),
+    );
     Ok(())
 }
 
@@ -1110,11 +1183,14 @@ const WINDOW_SURFACE_SLOTS: &[&str] = &[
     WINDOW_PERFORMANCE_SLOT,
     WINDOW_VISUAL_VIEWPORT_SLOT,
     WINDOW_INDEXED_DB_SURFACE_SLOT,
+    WINDOW_EXTERNAL_SLOT,
 ];
 
 const WINDOW_SURFACE_CALLBACK_DATA_REGISTRY_SLOT: &str = "__moliWindowSurfaceCallbackDataRegistry";
 
 const WINDOW_SURFACE_REPLACEABLE_NAMES: &[&str] = &[
+    "clientInformation",
+    "external",
     "navigation",
     "screen",
     "performance",

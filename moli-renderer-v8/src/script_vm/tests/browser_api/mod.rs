@@ -53,7 +53,7 @@ mod trusted_types;
 mod value_events;
 mod web_audio;
 mod webrtc;
-
+mod window_legacy_objects;
 mod worker_listener_invocation;
 
 mod document_domain_lifetime;

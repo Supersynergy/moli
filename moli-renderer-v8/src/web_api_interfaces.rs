@@ -142,6 +142,7 @@ interfaces! {
     EventCountsIterator = "EventCounts Iterator";
     EventSource: EventTarget;
     EventTarget;
+    External;
     ExtendableEvent: Event;
     ExtendableMessageEvent: ExtendableEvent;
     FetchEvent: ExtendableEvent;
