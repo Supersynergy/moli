@@ -965,6 +965,58 @@ fn font_face_set_declared_slots_ignore_prototype_spoofing() {
     );
 }
 #[test]
+fn stylesheet_font_faces_use_intrinsics_after_public_constructor_replacement() {
+    for materialize_first in [false, true] {
+        for replacement in [
+            "{ configurable: true, get() { calls++; throw new Error('public getter'); } }",
+            "{ configurable: true, value: function() { calls++; throw new Error('public constructor'); } }",
+        ] {
+            let mut vm = new_storage_test_vm("https://font-face-intrinsic.test/");
+            let result = vm.eval(&format!(r#"
+(() => {{
+  let calls = 0;
+  const parent = document.body || document.documentElement || document;
+  const frame = parent.appendChild(document.createElement('iframe'));
+  return JSON.stringify([window, frame.contentWindow].map(w => {{
+    const original = {materialize_first} ? w.FontFace : null;
+    Object.defineProperty(w, 'FontFace', {replacement});
+    const d = w.document, fonts = d.fonts;
+    const style = d.createElement('style');
+    style.textContent = '@font-face {{ font-family: OriginalFace; src: local(OriginalFace); }}';
+    (d.head || d.documentElement || d).appendChild(style);
+    const first = Array.from(fonts)[0];
+    style.setAttribute('data-irrelevant', 'value');
+    const stable = Array.from(fonts)[0] === first;
+    style.sheet.insertRule('@font-face {{ font-family: Inserted; src: local(Inserted); }}', 1);
+    const faces = Array.from(fonts);
+    const result = {{
+      families: faces.map(face => face.family),
+      realm: faces.every(face => Object.getPrototypeOf(face).constructor instanceof w.Function),
+      prototype: !original || faces.every(face => Object.getPrototypeOf(face) === original.prototype),
+      stable: stable && faces[0] === first,
+      collection: fonts === d.fonts,
+      calls
+    }};
+    style.remove();
+    result.removed = fonts.size === 0;
+    return result;
+  }}));
+}})()
+"#)).expect("CSS font faces should bypass replaced public constructors");
+            let expected = serde_json::json!({
+                "families": ["OriginalFace", "Inserted"], "realm": true, "prototype": true,
+                "stable": true, "collection": true, "calls": 0, "removed": true,
+            });
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                serde_json::json!([expected, expected]),
+                "materialized: {materialize_first}, replacement: {replacement}"
+            );
+        }
+    }
+}
+
+#[test]
 fn document_fonts_tracks_connected_style_candidates() {
     let mut vm = new_storage_test_vm("https://document-fonts-candidates.test/");
 

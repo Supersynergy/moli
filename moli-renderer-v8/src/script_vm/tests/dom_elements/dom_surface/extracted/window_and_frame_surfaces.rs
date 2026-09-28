@@ -106,6 +106,10 @@ globalThis.realmFrame = document.createElement('iframe');
 realmFrame.srcdoc = `<!doctype html><head><script>
   globalThis.heldSheets = document.styleSheets;
   globalThis.heldFonts = document.fonts;
+  globalThis.IntrinsicFontFace = FontFace;
+  Object.defineProperty(globalThis, 'FontFace', { get() {
+    throw new Error('parser must not read the public FontFace constructor');
+  }, configurable: true });
 </` + `script><style>
   @font-face { font-family: ChildParser; src: local('ChildParser'); }
   div { color: green; }
@@ -144,7 +148,7 @@ realmFrame.srcdoc = `<!doctype html><head><script>
     sheetRealm: sheets[0] instanceof w.CSSStyleSheet &&
       sheets[0].cssRules[0] instanceof w.CSSFontFaceRule,
     fontCount: faces.length,
-    fontRealm: faces.every(face => face instanceof w.FontFace && !(face instanceof FontFace)),
+    fontRealm: faces.every(face => face instanceof w.IntrinsicFontFace && !(face instanceof FontFace)),
     sheetListRealm: sheets instanceof w.StyleSheetList,
     fontSetRealm: fonts instanceof w.FontFaceSet
   };
