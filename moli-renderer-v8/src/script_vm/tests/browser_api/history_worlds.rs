@@ -1,6 +1,66 @@
 use super::*;
 
 #[test]
+fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
+    let mut vm = new_storage_test_vm("https://event-field-getters.test/");
+    let result = vm.eval(r#"
+(() => {
+  const frame = (document.body || document.documentElement || document)
+    .appendChild(document.createElement('iframe'));
+  const other = frame.contentWindow;
+  const getters = new Set();
+  const own = (event, name) => Object.getOwnPropertyDescriptor(event, name);
+  const first = new CustomEvent('first', { detail: { value: 1 } });
+  const child = new other.CustomEvent('child', { detail: { value: 2 } });
+  for (let i = 0; i < 200; i++) {
+    const event = new CustomEvent(String(i), { detail: { value: i } });
+    for (const name of Object.keys(event)) getters.add(own(event, name).get);
+    if (event.type !== String(i) || event.detail.value !== i) throw new Error('captured instance');
+  }
+  const type = own(first, 'type'), detail = own(first, 'detail');
+  const childType = own(child, 'type');
+  let illegal = false;
+  try { childType.get.call({}); }
+  catch (error) { illegal = error instanceof other.TypeError; }
+  class DerivedEvent extends CustomEvent {
+    constructor() { super('derived'); this.original = this; }
+  }
+  const derived = new DerivedEvent();
+  // Optional ErrorEvent.error must not be inferred from the first instance.
+  const withoutError = new ErrorEvent('without');
+  const withError = new ErrorEvent('with', { error: first });
+  const toggle = new ToggleEvent('toggle');
+  const source = own(toggle, 'source');
+  return JSON.stringify({
+    getterCount: getters.size,
+    fieldCount: Object.keys(first).length,
+    base: type.get === own(new Event('base'), 'type').get,
+    realm: type.get instanceof Function && childType.get instanceof other.Function &&
+      childType.get !== type.get && !(childType.get instanceof Function),
+    borrowed: type.get.call(child) === 'child' && detail.get.call(child) === child.detail,
+    descriptor: [type.get.name, type.get.length, type.set === undefined, type.enumerable, type.configurable],
+    trusted: own(first, 'isTrusted').configurable === false && first.isTrusted === false,
+    optional: !Object.hasOwn(withoutError, 'error') && Object.hasOwn(withError, 'error') && withError.error === first,
+    toggle: !source.enumerable && !source.configurable,
+    original: derived === derived.original && derived instanceof DerivedEvent,
+    illegal
+  });
+})()
+"#).expect("shared field getters should preserve instances, descriptors and realms");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["getterCount"], result["fieldCount"], "{result}");
+    assert_eq!(
+        result["descriptor"],
+        serde_json::json!(["get type", 0, true, true, true])
+    );
+    for property in [
+        "base", "realm", "borrowed", "trusted", "optional", "toggle", "original", "illegal",
+    ] {
+        assert_eq!(result[property], true, "{property}: {result}");
+    }
+}
+
+#[test]
 fn history_worlds_slot_backed_platform_fields_keep_local_wrappers() {
     let mut vm = new_storage_test_vm("https://example.com/base");
     vm.eval(r#"
