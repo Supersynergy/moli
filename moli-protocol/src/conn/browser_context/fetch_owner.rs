@@ -552,22 +552,32 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer_for_terminal_action_for_owner(
+    pub(crate) fn take_fetch_response_transfer_for_cancellation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
         self.target_session_owner_mut_for_owner(owner)?
-            .take_pending_fetch_response_transfer_for_terminal_action(request_id)
+            .take_fetch_response_transfer_for_cancellation(request_id)
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer_for_body_read_for_owner(
+    pub(crate) fn start_pending_fetch_response_body_read_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        request_id: &str,
+    ) -> Option<crate::conn::PendingDocumentBodyRead> {
+        self.target_session_owner_mut_for_owner(owner)?
+            .pending_fetch_owner_mut()?
+            .start_pending_fetch_response_body_read(request_id)
+    }
+
+    pub(crate) fn take_available_fetch_response_transfer_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
         self.target_session_owner_mut_for_owner(owner)?
-            .take_pending_fetch_response_transfer(request_id)
+            .take_available_fetch_response_transfer(request_id)
     }
 
     pub(crate) fn register_pending_fetch_response_transfer_for_owner(
@@ -580,6 +590,16 @@ impl CdpConnection {
             .is_some_and(|mut owner| {
                 owner.register_pending_fetch_response_transfer(request_id, transfer)
             })
+    }
+
+    pub(crate) fn finish_pending_fetch_response_body_read_for_owner<T>(
+        &mut self,
+        owner: &CommandOwnerScope,
+        completed: crate::conn::CompletedDocumentBodyRead<T>,
+    ) -> Option<anyhow::Result<T>> {
+        self.target_session_owner_mut_for_owner(owner)?
+            .pending_fetch_owner_mut()?
+            .finish_pending_fetch_response_body_read(completed)
     }
 
     pub(crate) fn pending_subresource_fetch_response_request_for_owner(
@@ -675,7 +695,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         completed: CompletedFetchResponseBodyStreamReadDispatch,
     ) -> PendingFetchResponseBodyStreamRead {
-        let stream_owner = target_scoped_stream_owner_from_handle(completed.handle());
+        let stream_owner = target_scoped_stream_owner_from_handle(&completed.handle);
         let Some(stream_owner) = stream_owner else {
             return self.finish_pending_fetch_response_body_stream_read_for_session_owner(
                 session_id, completed,
@@ -1307,8 +1327,8 @@ impl TargetSessionOwnerMut<'_> {
         if let Some(token) = document_navigation_token.as_ref()
             && let crate::conn::DocumentBodySource::StreamingRaw { response, .. } = &body
         {
-            // Supersession must cancel the transport even while an IO.read
-            // task temporarily owns the response outside the Fetch maps.
+            // Navigation cancellation also covers a response already handed
+            // to a body reader or a continuation outside the Fetch owner.
             self.runtime_slot_mut()
                 .page_slot_mut()
                 .add_document_navigation_cancellation(token, response.cancellation_handle());
@@ -1325,20 +1345,20 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn take_pending_fetch_response_transfer_for_terminal_action(
+    fn take_fetch_response_transfer_for_cancellation(
         &mut self,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
         self.pending_fetch_owner_mut()?
-            .take_pending_fetch_response_transfer_for_terminal_action(request_id)
+            .take_fetch_response_transfer_for_cancellation(request_id)
     }
 
-    fn take_pending_fetch_response_transfer(
+    fn take_available_fetch_response_transfer(
         &mut self,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
         self.pending_fetch_owner_mut()?
-            .take_pending_fetch_response_transfer(request_id)
+            .take_available_fetch_response_transfer(request_id)
     }
 
     fn register_pending_fetch_response_transfer(

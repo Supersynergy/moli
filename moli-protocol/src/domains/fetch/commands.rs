@@ -655,7 +655,7 @@ fn start_devtools_fail_intercepted_request_command(
     }
 
     if let Some(transfer) =
-        conn.take_pending_fetch_response_transfer_for_terminal_action_for_owner(owner, &request_id)
+        conn.take_fetch_response_transfer_for_cancellation_for_owner(owner, &request_id)
     {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
@@ -1054,7 +1054,7 @@ fn start_devtools_fulfill_intercepted_request_command(
     }
 
     if let Some(transfer) =
-        conn.take_pending_fetch_response_transfer_for_terminal_action_for_owner(owner, &request_id)
+        conn.take_available_fetch_response_transfer_for_owner(owner, &request_id)
     {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
@@ -1542,7 +1542,7 @@ fn start_devtools_continue_intercepted_response_command(
         command.context.session_id.as_ref(),
     );
     if let Some(transfer) =
-        conn.take_pending_fetch_response_transfer_for_terminal_action_for_owner(owner, &request_id)
+        conn.take_available_fetch_response_transfer_for_owner(owner, &request_id)
     {
         let _ = &command.response_phrase;
         let transfer_response_headers = response_headers.clone().unwrap_or_default();

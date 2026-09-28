@@ -4,10 +4,10 @@ use serde_json::{Value, json};
 use url::Url;
 
 use super::super::fetch_support::{
-    ClaimedSubresourceContinueRequest, DocumentBodySource, InFlightSubresourceFetchRequest,
-    PausedDocumentTransfer, PausedDocumentTransfers, PendingFetchAuthNavigation,
-    PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
-    PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
+    ClaimedSubresourceContinueRequest, CompletedDocumentBodyRead, DocumentBodySource,
+    InFlightSubresourceFetchRequest, PausedDocumentTransfer, PausedDocumentTransfers,
+    PendingDocumentBodyRead, PendingFetchAuthNavigation, PendingFetchNavigation,
+    PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadStart,
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
     ResponseStageUrlMatchPolicy, fetch_subresource_interception_config_for_patterns,
@@ -573,7 +573,7 @@ impl TargetFetchState {
             .register_pending_navigation(request_id, document_navigation_token, navigation, body);
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer_for_terminal_action(
+    pub(crate) fn take_fetch_response_transfer_for_cancellation(
         &mut self,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
@@ -582,11 +582,15 @@ impl TargetFetchState {
         Some(transfer)
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer(
+    pub(crate) fn take_available_fetch_response_transfer(
         &mut self,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
-        self.pending_fetch_response_transfers.take(request_id)
+        let transfer = self
+            .pending_fetch_response_transfers
+            .take_available(request_id)?;
+        self.pending_fetch_request_ids.remove(request_id);
+        Some(transfer)
     }
 
     pub(crate) fn register_pending_fetch_response_transfer(
@@ -613,7 +617,7 @@ impl TargetFetchState {
         request_id: &str,
         handle: String,
     ) -> anyhow::Result<Option<String>> {
-        let Some(transfer) = self.take_pending_fetch_response_transfer(request_id) else {
+        let Some(transfer) = self.take_available_fetch_response_transfer(request_id) else {
             return Ok(None);
         };
         let opened = match transfer.open_body_stream(handle) {
@@ -638,33 +642,30 @@ impl TargetFetchState {
         Ok(Some(handle))
     }
 
+    pub(crate) fn start_pending_fetch_response_body_read(
+        &mut self,
+        request_id: &str,
+    ) -> Option<PendingDocumentBodyRead> {
+        self.pending_fetch_response_transfers
+            .start_body_read(request_id)
+    }
+
+    pub(crate) fn finish_pending_fetch_response_body_read<T>(
+        &mut self,
+        completed: CompletedDocumentBodyRead<T>,
+    ) -> Option<anyhow::Result<T>> {
+        self.pending_fetch_response_transfers
+            .finish_body_read(completed)
+    }
+
     pub(crate) fn start_pending_fetch_response_body_stream_read(
         &mut self,
         handle: &str,
         offset: Option<usize>,
         size: Option<usize>,
     ) -> PendingFetchResponseBodyStreamReadStart {
-        let Some((request_id, transfer)) =
-            self.take_pending_fetch_response_body_stream_by_handle(handle)
-        else {
-            return PendingFetchResponseBodyStreamReadStart::NotFound;
-        };
-
-        if let Some(offset) = offset
-            && offset != transfer.body_stream_offset().unwrap_or(0)
-        {
-            self.register_pending_fetch_response_transfer(request_id, transfer);
-            return PendingFetchResponseBodyStreamReadStart::OffsetNotSupported;
-        }
-
-        PendingFetchResponseBodyStreamReadStart::Pending(Box::new(
-            PendingFetchResponseBodyStreamReadDispatch::new(
-                request_id,
-                handle.to_owned(),
-                transfer,
-                size,
-            ),
-        ))
+        self.pending_fetch_response_transfers
+            .start_body_stream_read(handle, offset, size)
     }
 
     pub(crate) fn finish_pending_fetch_response_body_stream_read(
@@ -672,47 +673,18 @@ impl TargetFetchState {
         runtime_slot: &mut TargetRuntimeSlot,
         completed: super::super::fetch_support::CompletedFetchResponseBodyStreamReadDispatch,
     ) -> PendingFetchResponseBodyStreamRead {
-        let request_id = completed.request_id().to_owned();
-        let handle = completed.handle().to_owned();
-        let (transfer, read) = match completed.into_completed() {
-            Ok((bytes, eof, transfer)) => (
-                transfer,
-                PendingFetchResponseBodyStreamRead::Read { bytes, eof },
-            ),
-            Err(completed) => {
-                let (transfer, message) = *completed;
-                (
-                    transfer,
-                    PendingFetchResponseBodyStreamRead::Failed(message),
-                )
-            }
+        let Some(result) = self.finish_pending_fetch_response_body_read(completed.completed) else {
+            return PendingFetchResponseBodyStreamRead::NotFound;
         };
-        if let Some(token) = transfer.navigation_token()
-            && !runtime_slot
-                .page_slot()
-                .accepts_pending_document_navigation_event(token)
-        {
-            self.pending_fetch_request_ids.remove(&request_id);
-            match runtime_slot.finish_renderer_document_navigation(token) {
-                Ok(finish) => {
-                    debug_assert!(finish.released_output.is_empty());
-                    debug_assert!(finish.renderer_call_replacements.is_none());
+        match result {
+            Ok((bytes, eof)) => {
+                if eof {
+                    runtime_slot.insert_io_stream(completed.handle, Vec::new(), 0);
                 }
-                Err(error) => {
-                    tracing::debug!(%error, "renderer channel closed before obsolete body read completed")
-                }
+                PendingFetchResponseBodyStreamRead::Read { bytes, eof }
             }
-            let (_, navigation) = transfer.into_navigation();
-            return PendingFetchResponseBodyStreamRead::SupersededNavigation(Box::new(navigation));
+            Err(error) => PendingFetchResponseBodyStreamRead::Failed(error),
         }
-        self.register_pending_fetch_response_transfer(request_id, transfer);
-        if matches!(
-            read,
-            PendingFetchResponseBodyStreamRead::Read { eof: true, .. }
-        ) {
-            runtime_slot.insert_io_stream(handle, Vec::new(), 0);
-        }
-        read
     }
 
     pub(crate) fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
@@ -1965,20 +1937,20 @@ impl TargetFetchOwner {
         );
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer_for_terminal_action(
+    pub(crate) fn take_fetch_response_transfer_for_cancellation(
         &mut self,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
         self.pending
-            .take_pending_fetch_response_transfer_for_terminal_action(request_id)
+            .take_fetch_response_transfer_for_cancellation(request_id)
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer(
+    pub(crate) fn take_available_fetch_response_transfer(
         &mut self,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
         self.pending
-            .take_pending_fetch_response_transfer(request_id)
+            .take_available_fetch_response_transfer(request_id)
     }
 
     pub(crate) fn register_pending_fetch_response_transfer(
@@ -2153,6 +2125,22 @@ impl TargetFetchOwner {
     ) -> PendingFetchResponseBodyStreamReadStart {
         self.pending
             .start_pending_fetch_response_body_stream_read(handle, offset, size)
+    }
+
+    pub(crate) fn start_pending_fetch_response_body_read(
+        &mut self,
+        request_id: &str,
+    ) -> Option<PendingDocumentBodyRead> {
+        self.pending
+            .start_pending_fetch_response_body_read(request_id)
+    }
+
+    pub(crate) fn finish_pending_fetch_response_body_read<T>(
+        &mut self,
+        completed: CompletedDocumentBodyRead<T>,
+    ) -> Option<anyhow::Result<T>> {
+        self.pending
+            .finish_pending_fetch_response_body_read(completed)
     }
 
     pub(crate) fn finish_pending_fetch_response_body_stream_read(
