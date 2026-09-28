@@ -50,6 +50,7 @@ mod transferable_streams;
 mod traversal;
 mod traversal_coordinator;
 mod trusted_types;
+mod value_events;
 mod web_audio;
 mod webrtc;
 
