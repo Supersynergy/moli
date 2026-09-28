@@ -116,7 +116,7 @@ pub(crate) fn complete_pending_io_command(
             let read = conn.finish_pending_fetch_response_body_stream_read_for_stream_owner(
                 session_id, *completed,
             );
-            read_fetch_response_body_stream_output_plan(conn, read)
+            read_fetch_response_body_stream_output_plan(read)
         }
         CompletedIoCommandKind::ResolveBlob(completed) => {
             complete_resolve_blob_command(conn, session_id, completed)
@@ -278,7 +278,6 @@ fn complete_read_blob_command(
 }
 
 fn read_fetch_response_body_stream_output_plan(
-    conn: &mut CdpConnection,
     read: PendingFetchResponseBodyStreamRead,
 ) -> CommandOutputPlan {
     match read {
@@ -288,14 +287,6 @@ fn read_fetch_response_body_stream_output_plan(
         PendingFetchResponseBodyStreamRead::Read { bytes, eof } => read_output_plan(&bytes, eof),
         PendingFetchResponseBodyStreamRead::Failed(error) => {
             CommandOutputPlan::error(-32000, format!("{error:#}"))
-        }
-        PendingFetchResponseBodyStreamRead::SupersededNavigation(navigation) => {
-            let mut plan = CommandOutputPlan::error(-32000, "StreamHandleNotFound");
-            plan.extend_background_events(super::page::superseded_intercepted_navigation_events(
-                conn,
-                &navigation,
-            ));
-            plan
         }
     }
 }

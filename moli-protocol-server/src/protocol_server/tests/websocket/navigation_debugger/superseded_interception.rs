@@ -1,40 +1,60 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum BodyRead {
+    Stream,
+    Buffered,
+}
+
 #[tokio::test]
 async fn superseded_fetch_request_does_not_block_cancelled_replacement() {
-    assert_superseded_interception("Request", false, false).await;
+    assert_superseded_interception("Request", false, None).await;
 }
 
 #[tokio::test]
 async fn superseded_fetch_response_does_not_block_cancelled_replacement() {
-    assert_superseded_interception("Response", false, false).await;
+    assert_superseded_interception("Response", false, None).await;
 }
 
 #[tokio::test]
 async fn superseded_fetch_request_preserves_the_cancelled_replacements_debugger_pause() {
-    assert_superseded_interception("Request", true, false).await;
+    assert_superseded_interception("Request", true, None).await;
 }
 
 #[tokio::test]
 async fn superseded_fetch_response_preserves_the_cancelled_replacements_debugger_pause() {
-    assert_superseded_interception("Response", true, false).await;
+    assert_superseded_interception("Response", true, None).await;
 }
 
 #[tokio::test]
 async fn superseded_response_cancels_an_inflight_body_read_without_resurrecting_the_request() {
-    assert_superseded_interception("Response", false, true).await;
+    assert_superseded_interception("Response", false, Some(BodyRead::Stream)).await;
 }
 
-async fn assert_superseded_interception(stage: &str, debugger_paused: bool, body_read: bool) {
+#[tokio::test]
+async fn superseded_get_response_body_retires_navigation_without_resurrecting_the_request() {
+    assert_superseded_interception("Response", false, Some(BodyRead::Buffered)).await;
+}
+
+#[tokio::test]
+async fn superseded_get_response_body_preserves_the_cancelled_replacements_debugger_pause() {
+    assert_superseded_interception("Response", true, Some(BodyRead::Buffered)).await;
+}
+
+async fn assert_superseded_interception(
+    stage: &str,
+    debugger_paused: bool,
+    body_read: Option<BodyRead>,
+) {
     use axum::response::IntoResponse;
 
     let (fixture_addr, fixture) = spawn_dedicated_fixture_server(
         Router::new().route(
             "/",
             get(move || async move {
-                if body_read {
+                if body_read.is_some() {
                     // Send the response head, but never finish the body. Only
-                    // navigation cancellation can release the pending IO.read.
+                    // navigation cancellation can release the pending read.
                     let stream = futures_util::stream::once(std::future::pending::<
                         Result<axum::body::Bytes, std::io::Error>,
                     >());
@@ -98,7 +118,20 @@ async fn assert_superseded_interception(stage: &str, debugger_paused: bool, body
         .await;
         requests.push(paused.last().unwrap()["params"]["requestId"].clone());
         messages.extend(paused);
-        if body_read && id == 9 {
+        if let Some(body_read) = body_read
+            && id == 9
+        {
+            if matches!(body_read, BodyRead::Buffered) {
+                send_cdp_command_without_wait(
+                    &mut socket,
+                    16,
+                    "Fetch.getResponseBody",
+                    Some(&session_id),
+                    json!({"requestId": requests[0]}),
+                )
+                .await;
+                continue;
+            }
             let opened = send_cdp_command(
                 &mut socket,
                 15,
@@ -159,7 +192,7 @@ async fn assert_superseded_interception(stage: &str, debugger_paused: bool, body
         while ![9, 13]
             .into_iter()
             .all(|id| messages.iter().any(|message| message["id"] == id))
-            || (body_read && !messages.iter().any(|message| message["id"] == 16))
+            || (body_read.is_some() && !messages.iter().any(|message| message["id"] == 16))
         {
             messages.push(recv_ws_json(&mut socket).await);
         }
@@ -184,7 +217,7 @@ async fn assert_superseded_interception(stage: &str, debugger_paused: bool, body
 
     assert!(
         completion.is_ok(),
-        "unhandled stale A blocked the old document: {messages:#?}"
+        "stale A must retire and leave the old document usable: {messages:#?}"
     );
     for id in [9, 10] {
         let replies = messages
@@ -232,10 +265,14 @@ async fn assert_superseded_interception(stage: &str, debugger_paused: bool, body
             .any(|message| message["id"] == 14 && message.get("error").is_some()),
         "the retired interception must no longer accept client actions: {messages:#?}"
     );
-    if body_read {
+    if let Some(body_read) = body_read {
+        let expected_error = match body_read {
+            BodyRead::Stream => "StreamHandleNotFound",
+            BodyRead::Buffered => "RequestNotFound",
+        };
         assert!(
             messages.iter().any(|message| message["id"] == 16
-                && message["error"]["message"] == "StreamHandleNotFound"),
+                && message["error"]["message"] == expected_error),
             "the cancelled read must complete without restoring the old response: {messages:#?}"
         );
     }

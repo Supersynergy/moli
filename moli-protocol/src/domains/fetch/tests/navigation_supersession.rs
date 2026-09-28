@@ -1,5 +1,133 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn get_response_body_success_queued_before_supersession_cannot_restore_the_old_request() {
+    use crate::domains::fetch::{
+        CompletedFetchCommandOperation, FetchCommandTaskStep, complete_pending_fetch_command,
+        try_start_fetch_command_dispatch,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/{page}", get(|| async { "response body" })),
+        )
+        .await
+        .unwrap();
+    });
+    for cancel_replacement in [false, true] {
+        let mut ctx = TestContext::new();
+        ctx.conn
+            .install_browser_context_fixture_for_test(attached_browser_context());
+        ctx.process_async(
+            json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable",
+            "params": {"patterns": [{"urlPattern": "*", "requestStage": "Response"}]}}),
+        )
+        .await;
+        ctx.expect_result(1, json!({}), Some("SID-1"));
+        ctx.process_async(
+            json!({"id": 2, "sessionId": "SID-1", "method": "Page.navigate",
+            "params": {"url": format!("http://{addr}/old")}}),
+        )
+        .await;
+        let old = ctx
+            .wait_for_scheduler_message("old response pause", |message| {
+                message["method"] == "Fetch.requestPaused"
+            })
+            .await["params"]["requestId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let command = moli_protocol_cdp::ParsedCdpCommand::from_serializable(
+            json!({"id": 3, "sessionId": "SID-1", "method": "Fetch.getResponseBody",
+            "params": {"requestId": old}}),
+        )
+        .unwrap();
+        let cmd = crate::conn::Cmd::from_parsed(&command).unwrap();
+        let Some(FetchCommandTaskStep::Pending(read)) =
+            try_start_fetch_command_dispatch(&mut ctx.conn, &cmd)
+        else {
+            panic!("getResponseBody must hand its body to the read task");
+        };
+        // Materialization succeeds, but its completion has not yet returned to
+        // the owner. Supersession must reject this queued success too.
+        let completed = read.wait().await;
+        assert!(matches!(
+            &completed.completed,
+            CompletedFetchCommandOperation::MaterializeResponseBody { completed, .. }
+                if matches!(completed.result(), Ok(Some(bytes)) if bytes == b"response body")
+        ));
+        ctx.process_async(
+            json!({"id": 4, "sessionId": "SID-1", "method": "Page.navigate",
+            "params": {"url": format!("http://{addr}/current")}}),
+        )
+        .await;
+        let current = ctx
+            .wait_for_scheduler_message("current response pause", |message| {
+                message["method"] == "Fetch.requestPaused"
+            })
+            .await["params"]["requestId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(old, current);
+        assert_eq!(
+            take_response_by_id(&mut ctx, 2)["result"]["errorText"],
+            "net::ERR_ABORTED",
+            "supersession must reply before the body read completion is processed"
+        );
+        if cancel_replacement {
+            ctx.process_async(
+                json!({"id": 5, "sessionId": "SID-1", "method": "Fetch.failRequest",
+                "params": {"requestId": current, "errorReason": "Aborted"}}),
+            )
+            .await;
+        }
+        complete_pending_fetch_command(&mut ctx.conn, completed)
+            .await
+            .emit_into(&mut ctx.sent, Some(3), Some("SID-1"));
+        assert_eq!(
+            take_response_by_id(&mut ctx, 3)["error"]["message"],
+            "RequestNotFound"
+        );
+        assert!(!ctx.sent.iter().any(|message| message["id"] == 2));
+        assert_eq!(
+            ctx.conn
+                .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1")),
+            !cancel_replacement
+        );
+        let fetch = &ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner;
+        assert!(!fetch.has_pending_fetch_request_id_for_test(&old));
+        assert!(!fetch.pending_fetch_response_transfer_is_pending_for_test(&old));
+        assert_eq!(
+            fetch.has_pending_fetch_request_id_for_test(&current),
+            !cancel_replacement
+        );
+        ctx.process_async(
+            json!({"id": 6, "sessionId": "SID-1", "method": "Fetch.continueResponse",
+            "params": {"requestId": old}}),
+        )
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 6)["error"]["message"],
+            "RequestNotFound"
+        );
+        assert!(
+            !ctx.sent.iter().any(|message| message["id"] == 2),
+            "late actions must not reply to Page.navigate twice"
+        );
+    }
+    server.abort();
+}
+
 async fn start_request_pause(
     ctx: &mut TestContext,
     id: u64,

@@ -30,8 +30,8 @@ pub(super) fn start_get_response_body_command(
             ));
         }
     };
-    if let Some(transfer) = conn
-        .take_pending_fetch_response_transfer_for_body_read_for_owner(&owner, &params.request_id)
+    if let Some(read) =
+        conn.start_pending_fetch_response_body_read_for_owner(&owner, &params.request_id)
     {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             cmd.id,
@@ -39,7 +39,7 @@ pub(super) fn start_get_response_body_command(
             PendingFetchCommandKind::GetResponseBody,
             PendingFetchCommandOperation::MaterializeResponseBody {
                 request_id: params.request_id,
-                transfer: Box::new(transfer),
+                read: Box::new(read),
                 limit: conn.response_body_materialize_limit(),
             },
         ));
@@ -102,7 +102,10 @@ pub(super) fn complete_get_response_body_from_transfer(
     completed: CompletedFetchCommandOperation,
     out: &mut super::FetchCommandOutput,
 ) {
-    let CompletedFetchCommandOperation::MaterializeResponseBody { request_id, result } = completed
+    let CompletedFetchCommandOperation::MaterializeResponseBody {
+        request_id,
+        completed,
+    } = completed
     else {
         out.extend_plan_as_command_response(CommandOutputPlan::error(
             -32000,
@@ -110,23 +113,17 @@ pub(super) fn complete_get_response_body_from_transfer(
         ));
         return;
     };
-    let plan = match *result {
-        Ok((Some(bytes), transfer)) => {
-            conn.register_pending_fetch_response_transfer_for_owner(owner, request_id, transfer);
-            response_body_command_output_plan(bytes)
-        }
-        Ok((None, transfer)) => {
-            conn.register_pending_fetch_response_transfer_for_owner(
-                owner,
-                request_id.clone(),
-                transfer,
-            );
+    let Some(body) = conn.finish_pending_fetch_response_body_read_for_owner(owner, *completed)
+    else {
+        out.push_error(-32000, "RequestNotFound");
+        return;
+    };
+    let plan = match body {
+        Ok(Some(bytes)) => response_body_command_output_plan(bytes),
+        Ok(None) => {
             get_response_body_without_transfer_command_output_plan(conn, owner, &request_id)
         }
-        Err((message, transfer)) => {
-            conn.register_pending_fetch_response_transfer_for_owner(owner, request_id, transfer);
-            CommandOutputPlan::error(-32000, format!("{message:#}"))
-        }
+        Err(error) => CommandOutputPlan::error(-32000, format!("{error:#}")),
     };
     out.extend_plan_as_command_response(plan);
 }

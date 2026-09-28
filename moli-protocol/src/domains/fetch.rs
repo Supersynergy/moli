@@ -189,7 +189,7 @@ enum PendingFetchCommandOperation {
     Page(moli_core::page::PendingPageCommand),
     MaterializeResponseBody {
         request_id: String,
-        transfer: Box<crate::conn::PausedDocumentTransfer>,
+        read: Box<crate::conn::PendingDocumentBodyRead>,
         limit: usize,
     },
 }
@@ -199,12 +199,7 @@ enum CompletedFetchCommandOperation {
     Page(Box<Result<moli_core::page::CompletedPageCommand, String>>),
     MaterializeResponseBody {
         request_id: String,
-        result: Box<
-            Result<
-                (Option<Vec<u8>>, crate::conn::PausedDocumentTransfer),
-                (anyhow::Error, crate::conn::PausedDocumentTransfer),
-            >,
-        >,
+        completed: Box<crate::conn::CompletedDocumentBodyRead<Option<Vec<u8>>>>,
     },
 }
 
@@ -332,11 +327,11 @@ impl PendingFetchCommandDispatch {
             ),
             PendingFetchCommandOperation::MaterializeResponseBody {
                 request_id,
-                transfer,
+                read,
                 limit,
             } => CompletedFetchCommandOperation::MaterializeResponseBody {
                 request_id,
-                result: Box::new(transfer.materialize_body_limited_async(limit).await),
+                completed: Box::new(read.materialize(limit).await),
             },
         };
         CompletedFetchCommandDispatch {

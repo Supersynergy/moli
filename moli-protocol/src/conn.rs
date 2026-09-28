@@ -100,7 +100,8 @@ pub use dispatch::{CdpCommandTaskStep, CompletedCdpCommandDispatch, PendingCdpCo
 pub(crate) use downloads::SharedDownloadRegistry;
 pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
 pub(crate) use fetch_support::{
-    ClaimedSubresourceContinueRequest, CompletedFetchResponseBodyStreamReadDispatch,
+    ClaimedSubresourceContinueRequest, CompletedDocumentBodyRead,
+    CompletedFetchResponseBodyStreamReadDispatch, PendingDocumentBodyRead,
     PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadDispatch,
     PendingFetchResponseBodyStreamReadStart, PendingSubresourceFetchResidence,
 };

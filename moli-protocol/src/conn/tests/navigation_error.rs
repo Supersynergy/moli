@@ -234,11 +234,24 @@ async fn fetch_body_stream_read_preserves_error_type_and_paused_transfer() {
     .open_body_stream("stream-typed-error".to_owned())
     .expect("streamed response should open")
     .transfer;
-    let (transfer, error) = transfer
-        .read_body_stream_async(None)
-        .await
+    let mut transfers = crate::conn::PausedDocumentTransfers::default();
+    transfers.register("fetch-typed-error".to_owned(), transfer);
+    let crate::conn::PendingFetchResponseBodyStreamReadStart::Pending(read) =
+        transfers.start_body_stream_read("stream-typed-error", None, None)
+    else {
+        panic!("stream read must start");
+    };
+    let error = transfers
+        .finish_body_read(read.wait().await.completed)
+        .expect("the request is still registered")
         .expect_err("partial transport failure must fail the stream read");
-    assert_eq!(transfer.fetch_request_id(), "fetch-typed-error");
+    assert_eq!(
+        transfers
+            .get("fetch-typed-error")
+            .unwrap()
+            .fetch_request_id(),
+        "fetch-typed-error"
+    );
     assert_eq!(
         error
             .downcast_ref::<std::io::Error>()
