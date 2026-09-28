@@ -15,8 +15,7 @@ use super::super::{
     exposed_interfaces::install_interface_template_metadata,
     file_api::{
         data_transfer_constructor_callback, file_constructor_callback,
-        file_list_constructor_callback, file_reader_constructor_callback,
-        file_reader_sync_constructor_callback,
+        file_reader_constructor_callback, file_reader_sync_constructor_callback,
     },
     form_data_runtime::build_form_data_constructor_template,
     geometry_runtime::{dom_matrix_constructor_callback, dom_point_constructor_callback},
@@ -449,14 +448,6 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 file_constructor_callback
             ))
             .length(2)
-            .build(scope)
-        }
-        ConstructorKind::FileList => {
-            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                web_api_interfaces::FileList,
-                file_list_constructor_callback
-            ))
-            .length(0)
             .build(scope)
         }
         ConstructorKind::FileReader => {

@@ -964,3 +964,27 @@ fn mouse_dragstart_bubbles_to_window_once() {
         .expect("dragstart log should evaluate");
     assert_eq!(result, "1|dragstart:true:true");
 }
+
+#[test]
+fn file_list_uses_illegal_constructor_and_native_file_sources() {
+    let mut vm = new_storage_test_vm("https://file-list-construction.test/");
+    let result = vm
+        .eval(
+            r#"
+      (() => {
+        let reads = 0;
+        const input = {get length() { reads++; return 0; }};
+        let rejected = false;
+        try { new FileList(input); } catch (error) { rejected = error instanceof TypeError; }
+        const transfer = new DataTransfer();
+        const file = new File(['payload'], 'example.txt');
+        transfer.items.add(file);
+        const native = transfer.files;
+        return JSON.stringify([rejected, reads, native instanceof FileList,
+          native.length, native.item(0) === file, native.item(1) === null]);
+      })()
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, "[true,0,true,1,true,true]");
+}
