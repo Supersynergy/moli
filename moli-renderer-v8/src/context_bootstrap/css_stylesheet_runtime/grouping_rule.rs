@@ -15,10 +15,13 @@ pub(crate) fn css_grouping_rule_css_rules_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !ensure_css_rule_object(scope, args.this(), "CSSGroupingRule", "cssRules") {
-        return;
-    }
-    let rules = css_grouping_rule_rules_array(scope, args.this());
+    let this = args.this();
+    let rules =
+        if css_rule_current_stylo_rule_type_from_object(scope, this) == Some(CssRuleType::Style) {
+            css_style_rule_rules_array(scope, this)
+        } else {
+            css_grouping_rule_rules_array(scope, this)
+        };
     rv.set(rules.into());
 }
 
@@ -252,9 +255,6 @@ pub(crate) fn css_grouping_rule_insert_rule_callback<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let this = args.this();
-    if !ensure_css_rule_object(scope, this, "CSSGroupingRule", "insertRule") {
-        return;
-    }
     let is_style_rule =
         css_rule_current_stylo_rule_type_from_object(scope, this) == Some(CssRuleType::Style);
     let rules = if is_style_rule {
@@ -376,9 +376,6 @@ pub(crate) fn css_grouping_rule_delete_rule_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !ensure_css_rule_object(scope, args.this(), "CSSGroupingRule", "deleteRule") {
-        return;
-    }
     let Some(parsed) = webidl::parse_args::<CssGroupingRuleDeleteRuleArgs>(scope, &args) else {
         return;
     };
