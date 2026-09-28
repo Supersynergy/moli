@@ -34,9 +34,10 @@ pub use conn::{
     PendingRuntimeProtocolMessageDispatch,
 };
 pub use domains::activity::{
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, ProtocolWorkPublishSequence,
-    RuntimeCommandOutputBarrierCompletion, RuntimeCommandOutputBarrierPermit,
-    RuntimeCommandOutputBarrierTerminal, RuntimeCommandOutputBarriers,
+    ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
+    ProtocolWorkPublishSequence, RuntimeCommandOutputBarrierCompletion,
+    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarrierTerminal,
+    RuntimeCommandOutputBarriers,
 };
 pub use domains::page::{
     BackgroundNavigationCompletion, CompletedPageScreencastCapture,

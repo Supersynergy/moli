@@ -172,30 +172,8 @@ async fn project_renderer_output_records_for_owner(
 ) {
     for record in records {
         let (renderer_cause, mut item) = record.into_parts();
-        if projection == RendererPublicationProjection::RetiringNetworkAndResponses {
-            match &mut item {
-                RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::Network { .. },
-                ) => {}
-                RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::RuntimeInspector(batch),
-                ) => {
-                    // A completed command can reach ingress after its Page was
-                    // replaced. Let the session's exact call/attachment correlation
-                    // authorize that response, without reviving old notifications.
-                    batch.messages.retain(|message| {
-                        matches!(
-                            message,
-                            moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
-                                if message.renderer_call_id().is_some()
-                        )
-                    });
-                    if batch.messages.is_empty() {
-                        continue;
-                    }
-                }
-                _ => continue,
-            }
+        if !projection.admit_record(&mut item) {
+            continue;
         }
         match item {
             RendererOutputItem::OwnerAction(action) => {
@@ -432,6 +410,81 @@ mod tests {
         assert!(
             command_context.take_protocol_events().is_empty(),
             "a duplicate terminal response must not be delivered twice"
+        );
+        // Reuse a frontend id, then cancel the new pending call as session
+        // disposal does. Neither the old success nor the cancelled call's
+        // late success may deliver a second terminal or consume a future call.
+        let attachment = RendererAgentAttachmentId::allocate();
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-retiring-output"),
+                901_002,
+                Some(attachment),
+                RendererCommandDescriptor::from_frontend_policy(
+                    frontend.json().to_owned(),
+                    frontend.renderer_policy(),
+                    RendererInspectorResponseDelivery::SessionSink,
+                ),
+            )
+            .expect("frontend id can be reused after its terminal");
+        let cancelled_call_id = prepared.correlation().renderer_call_id().get();
+        drop(prepared);
+        project_renderer_output_records_for_owner(
+            &mut conn,
+            &owner,
+            vec![response(retired_attachment, renderer_call_id)],
+            RendererOutputCursor::new_for_test(stream, 4),
+            RendererPublicationProjection::RetiringNetworkAndResponses,
+            &mut barriers,
+            &mut command_context,
+        )
+        .await;
+        assert!(command_context.take_protocol_events().is_empty());
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+                .is_some(),
+            "the old terminal must not consume a new call reusing the frontend id"
+        );
+        let mut cancellations = Vec::new();
+        let mut claimed = Vec::new();
+        conn.fail_pending_inspector_awaits_for_owner_background_events_into(
+            &mut cancellations,
+            &mut claimed,
+            &owner,
+            "Inspector detached",
+        );
+        let cancellations = cancellations
+            .into_iter()
+            .chain(claimed)
+            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            cancellations.len(),
+            1,
+            "cancellation owes exactly one terminal"
+        );
+        assert_eq!(cancellations[0]["id"], 901_002);
+        assert!(cancellations[0].get("error").is_some());
+        project_renderer_output_records_for_owner(
+            &mut conn,
+            &owner,
+            vec![
+                response(retired_attachment, renderer_call_id),
+                response(attachment, cancelled_call_id),
+            ],
+            RendererOutputCursor::new_for_test(stream, 5),
+            RendererPublicationProjection::RetiringNetworkAndResponses,
+            &mut barriers,
+            &mut command_context,
+        )
+        .await;
+        assert!(
+            command_context.take_protocol_events().is_empty(),
+            "late results after cancellation must be discarded"
+        );
+        assert!(
+            conn.renderer_runtime_command_cause_for_frontend(Some("SID-retiring-output"), 901_002)
+                .is_none()
         );
     }
 

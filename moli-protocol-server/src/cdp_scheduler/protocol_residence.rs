@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use moli_core::RendererOutputCursor;
 use moli_protocol::{
     DeferredMainDocumentLoadObservationId, DeferredMainDocumentLoadPredecessorCandidate,
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
+    ProtocolNavigationDependency, ProtocolSchedulerWork, ProtocolSchedulerWorkKind,
 };
 
 use super::ProtocolOutputSequence;
@@ -108,11 +108,11 @@ pub(super) enum ClientTurnPredecessor {
 }
 
 impl ProtocolSchedulerResidence {
-    pub(super) fn bypasses_inflight_navigation_gate(&self) -> bool {
-        matches!(
-            self,
-            Self::ProtocolWork { work, .. } if work.bypasses_inflight_navigation_gate()
-        )
+    pub(super) fn navigation_dependency(&self) -> ProtocolNavigationDependency {
+        match self {
+            Self::ProtocolWork { work, .. } => work.navigation_dependency(),
+            Self::RendererOutputPublication(_) => ProtocolNavigationDependency::AfterLoad,
+        }
     }
 
     pub(super) fn should_yield_to_client_turn(&self) -> bool {

@@ -130,3 +130,35 @@ pub fn root_frame_stopped_loading_work_for_target(
         loader_id,
     )
 }
+
+/// A replacement action with a deliberately retired Page owner. Scheduler
+/// tests can check selection independently of the later owner authorization.
+pub fn retired_location_navigation_work_for_target(
+    publish_sequence: u64,
+    browser_context_id: String,
+    target_id: String,
+    source_document: RendererDocumentLifecycleIdentity,
+) -> ProtocolSchedulerWork {
+    let owner =
+        crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: browser_context_id.clone(),
+            target_id: target_id.clone(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        });
+    let page_owner = crate::conn::TargetPageResidenceIdentity::new(
+        browser_context_id,
+        Some(target_id),
+        crate::conn::TargetPageAttachmentId::allocate(),
+    );
+    ProtocolSchedulerWork::top_level_location_navigation_owner_action(
+        crate::ProtocolWorkPublishSequence::new(publish_sequence),
+        crate::conn::TopLevelLocationNavigationOwnerAction::from_prepared(
+            owner,
+            page_owner,
+            moli_core::page::RendererDocumentSourcedTopLevelLocationNavigation::new(
+                source_document,
+                "data:text/html,replacement".to_owned(),
+            ),
+        ),
+    )
+}
