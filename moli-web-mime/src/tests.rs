@@ -88,6 +88,55 @@ fn extracts_request_header_content_type_essence_for_fetch_rules() {
 }
 
 #[test]
+fn document_classification_uses_the_extracted_content_type() {
+    let cases: &[(&[&str], Option<&str>, bool)] = &[
+        (&["", "invalid", "*/*"], None, false),
+        (&["text/plain", ""], Some("text/plain"), false),
+        (&["text/html", "text/plain"], Some("text/plain"), false),
+        (&["text/html", "*/*;charset=GBK"], Some("text/html"), false),
+        (
+            &[r#"text/html;x=""#, "text/plain"],
+            Some("text/html"),
+            false,
+        ),
+        (
+            &["application/octet-stream", "text/html", "invalid"],
+            Some("text/html"),
+            false,
+        ),
+        (
+            &["text/html", "application/octet-stream", "*/*"],
+            Some("application/octet-stream"),
+            true,
+        ),
+        (
+            &["text/html", "application/xhtml+xml", ""],
+            Some("application/xhtml+xml"),
+            false,
+        ),
+    ];
+    for (values, expected, binary) in cases {
+        for fields in [values.to_vec(), vec![&values.join(",")]] {
+            let headers: Vec<_> = fields
+                .iter()
+                .map(|value| ("cOnTeNt-TyPe".to_owned(), value.as_bytes().to_vec()))
+                .collect();
+            assert_eq!(
+                response_document_content_type(&headers).as_deref(),
+                *expected,
+                "{fields:?}"
+            );
+            assert_eq!(response_headers_indicate_binary_document(&headers), *binary);
+            assert_eq!(response_headers_indicate_raw_document(&headers), *binary);
+
+            let mut attachment = headers;
+            attachment.push(("Content-Disposition".to_owned(), b"attachment".to_vec()));
+            assert!(response_headers_indicate_raw_document(&attachment));
+        }
+    }
+}
+
+#[test]
 fn matches_document_types() {
     assert!(is_html_document_mime("text/html;charset=utf-8"));
     assert!(is_dom_parser_xml_mime("image/svg+xml;charset=utf-8"));
