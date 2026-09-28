@@ -1,0 +1,1189 @@
+from __future__ import annotations
+
+from wpt_cross_test_support import *
+
+
+class WptCrossCaseEnumerationTests(WptCrossTestCase):
+    def test_enumerate_cases_includes_htm_before_applying_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "dom"
+            case_dir.mkdir()
+            harness = '<script src="/resources/testharness.js"></script>'
+            (case_dir / "a.htm").write_text(
+                '<meta name="timeout" content="long">'
+                '<meta name="variant" content="?mode=z">'
+                '<meta name="variant" content="?mode=a">'
+                + harness,
+                encoding="utf-8",
+            )
+            (case_dir / "z.html").write_text(harness, encoding="utf-8")
+            expected = [
+                WptCase("dom/a.htm?mode=a", LONG_TIMEOUT_MULTIPLIER),
+                WptCase("dom/a.htm?mode=z", LONG_TIMEOUT_MULTIPLIER),
+                WptCase("dom/z.html"),
+            ]
+
+            for prefixes in (None, ("dom",)):
+                with self.subTest(dir_prefixes=prefixes):
+                    self.assertEqual(
+                        enumerate_cases(wpt_root, dir_prefixes=prefixes), expected
+                    )
+                    self.assertEqual(
+                        enumerate_cases(wpt_root, dir_prefixes=prefixes, limit=1),
+                        expected[:1],
+                    )
+    def test_enumerate_cases_expands_wpt_meta_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "dom" / "ranges"
+            case_dir.mkdir(parents=True)
+            (case_dir / "variant.html").write_text(
+                """<!doctype html>
+<meta name="variant" content="?mode=open">
+<meta name="variant" content="?mode=closed#frag">
+<meta name="variant" content="?command=heading&param=h1">
+<meta name="variant" content="?mode=encoded&amp;flag=1">
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "plain.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "long.html").write_text(
+                """<!doctype html>
+<meta name="timeout" content="long">
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root, dir_prefixes=("dom/ranges",))
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            [
+                "dom/ranges/long.html",
+                "dom/ranges/plain.html",
+                "dom/ranges/variant.html?command=heading&param=h1",
+                "dom/ranges/variant.html?mode=closed#frag",
+                "dom/ranges/variant.html?mode=encoded&flag=1",
+                "dom/ranges/variant.html?mode=open",
+            ],
+        )
+        timeouts = {case.case_path: case.timeout_multiplier for case in cases}
+        self.assertEqual(timeouts["dom/ranges/long.html"], LONG_TIMEOUT_MULTIPLIER)
+        self.assertEqual(timeouts["dom/ranges/plain.html"], 1.0)
+        self.assertEqual(timeouts["dom/ranges/variant.html?mode=open"], 1.0)
+    def test_enumerate_cases_skips_wptserve_python_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "html" / "semantics"
+            common_dir = wpt_root / "common" / "security-features" / "resources"
+            case_dir.mkdir(parents=True)
+            common_dir.mkdir(parents=True)
+            (case_dir / "direct.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>fetch("/resources/inspect.py?cmd=get");</script>
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "external.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="helper.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "helper.js").write_text(
+                'fetch("/resources/inspect-header.py?cmd=get");',
+                encoding="utf-8",
+            )
+            (case_dir / "kept.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "generated-comment.html").write_text(
+                """<!doctype html>
+<!-- DO NOT EDIT! This test has been generated by /html/canvas/tools/gentest.py. -->
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "absolute-helper.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/common/security-features/resources/common.sub.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+            (common_dir / "common.sub.js").write_text(
+                'fetch("/common/security-features/subresource/xhr.py");',
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root, dir_prefixes=("html/semantics",))
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            [
+                "html/semantics/generated-comment.html",
+                "html/semantics/kept.html",
+            ],
+        )
+    def test_default_enumeration_uses_non_layout_blacklist_without_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            dom_dir = wpt_root / "dom" / "nodes"
+            encoding_dir = wpt_root / "encoding" / "legacy-mb-japanese"
+            canvas_dir = wpt_root / "html" / "canvas" / "element"
+            layout_dir = wpt_root / "css" / "css-grid"
+            container_query_dir = (
+                wpt_root / "css" / "css-conditional" / "container-queries"
+            )
+            css_conditional_dir = wpt_root / "css" / "css-conditional"
+            css_animation_dir = wpt_root / "css" / "css-animations" / "parsing"
+            css_animation_timeline_dir = wpt_root / "css" / "css-animations"
+            css_transition_dir = wpt_root / "css" / "css-transitions"
+            css_transition_parsing_dir = (
+                wpt_root / "css" / "css-transitions" / "parsing"
+            )
+            css_paint_dir = wpt_root / "css" / "css-paint-api"
+            css_scrollbar_dir = wpt_root / "css" / "css-scrollbars"
+            css_viewport_dir = wpt_root / "css" / "css-viewport" / "zoom"
+            css_viewport_parsing_dir = (
+                wpt_root / "css" / "css-viewport" / "zoom" / "parsing"
+            )
+            typed_om_dir = wpt_root / "css" / "css-typed-om"
+            render_blocking_dir = wpt_root / "html" / "dom" / "render-blocking"
+            service_worker_dir = wpt_root / "service-workers" / "service-worker"
+            service_worker_named_dir = wpt_root / "webusb"
+            non_service_worker_https_dir = wpt_root / "WebCryptoAPI"
+            media_dir = (
+                wpt_root / "html" / "semantics" / "embedded-content" / "media-elements"
+            )
+            iframe_dir = (
+                wpt_root
+                / "html"
+                / "semantics"
+                / "embedded-content"
+                / "the-iframe-element"
+            )
+            dom_dir.mkdir(parents=True)
+            encoding_dir.mkdir(parents=True)
+            canvas_dir.mkdir(parents=True)
+            layout_dir.mkdir(parents=True)
+            container_query_dir.mkdir(parents=True)
+            css_conditional_dir.mkdir(parents=True, exist_ok=True)
+            css_animation_dir.mkdir(parents=True)
+            css_transition_dir.mkdir(parents=True)
+            css_transition_parsing_dir.mkdir(parents=True)
+            css_paint_dir.mkdir(parents=True)
+            css_scrollbar_dir.mkdir(parents=True)
+            css_viewport_dir.mkdir(parents=True)
+            css_viewport_parsing_dir.mkdir(parents=True)
+            typed_om_dir.mkdir(parents=True)
+            render_blocking_dir.mkdir(parents=True)
+            service_worker_dir.mkdir(parents=True)
+            service_worker_named_dir.mkdir(parents=True)
+            non_service_worker_https_dir.mkdir(parents=True)
+            media_dir.mkdir(parents=True)
+            iframe_dir.mkdir(parents=True)
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+"""
+            (dom_dir / "kept.html").write_text(case_html, encoding="utf-8")
+            (encoding_dir / "kept.html").write_text(case_html, encoding="utf-8")
+            (canvas_dir / "filtered.html").write_text(case_html, encoding="utf-8")
+            (layout_dir / "filtered.html").write_text(case_html, encoding="utf-8")
+            (container_query_dir / "at-container-parsing.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (container_query_dir / "size-feature-evaluation.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (css_conditional_dir / "at-supports-named-feature-001.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (css_animation_dir / "kept.html").write_text(case_html, encoding="utf-8")
+            (css_animation_timeline_dir / "animate-with-color-mix.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (css_transition_dir / "events-001.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (css_transition_parsing_dir / "transition-computed.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (css_paint_dir / "filtered.html").write_text(case_html, encoding="utf-8")
+            (css_scrollbar_dir / "scrollbar-width-001.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (css_scrollbar_dir / "scrollbar-width-parsing.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (css_viewport_dir / "widget.html").write_text(case_html, encoding="utf-8")
+            (css_viewport_parsing_dir / "zoom-computed.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (typed_om_dir / "kept.html").write_text(case_html, encoding="utf-8")
+            (render_blocking_dir / "filtered.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (service_worker_dir / "registration.https.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (service_worker_named_dir / "usb.serviceworker.https.html").write_text(
+                case_html, encoding="utf-8"
+            )
+            (
+                non_service_worker_https_dir
+                / "crypto-subtle-secure-context-available.https.sub.html"
+            ).write_text(case_html, encoding="utf-8")
+            (media_dir / "filtered.html").write_text(case_html, encoding="utf-8")
+            (iframe_dir / "kept.html").write_text(case_html, encoding="utf-8")
+
+            cases = enumerate_cases(wpt_root)
+            focused_transition_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("css/css-transitions",),
+            )
+
+        self.assertNotIn("encoding", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertIn("html/canvas", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertIn("css/css-grid", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertNotIn(
+            "css/css-conditional/container-queries", DEFAULT_EXCLUDE_DIR_PREFIXES
+        )
+        self.assertIn("css/css-paint-api", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertNotIn("css/css-animations", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertNotIn("css/css-transitions", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertIn("html/dom/render-blocking", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertNotIn("service-workers", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertIn(
+            "html/semantics/embedded-content/media-elements",
+            DEFAULT_EXCLUDE_DIR_PREFIXES,
+        )
+        self.assertNotIn("css/css-typed-om", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertNotIn(
+            "html/semantics/embedded-content/the-iframe-element",
+            DEFAULT_EXCLUDE_DIR_PREFIXES,
+        )
+        self.assertEqual(
+            [case.case_path for case in cases],
+            [
+                "css/css-animations/parsing/kept.html",
+                "css/css-conditional/container-queries/at-container-parsing.html",
+                "css/css-scrollbars/scrollbar-width-parsing.html",
+                "css/css-transitions/parsing/transition-computed.html",
+                "css/css-typed-om/kept.html",
+                "css/css-viewport/zoom/parsing/zoom-computed.html",
+                "dom/nodes/kept.html",
+                "encoding/legacy-mb-japanese/kept.html",
+                "html/semantics/embedded-content/the-iframe-element/kept.html",
+                "service-workers/service-worker/registration.https.html",
+                "webusb/usb.serviceworker.https.html",
+            ],
+        )
+        self.assertEqual(
+            [case.case_path for case in focused_transition_cases],
+            [
+                "css/css-transitions/events-001.html",
+                "css/css-transitions/parsing/transition-computed.html",
+            ],
+        )
+    def test_default_enumeration_excludes_jpegxl_codec_fidelity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            jpegxl_dir = wpt_root / "jpegxl"
+            jpegxl_dir.mkdir(parents=True)
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+"""
+            (jpegxl_dir / "decode.html").write_text(case_html, encoding="utf-8")
+
+            default_cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(wpt_root, dir_prefixes=("jpegxl",))
+
+        self.assertIn("jpegxl", DEFAULT_EXCLUDE_DIR_PREFIXES)
+        self.assertEqual(default_cases, [])
+        self.assertEqual(
+            [case.case_path for case in focused_cases],
+            ["jpegxl/decode.html"],
+        )
+    def test_enumerate_cases_skips_manual_and_support_resource_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "FileAPI"
+            resource_dir = wpt_root / "appmanifest" / "resources"
+            support_dir = wpt_root / "workers" / "support"
+            case_dir.mkdir(parents=True)
+            resource_dir.mkdir(parents=True)
+            support_dir.mkdir(parents=True)
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+"""
+            for suffix in (".html", ".htm"):
+                (case_dir / f"kept{suffix}").write_text(case_html, encoding="utf-8")
+                (case_dir / f"upload-manual{suffix}").write_text(
+                    case_html, encoding="utf-8"
+                )
+                (resource_dir / f"helper{suffix}").write_text(
+                    case_html, encoding="utf-8"
+                )
+                (support_dir / f"helper{suffix}").write_text(
+                    case_html, encoding="utf-8"
+                )
+
+            cases = enumerate_cases(wpt_root)
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            ["FileAPI/kept.htm", "FileAPI/kept.html"],
+        )
+    def test_explicit_dir_prefix_bypasses_default_rendering_blacklist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            canvas_dir = wpt_root / "html" / "canvas"
+            canvas_dir.mkdir(parents=True)
+            (canvas_dir / "case.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root, dir_prefixes=("html/canvas",))
+
+        self.assertEqual([case.case_path for case in cases], ["html/canvas/case.html"])
+    def test_preload_dir_prefix_allows_modulepreload_helper_without_stash_usage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            preload_dir = wpt_root / "preload"
+            resources_dir = preload_dir / "resources"
+            resources_dir.mkdir(parents=True)
+            harness_dir = wpt_root / "resources"
+            harness_dir.mkdir(parents=True)
+            (harness_dir / "testharness.js").write_text("", encoding="utf-8")
+            (harness_dir / "testharnessreport.js").write_text("", encoding="utf-8")
+            (resources_dir / "preload_helper.js").write_text(
+                "function unused() { return '/preload/resources/stash-put.py'; }",
+                encoding="utf-8",
+            )
+            modulepreload_case = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="/preload/resources/preload_helper.js"></script>
+<link rel=modulepreload href="resources/dummy.js?pipe=trickle(d5)">
+<script>promise_test(async () => {}, "ok");</script>
+"""
+            (preload_dir / "avoid-delaying-onload-link-modulepreload.html").write_text(
+                modulepreload_case,
+                encoding="utf-8",
+            )
+            (
+                preload_dir / "avoid-delaying-onload-link-modulepreload-exec.html"
+            ).write_text(
+                modulepreload_case,
+                encoding="utf-8",
+            )
+            (preload_dir / "avoid-delaying-onload-link-preload.html").write_text(
+                modulepreload_case,
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root, dir_prefixes=("preload",))
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            [
+                "preload/avoid-delaying-onload-link-modulepreload-exec.html",
+                "preload/avoid-delaying-onload-link-modulepreload.html",
+            ],
+        )
+    def test_preload_dir_prefix_excludes_sri_non_goal_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            preload_dir = wpt_root / "preload"
+            preload_dir.mkdir(parents=True)
+            harness_dir = wpt_root / "resources"
+            harness_dir.mkdir(parents=True)
+            (harness_dir / "testharness.js").write_text("", encoding="utf-8")
+            (harness_dir / "testharnessreport.js").write_text("", encoding="utf-8")
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>promise_test(async () => {}, "ok");</script>
+"""
+            (preload_dir / "modulepreload-json.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+            (preload_dir / "modulepreload-sri.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+            (preload_dir / "modulepreload-sri-importmap.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root, dir_prefixes=("preload",))
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            ["preload/modulepreload-json.html"],
+        )
+    def test_enumerate_cases_excludes_malformed_select_fragment_non_goal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            parsing_dir = wpt_root / "html" / "syntax" / "parsing"
+            parsing_dir.mkdir(parents=True)
+            harness_dir = wpt_root / "resources"
+            harness_dir.mkdir(parents=True)
+            (harness_dir / "testharness.js").write_text("", encoding="utf-8")
+            (harness_dir / "testharnessreport.js").write_text("", encoding="utf-8")
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>test(() => {}, "ok");</script>
+"""
+            (parsing_dir / "html5lib_innerHTML_webkit02.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+            (parsing_dir / "html5lib_scripted_webkit01.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+
+            default_cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("html/syntax/parsing",),
+            )
+
+        expected = ["html/syntax/parsing/html5lib_scripted_webkit01.html"]
+        self.assertEqual([case.case_path for case in default_cases], expected)
+        self.assertEqual([case.case_path for case in focused_cases], expected)
+    def test_enumerate_cases_excludes_formdata_non_goal_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            formdata_dir = wpt_root / "xhr" / "formdata"
+            formdata_dir.mkdir(parents=True)
+            harness_dir = wpt_root / "resources"
+            harness_dir.mkdir(parents=True)
+            (harness_dir / "testharness.js").write_text("", encoding="utf-8")
+            (harness_dir / "testharnessreport.js").write_text("", encoding="utf-8")
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>test(() => {}, "ok");</script>
+"""
+            (formdata_dir / "constructor-formelement.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+            (formdata_dir / "constructor-submitter-coordinate.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+            (formdata_dir / "constructor-submitter.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+
+            default_cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("xhr/formdata",),
+            )
+            diagnostic_case = explicit_case(
+                wpt_root,
+                "xhr/formdata/constructor-formelement.html",
+            )
+            coordinate_diagnostic_case = explicit_case(
+                wpt_root,
+                "xhr/formdata/constructor-submitter-coordinate.html",
+            )
+
+        expected = ["xhr/formdata/constructor-submitter.html"]
+        self.assertEqual([case.case_path for case in default_cases], expected)
+        self.assertEqual([case.case_path for case in focused_cases], expected)
+        self.assertEqual(
+            diagnostic_case.case_path,
+            "xhr/formdata/constructor-formelement.html",
+        )
+        self.assertEqual(
+            coordinate_diagnostic_case.case_path,
+            "xhr/formdata/constructor-submitter-coordinate.html",
+        )
+    def test_enumerate_cases_allows_supported_xhr_delay_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            xhr_dir = wpt_root / "xhr"
+            xhr_dir.mkdir(parents=True)
+            harness_dir = wpt_root / "resources"
+            harness_dir.mkdir(parents=True)
+            (harness_dir / "testharness.js").write_text("", encoding="utf-8")
+            (harness_dir / "testharnessreport.js").write_text("", encoding="utf-8")
+            (xhr_dir / "delay-supported.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>fetch("resources/delay.py?ms=1"); test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+            (xhr_dir / "delay-and-unsupported.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>fetch("resources/delay.py"); fetch("resources/other.py");</script>
+""",
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root, dir_prefixes=("xhr",))
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            ["xhr/delay-supported.html"],
+        )
+    def test_enumerate_cases_allows_supported_delayed_module_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            harness_dir = wpt_root / "resources"
+            harness_dir.mkdir(parents=True)
+            (harness_dir / "testharness.js").write_text("", encoding="utf-8")
+            (harness_dir / "testharnessreport.js").write_text("", encoding="utf-8")
+            module_dir = (
+                wpt_root
+                / "html"
+                / "semantics"
+                / "scripting-1"
+                / "the-script-element"
+                / "module"
+            )
+            (module_dir / "resources").mkdir(parents=True)
+            (module_dir / "delay-supported.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script type="module" src="./delay-supported.js"></script>
+""",
+                encoding="utf-8",
+            )
+            (module_dir / "delay-supported.js").write_text(
+                'import "./resources/delayed-modulescript.py?ms=1";',
+                encoding="utf-8",
+            )
+            (module_dir / "resources" / "delayed-modulescript.py").write_text(
+                "# modeled by wpt-cross",
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=(
+                    "html/semantics/scripting-1/the-script-element/module",
+                ),
+            )
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            [
+                "html/semantics/scripting-1/the-script-element/module/"
+                "delay-supported.html"
+            ],
+        )
+    def test_enumerate_cases_wraps_window_js_for_explicit_dir_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            api_dir = wpt_root / "WebCryptoAPI"
+            api_dir.mkdir(parents=True)
+            (api_dir / "algorithm-discards-context.https.window.js").write_text(
+                """// META: title=window case
+// META: timeout=long
+promise_test(async () => {}, "ok");
+""",
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root, dir_prefixes=("WebCryptoAPI",))
+
+        self.assertEqual(
+            [case.case_path for case in cases],
+            [
+                "WebCryptoAPI/algorithm-discards-context.https.window.js?moli-wpt-script=window",
+            ],
+        )
+        self.assertEqual(cases[0].timeout_multiplier, LONG_TIMEOUT_MULTIPLIER)
+    def test_explicit_dir_prefix_includes_simple_https_sub_html(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            api_dir = wpt_root / "WebCryptoAPI" / "secure_context"
+            api_dir.mkdir(parents=True)
+            (api_dir / "crypto-subtle-secure-context-available.https.sub.html").write_text(
+                """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>test(() => assert_equals("{{host}}", "{{host}}"), "ok");</script>
+""",
+                encoding="utf-8",
+            )
+
+            default_cases = enumerate_cases(wpt_root)
+            selected_cases = enumerate_cases(wpt_root, dir_prefixes=("WebCryptoAPI",))
+
+        self.assertEqual(default_cases, [])
+        self.assertEqual(
+            [case.case_path for case in selected_cases],
+            ["WebCryptoAPI/secure_context/crypto-subtle-secure-context-available.https.sub.html"],
+        )
+    def test_dir_prefix_can_opt_into_tentative_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "wasm" / "webapi" / "esm-integration"
+            case_dir.mkdir(parents=True)
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+"""
+            (case_dir / "stable.html").write_text(case_html, encoding="utf-8")
+            (case_dir / "feature.tentative.html").write_text(
+                case_html,
+                encoding="utf-8",
+            )
+
+            default_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm/webapi/esm-integration",),
+            )
+            tentative_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm/webapi/esm-integration",),
+                include_tentative=True,
+            )
+
+        self.assertEqual(
+            [case.case_path for case in default_cases],
+            ["wasm/webapi/esm-integration/stable.html"],
+        )
+        self.assertEqual(
+            [case.case_path for case in tentative_cases],
+            [
+                "wasm/webapi/esm-integration/feature.tentative.html",
+                "wasm/webapi/esm-integration/stable.html",
+            ],
+        )
+    def test_dir_prefix_can_opt_into_any_js_globals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "wasm" / "jsapi" / "js-string"
+            resource_dir = case_dir / "resources"
+            case_dir.mkdir(parents=True)
+            resource_dir.mkdir(parents=True)
+            (case_dir / "basic.any.js").write_text(
+                """// META: timeout=long
+promise_test(async () => {}, "ok");
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "feature.tentative.any.js").write_text(
+                """promise_test(async () => {}, "ok");""",
+                encoding="utf-8",
+            )
+            (case_dir / "testdriver.any.js").write_text(
+                """// META: script=/resources/testdriver.js
+promise_test(async () => {}, "requires testdriver");
+""",
+                encoding="utf-8",
+            )
+            (resource_dir / "helper.any.js").write_text(
+                """promise_test(async () => {}, "not a top-level case");""",
+                encoding="utf-8",
+            )
+
+            default_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm/jsapi/js-string",),
+            )
+            window_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm/jsapi/js-string",),
+                any_js_global=ANY_JS_WINDOW_GLOBAL,
+            )
+            both_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm/jsapi/js-string",),
+                include_tentative=True,
+                any_js_global="both",
+            )
+
+        self.assertEqual(default_cases, [])
+        self.assertEqual(
+            [(case.case_path, case.timeout_multiplier) for case in window_cases],
+            [
+                (
+                    "wasm/jsapi/js-string/basic.any.js?moli-wpt-any=window",
+                    LONG_TIMEOUT_MULTIPLIER,
+                )
+            ],
+        )
+        self.assertEqual(
+            [case.case_path for case in both_cases],
+            [
+                "wasm/jsapi/js-string/basic.any.js?moli-wpt-any=dedicatedworker",
+                "wasm/jsapi/js-string/basic.any.js?moli-wpt-any=window",
+                "wasm/jsapi/js-string/feature.tentative.any.js?moli-wpt-any=dedicatedworker",
+                "wasm/jsapi/js-string/feature.tentative.any.js?moli-wpt-any=window",
+            ],
+        )
+    def test_default_enumeration_includes_streams_script_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            streams_dir = wpt_root / "streams" / "readable-streams"
+            other_dir = wpt_root / "wasm" / "jsapi"
+            streams_dir.mkdir(parents=True)
+            other_dir.mkdir(parents=True)
+            (streams_dir / "general.any.js").write_text(
+                """// META: global=window,worker
+promise_test(async () => {}, "general");
+""",
+                encoding="utf-8",
+            )
+            (streams_dir / "window-only.any.js").write_text(
+                """// META: global=window
+test(() => {}, "window only");
+""",
+                encoding="utf-8",
+            )
+            (streams_dir / "task.window.js").write_text(
+                """// META: timeout=long
+test(() => {}, "window script");
+""",
+                encoding="utf-8",
+            )
+            (streams_dir / "task.worker.js").write_text(
+                """test(() => {}, "worker script");
+done();
+""",
+                encoding="utf-8",
+            )
+            (streams_dir / "feature.tentative.any.js").write_text(
+                """test(() => {}, "tentative");""",
+                encoding="utf-8",
+            )
+            (other_dir / "excluded.any.js").write_text(
+                """test(() => {}, "not in the broad baseline");""",
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(wpt_root)
+
+        self.assertEqual(
+            [(case.case_path, case.timeout_multiplier) for case in cases],
+            [
+                (
+                    "streams/readable-streams/general.any.js?moli-wpt-any=dedicatedworker",
+                    1.0,
+                ),
+                (
+                    "streams/readable-streams/general.any.js?moli-wpt-any=window",
+                    1.0,
+                ),
+                (
+                    "streams/readable-streams/task.window.js?moli-wpt-script=window",
+                    LONG_TIMEOUT_MULTIPLIER,
+                ),
+                (
+                    "streams/readable-streams/task.worker.js?moli-wpt-script=dedicatedworker",
+                    1.0,
+                ),
+                (
+                    "streams/readable-streams/window-only.any.js?moli-wpt-any=window",
+                    1.0,
+                ),
+            ],
+        )
+    def test_default_enumeration_includes_compression_script_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            sources = {
+                "compression/compression-stream.any.js": "// META: global=window,worker\n",
+                "compression/idlharness.https.any.js": "// META: global=window,dedicatedworker\n",
+                "compression/compression-with-detach.window.js": "",
+                "compression/decompression-with-detach.window.js": "",
+                "compression/feature.tentative.any.js": "",
+                "compression/testdriver.any.js": "// META: script=/resources/testdriver.js\n",
+                "compression/resources/helper.any.js": "",
+                "compression-other/excluded.any.js": "",
+                "compression-other/excluded.window.js": "",
+            }
+            for name, meta in sources.items():
+                path = wpt_root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(meta + 'test(() => {}, "case");', encoding="utf-8")
+
+            cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(
+                wpt_root, dir_prefixes=("compression",), any_js_global="both"
+            )
+            window_cases = enumerate_cases(wpt_root, any_js_global="window")
+
+        expected = [
+            "compression/compression-stream.any.js?moli-wpt-any=dedicatedworker",
+            "compression/compression-stream.any.js?moli-wpt-any=window",
+            "compression/compression-with-detach.window.js?moli-wpt-script=window",
+            "compression/decompression-with-detach.window.js?moli-wpt-script=window",
+            "compression/idlharness.https.any.js?moli-wpt-any=dedicatedworker",
+            "compression/idlharness.https.any.js?moli-wpt-any=window",
+        ]
+        self.assertEqual([case.case_path for case in cases], expected)
+        self.assertEqual([case.case_path for case in focused_cases], expected)
+        self.assertEqual(
+            [case.case_path for case in window_cases if case.case_path.startswith("compression/")],
+            [path for path in expected if "dedicatedworker" not in path],
+        )
+    def test_dir_prefix_expands_any_js_variants_and_respects_globals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "WebCryptoAPI"
+            case_dir.mkdir(parents=True)
+            (case_dir / "multi.any.js").write_text(
+                """// META: global=window,worker
+// META: timeout=long
+// META: variant=?mode=1
+// META: variant=?mode=2
+promise_test(async () => {}, "multi");
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "window-only.any.js").write_text(
+                """// META: global=window
+promise_test(async () => {}, "window");
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "worker-only.any.js").write_text(
+                """// META: global=dedicatedworker
+promise_test(async () => {}, "worker");
+""",
+                encoding="utf-8",
+            )
+
+            cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("WebCryptoAPI",),
+                any_js_global="both",
+            )
+
+        self.assertEqual(
+            [(case.case_path, case.timeout_multiplier) for case in cases],
+            [
+                (
+                    "WebCryptoAPI/multi.any.js?mode=1&moli-wpt-any=dedicatedworker",
+                    LONG_TIMEOUT_MULTIPLIER,
+                ),
+                (
+                    "WebCryptoAPI/multi.any.js?mode=1&moli-wpt-any=window",
+                    LONG_TIMEOUT_MULTIPLIER,
+                ),
+                (
+                    "WebCryptoAPI/multi.any.js?mode=2&moli-wpt-any=dedicatedworker",
+                    LONG_TIMEOUT_MULTIPLIER,
+                ),
+                (
+                    "WebCryptoAPI/multi.any.js?mode=2&moli-wpt-any=window",
+                    LONG_TIMEOUT_MULTIPLIER,
+                ),
+                (
+                    "WebCryptoAPI/window-only.any.js?moli-wpt-any=window",
+                    1.0,
+                ),
+                (
+                    "WebCryptoAPI/worker-only.any.js?moli-wpt-any=dedicatedworker",
+                    1.0,
+                ),
+            ],
+        )
+    def test_dir_prefix_includes_window_and_worker_js_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "wasm" / "serialization"
+            case_dir.mkdir(parents=True)
+            (case_dir / "transfer.window.js").write_text(
+                """// META: timeout=long
+test(() => {}, "window");
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "memory.worker.js").write_text(
+                """importScripts("/resources/testharness.js");
+test(() => {}, "worker");
+done();
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "feature.tentative.window.js").write_text(
+                """test(() => {}, "tentative");""",
+                encoding="utf-8",
+            )
+
+            default_cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm/serialization",),
+            )
+            tentative_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm/serialization",),
+                include_tentative=True,
+            )
+
+        self.assertEqual(default_cases, [])
+        self.assertEqual(
+            [(case.case_path, case.timeout_multiplier) for case in focused_cases],
+            [
+                (
+                    "wasm/serialization/memory.worker.js?moli-wpt-script=dedicatedworker",
+                    1.0,
+                ),
+                (
+                    "wasm/serialization/transfer.window.js?moli-wpt-script=window",
+                    LONG_TIMEOUT_MULTIPLIER,
+                ),
+            ],
+        )
+        self.assertEqual(
+            [case.case_path for case in tentative_cases],
+            [
+                "wasm/serialization/feature.tentative.window.js?moli-wpt-script=window",
+                "wasm/serialization/memory.worker.js?moli-wpt-script=dedicatedworker",
+                "wasm/serialization/transfer.window.js?moli-wpt-script=window",
+            ],
+        )
+    def test_dir_prefix_includes_sub_https_and_supported_wasm_status_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            serialization_dir = wpt_root / "wasm" / "serialization" / "module"
+            serialization_dir.mkdir(parents=True)
+            webapi_dir = wpt_root / "wasm" / "webapi"
+            webapi_dir.mkdir(parents=True)
+            esm_dir = webapi_dir / "esm-integration"
+            esm_dir.mkdir()
+            (serialization_dir / "window-domain-success.sub.html").write_text(
+                """<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>test(() => {}, "sub");</script>
+""",
+                encoding="utf-8",
+            )
+            (esm_dir / "worklet-import-source-phase.tentative.https.html").write_text(
+                """<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>test(() => {}, "https tentative");</script>
+""",
+                encoding="utf-8",
+            )
+            (webapi_dir / "status.any.js").write_text(
+                """// META: global=window,worker
+promise_test(async t => {
+  await promise_rejects_js(t, TypeError, WebAssembly.compileStreaming(fetch("status.py?status=404")));
+}, "status");
+""",
+                encoding="utf-8",
+            )
+            (webapi_dir / "badstatus.any.js").write_text(
+                """// META: global=window,worker
+promise_test(async t => {
+  await promise_rejects_js(t, TypeError, WebAssembly.compileStreaming(fetch("badstatus.py?status=404")));
+}, "badstatus");
+""",
+                encoding="utf-8",
+            )
+            (webapi_dir / "origin.sub.any.js").write_text(
+                """// META: global=window,worker
+promise_test(async t => {
+  await promise_rejects_js(t, TypeError, WebAssembly.compileStreaming(fetch("/fetch/api/resources/redirect.py?redirect_status=301&location=/wasm/incrementer.wasm")));
+}, "origin");
+""",
+                encoding="utf-8",
+            )
+
+            broad_cases = enumerate_cases(wpt_root)
+            focused_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("wasm",),
+                include_tentative=True,
+                any_js_global="both",
+            )
+
+        self.assertEqual(broad_cases, [])
+        self.assertEqual(
+            [case.case_path for case in focused_cases],
+            [
+                "wasm/serialization/module/window-domain-success.sub.html",
+                "wasm/webapi/esm-integration/worklet-import-source-phase.tentative.https.html",
+                "wasm/webapi/origin.sub.any.js?moli-wpt-any=dedicatedworker",
+                "wasm/webapi/origin.sub.any.js?moli-wpt-any=window",
+                "wasm/webapi/status.any.js?moli-wpt-any=dedicatedworker",
+                "wasm/webapi/status.any.js?moli-wpt-any=window",
+            ],
+        )
+    def test_explicit_case_bypasses_curated_filename_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "shadow-dom"
+            case_dir.mkdir(parents=True)
+            (case_dir / "feature.tentative.html").write_text(
+                """<!doctype html>
+<meta name="timeout" content="long">
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+""",
+                encoding="utf-8",
+            )
+
+            case = explicit_case(wpt_root, "shadow-dom/feature.tentative.html?variant=1")
+
+        self.assertEqual(case.case_path, "shadow-dom/feature.tentative.html?variant=1")
+        self.assertEqual(case.timeout_multiplier, LONG_TIMEOUT_MULTIPLIER)
+    def test_explicit_case_wraps_any_js(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "WebCryptoAPI"
+            case_dir.mkdir(parents=True)
+            (case_dir / "historical.any.js").write_text(
+                """// META: global=window,dedicatedworker
+// META: timeout=long
+test(() => {}, "ok");
+""",
+                encoding="utf-8",
+            )
+
+            case = explicit_case(wpt_root, "WebCryptoAPI/historical.any.js?mode=1")
+
+        self.assertEqual(
+            case.case_path,
+            "WebCryptoAPI/historical.any.js?mode=1&moli-wpt-any=window",
+        )
+        self.assertEqual(case.timeout_multiplier, LONG_TIMEOUT_MULTIPLIER)
+    def test_explicit_window_and_worker_js_cases_use_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "wasm"
+            case_dir.mkdir(parents=True)
+            (case_dir / "transfer.window.js").write_text(
+                """// META: timeout=long
+test(() => {}, "ok");
+""",
+                encoding="utf-8",
+            )
+            (case_dir / "memory.worker.js").write_text(
+                """test(() => {}, "ok");""",
+                encoding="utf-8",
+            )
+
+            window_case = explicit_case(wpt_root, "wasm/transfer.window.js?variant=1")
+            worker_case = explicit_case(wpt_root, "wasm/memory.worker.js")
+
+        self.assertEqual(
+            window_case.case_path,
+            "wasm/transfer.window.js?variant=1&moli-wpt-script=window",
+        )
+        self.assertEqual(window_case.timeout_multiplier, LONG_TIMEOUT_MULTIPLIER)
+        self.assertEqual(
+            worker_case.case_path,
+            "wasm/memory.worker.js?moli-wpt-script=dedicatedworker",
+        )
+    def test_explicit_case_accepts_generated_any_html_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "WebCryptoAPI"
+            case_dir.mkdir(parents=True)
+            (case_dir / "historical.any.js").write_text(
+                """// META: timeout=long
+test(() => {}, "ok");
+""",
+                encoding="utf-8",
+            )
+
+            case = explicit_case(
+                wpt_root,
+                f"WebCryptoAPI/historical.any.html?{ANY_JS_WINDOW_QUERY}",
+            )
+
+        self.assertEqual(
+            case.case_path,
+            f"WebCryptoAPI/historical.any.html?{ANY_JS_WINDOW_QUERY}",
+        )
+        self.assertEqual(case.timeout_multiplier, LONG_TIMEOUT_MULTIPLIER)
+    def test_explicit_case_accepts_generated_window_html_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_dir = wpt_root / "WebCryptoAPI"
+            case_dir.mkdir(parents=True)
+            (case_dir / "algorithm-discards-context.https.window.js").write_text(
+                """// META: timeout=long
+test(() => {}, "ok");
+""",
+                encoding="utf-8",
+            )
+
+            case = explicit_case(
+                wpt_root,
+                f"WebCryptoAPI/algorithm-discards-context.https.window.html?{WINDOW_JS_WINDOW_QUERY}",
+            )
+
+        self.assertEqual(
+            case.case_path,
+            f"WebCryptoAPI/algorithm-discards-context.https.window.html?{WINDOW_JS_WINDOW_QUERY}",
+        )
+        self.assertEqual(case.timeout_multiplier, LONG_TIMEOUT_MULTIPLIER)
+    def test_any_js_window_case_path_does_not_duplicate_window_query(self) -> None:
+        self.assertEqual(
+            any_js_window_case_path(
+                f"WebCryptoAPI/historical.any.js?{ANY_JS_WINDOW_QUERY}#frag"
+            ),
+            f"WebCryptoAPI/historical.any.html?{ANY_JS_WINDOW_QUERY}#frag",
+        )
+    def test_window_js_window_case_path_does_not_duplicate_window_query(self) -> None:
+        self.assertEqual(
+            window_js_window_case_path(
+                f"WebCryptoAPI/example.window.js?{WINDOW_JS_WINDOW_QUERY}#frag"
+            ),
+            f"WebCryptoAPI/example.window.html?{WINDOW_JS_WINDOW_QUERY}#frag",
+        )
+    def test_any_js_metadata_matches_wpt_header_rules(self) -> None:
+        meta = parse_any_js_meta(
+            """//META: variant=?first
+//  META: script=helper.js
+
+// META: variant=?ignored
+"""
+        )
+
+        self.assertEqual(meta.variants, ["?first"])
+        self.assertEqual(meta.scripts, ["helper.js"])
