@@ -1621,3 +1621,36 @@ fn bubble_stop_propagation_keeps_current_ancestor_listeners() {
 
     assert_eq!(result, "handler,listener|handler|first,second");
 }
+
+#[test]
+fn relative_range_boundaries_share_selection_updates() {
+    let mut vm = new_parsed_test_vm(
+        "https://shared-binding-regression.test/",
+        "<!doctype html><body></body>",
+    );
+    let result = vm
+        .eval(
+            r#"
+      (() => {
+        document.body.innerHTML = '<div><i>a</i><b>b</b><em>c</em></div>';
+        const parent = document.body.firstChild;
+        const selection = getSelection();
+        const results = [];
+        for (const method of ['setStartBefore', 'setStartAfter', 'setEndBefore', 'setEndAfter']) {
+          const range = document.createRange();
+          range.selectNodeContents(parent);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          range[method](parent.children[1]);
+          results.push(selection.anchorNode === range.startContainer,
+            selection.anchorOffset === range.startOffset,
+            selection.focusNode === range.endContainer,
+            selection.focusOffset === range.endOffset);
+        }
+        return results.every(Boolean);
+      })()
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
