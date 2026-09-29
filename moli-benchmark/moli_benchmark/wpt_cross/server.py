@@ -1946,6 +1946,19 @@ def _directory_listing_body(directory: Path, path: str) -> bytes:
     ).encode("utf-8")
 
 
+def _workers_url_encoding_response(query: str) -> bytes:
+    """Model workers/semantics/encodings/003-1.py's UTF-8 query check."""
+    value = next(
+        (
+            value
+            for name, value in parse_qsl(query, keep_blank_values=True)
+            if name == "x"
+        ),
+        None,
+    )
+    return b"PASS" if value == "å" else b"FAIL"
+
+
 def _make_handler(
     wpt_root: Path,
     results_store: "ResultsStore",
@@ -2674,6 +2687,13 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if unquote(urlsplit(self.path).path) == "/workers/semantics/encodings/003-1.py":
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    _workers_url_encoding_response(urlsplit(self.path).query),
+                    emit_body=emit_body,
+                )
+                return
             if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
                 self._serve_fetch_inspect_headers(
                     urlsplit(self.path).query, emit_body=self.command != "HEAD",

@@ -567,3 +567,41 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                         response.headers["Access-Control-Expose-Headers"],
                         "x-request-referer, x-request-origin",
                     )
+
+    def test_fixture_server_models_worker_url_utf8_query_check(self) -> None:
+        self.assertEqual(_workers_url_encoding_response("x=%C3%A5"), b"PASS")
+        self.assertEqual(_workers_url_encoding_response("x=%C3%A5&x=wrong"), b"PASS")
+        self.assertEqual(_workers_url_encoding_response("x=%C3%83%C2%A5"), b"FAIL")
+        self.assertEqual(_workers_url_encoding_response("x=%E5"), b"FAIL")
+        self.assertEqual(_workers_url_encoding_response(""), b"FAIL")
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                url = (
+                    f"{server.base_url}/workers/semantics/encodings/"
+                    "003-1.py?x=%C3%A5"
+                )
+                responses = []
+                for method in ("GET", "HEAD"):
+                    with urlopen(Request(url, method=method), timeout=2) as response:
+                        responses.append(
+                            (
+                                method,
+                                response.status,
+                                response.read(),
+                                response.headers["Content-Type"],
+                            )
+                        )
+
+        self.assertEqual(
+            responses,
+            [
+                ("GET", 200, b"PASS", "text/plain; charset=utf-8"),
+                ("HEAD", 200, b"", "text/plain; charset=utf-8"),
+            ],
+        )
