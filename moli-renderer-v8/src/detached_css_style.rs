@@ -2423,7 +2423,8 @@ fn normalize_style_entry_value<'s>(
         if keyframe_style_property_write_is_ignored(scope, style, name) {
             return None;
         }
-        if name == "all" {
+        // Empty text removes the declaration; it is not a keyword to parse.
+        if name == "all" && !value.is_empty() {
             return css_wide_keyword(value);
         }
         if !name.starts_with("--") && moli_css_parse::css_value_may_contain_env_function(value) {

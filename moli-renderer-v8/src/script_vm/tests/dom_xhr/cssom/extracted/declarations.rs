@@ -1437,6 +1437,16 @@ fn live_inline_css_text_reset_preserves_all_adapter_with_pdb_storage() {
         "2|all,padding-left|inherit|1px|all: inherit; padding-left: 1px;|all: inherit; padding-left: 1px;/|inline|1px|all,padding-left,display|all: inherit; padding-left: 1px; display: inline;|all: inherit; padding-left: 1px; display: inline;/|||0||"
     );
 }
+
+#[test]
+fn removing_all_clears_detached_and_rule_declarations() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-all-removal.test/",
+        "<!doctype html><body><iframe id=child></iframe>",
+    );
+    assert_eq!(vm.eval(include_str!("css_all_removal.js")).unwrap(), "true");
+}
+
 #[test]
 fn live_inline_all_mutations_update_pdb_storage_without_losing_cssom_order() {
     let mut vm = new_storage_test_vm("https://inline-style-pdb-all.test/");
