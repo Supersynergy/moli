@@ -396,6 +396,7 @@ pub(super) fn cssom_style_shorthand_query_uses_pdb(name: &str) -> bool {
             | "margin-inline"
             | "mask"
             | "outline"
+            | "overflow"
             | "overscroll-behavior"
             | "page-break-after"
             | "page-break-before"

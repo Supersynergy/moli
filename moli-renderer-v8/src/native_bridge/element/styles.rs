@@ -7,10 +7,7 @@ use crate::native_bridge::{
 use crate::style_engine::StyleViewport;
 use crate::webidl;
 
-use super::super::node::{
-    node_is_element, node_runtime_and_handle_from_object,
-    node_runtime_and_handle_from_object_or_detached,
-};
+use super::super::node::{node_is_element, node_runtime_and_handle_from_object_or_detached};
 mod accessors;
 mod computed_names;
 mod declaration;
@@ -76,7 +73,6 @@ const STYLE_DECLARATION_COMPUTED_PROPERTY_COUNT_GENERATION_SLOT: &str =
     "__moliStyleDeclarationComputedPropertyCountGeneration";
 const STYLE_DECLARATION_COMPUTED_PROPERTY_COUNT_TARGET_EPOCH_SLOT: &str =
     "__moliStyleDeclarationComputedPropertyCountTargetEpoch";
-const DETACHED_STYLE_SLOT: &str = "__lmDetachedStyle";
 
 pub(crate) fn is_live_style_declaration_object(
     scope: &mut v8::PinScope<'_, '_>,
@@ -988,65 +984,12 @@ fn style_for_element<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, receiver) {
-        return style_for_element_handle(scope, runtime_ptr, handle);
-    }
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, receiver)
-    else {
-        return None;
-    };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        return None;
-    }
-    if unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .is_some_and(crate::dom::native::Node::is_connected)
-    {
-        return style_for_element_handle(scope, runtime_ptr, handle);
-    }
-    if let Some(style) = get_private_value(scope, receiver, DETACHED_STYLE_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
-        return Some(style);
-    }
-    let style = crate::detached_css_style::build_lightweight_detached_css_style_declaration(scope);
-    if let Some(callback) = v8::Function::builder(detached_style_changed_callback)
-        .data(receiver.into())
-        .build(scope)
-    {
-        crate::detached_css_style::set_lightweight_css_style_change_callback(
-            scope, style, callback,
-        );
-    }
-    set_private_value(scope, receiver, DETACHED_STYLE_SLOT, style.into());
-    Some(style)
-}
-
-fn detached_style_changed_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok(element) = v8::Local::<v8::Object>::try_from(args.data()) else {
-        return;
-    };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, element)
-    else {
-        return;
-    };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        return;
-    }
-    let Ok(style) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
-        return;
-    };
-    let Some(css_text) = crate::detached_css_style::lightweight_css_style_css_text(scope, style)
-    else {
-        return;
-    };
-    unsafe { &mut *runtime_ptr }.set_attribute(scope, runtime_ptr, handle, "style", &css_text);
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver).ok()?;
+    // Windowless elements have native handles too. Sharing their declaration
+    // with the handle preserves typed values, held style objects, and attribute
+    // synchronization when the element is adopted or connected.
+    style_for_element_handle(scope, runtime_ptr, handle)
 }
 
 pub(crate) fn style_for_element_handle<'s>(
