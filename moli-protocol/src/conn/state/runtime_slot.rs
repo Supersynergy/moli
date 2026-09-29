@@ -573,7 +573,7 @@ impl TargetRuntimeSlot {
         self.page_slot.has_inflight_background_navigation()
     }
 
-    pub(crate) fn cancel_inflight_document_navigation(&self) {
+    pub(crate) fn cancel_inflight_document_navigation(&mut self) {
         self.page_slot.cancel_inflight_document_navigation();
     }
 

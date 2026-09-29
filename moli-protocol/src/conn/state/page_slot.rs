@@ -760,8 +760,8 @@ impl TargetPageSlot {
             .is_some_and(|request| request.background_work == BackgroundWorkState::Running)
     }
 
-    pub(crate) fn cancel_inflight_document_navigation(&self) {
-        if let Some(request) = self.pending_navigation_request.as_ref() {
+    pub(crate) fn cancel_inflight_document_navigation(&mut self) {
+        if let Some(request) = self.pending_navigation_request.as_mut() {
             // Keep the token installed: the existing completion path owns the
             // aborted response and must still settle this exact navigation.
             request.cancel();
