@@ -160,9 +160,22 @@ async fn webdriver_classic_xml_suffix_navigation_preserves_namespaces_and_dom_pa
 
 #[tokio::test]
 async fn webdriver_classic_xml_main_and_child_documents_decode_response_bytes() {
-    const SOURCE: &str = "<feed xmlns='http://www.w3.org/2005/Atom'><title>café</title></feed>";
-    let legacy_body = b"<feed xmlns='http://www.w3.org/2005/Atom'><title>caf\xe9</title></feed>";
+    const SOURCE: &str = "<feed xmlns='http://www.w3.org/2005/Atom'>\
+                         <meta charset='windows-1252'/><title>café</title></feed>";
+    let legacy_body = b"<feed xmlns='http://www.w3.org/2005/Atom'>\
+                        <meta charset='UTF-8'/><title>caf\xe9</title></feed>";
     let cases = [
+        ("meta", "", SOURCE.as_bytes().to_vec(), "UTF-8"),
+        (
+            "declared-utf8-meta",
+            "",
+            [
+                b"<?xml version='1.0' encoding='UTF-8'?>".as_slice(),
+                SOURCE.as_bytes(),
+            ]
+            .concat(),
+            "UTF-8",
+        ),
         (
             "charset",
             "; charset=windows-1252",
@@ -268,6 +281,156 @@ async fn webdriver_classic_xml_main_and_child_documents_decode_response_bytes() 
                     "{path}"
                 );
             }
+        }
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_chromium_xml_encoding_scenarios() {
+    // Adapted from Chromium a03603fe9af6230a12f1b2fb2c18a7d003a0d937,
+    // third_party/blink/web_tests/fast/encoding/{meta-in-xhtml.xhtml,
+    // default-xhtml-encoding.xhtml, xml-utf-8-default.xml,
+    // external-script-charset.xhtml, dumpAsText/utf-16-no-bom.xml} and
+    // http/tests/xmlviewer/dumpAsText/xmlviewer-charset-{cp1251,utf8}.xml.
+    const XHTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+    let report_charset = "<body><p id='result'/><script>\
+                          document.getElementById('result').textContent = document.characterSet;\
+                          </script></body>";
+    let unicode = "—∆∏π𝓐𝖚";
+    let cases = [
+        (
+            "meta-in-xhtml",
+            "application/xhtml+xml",
+            format!(
+                "<?xml version='1.0'?><html xmlns='{XHTML_NAMESPACE}'>\
+                 <head><meta content='text/html; charset=windows-1251' http-equiv='Content-Type'/></head>\
+                 {report_charset}</html>"
+            ).into_bytes(),
+            "UTF-8",
+            "UTF-8",
+            Some(XHTML_NAMESPACE),
+        ),
+        (
+            "default-xhtml-encoding",
+            "application/xhtml+xml",
+            format!("<html xmlns='{XHTML_NAMESPACE}'>{report_charset}</html>").into_bytes(),
+            "UTF-8",
+            "UTF-8",
+            Some(XHTML_NAMESPACE),
+        ),
+        (
+            "xml-utf-8-default",
+            "application/xml",
+            format!(
+                "<?xml version='1.0'?><html xmlns='{XHTML_NAMESPACE}'>\
+                 <body><p id='result'>{unicode}</p></body></html>"
+            ).into_bytes(),
+            "UTF-8",
+            unicode,
+            Some(XHTML_NAMESPACE),
+        ),
+        (
+            "external-script-charset",
+            "application/xhtml+xml",
+            format!(
+                "<?xml version='1.0' encoding='koi8-r'?><html xmlns='{XHTML_NAMESPACE}'>\
+                 <body><p id='result'/><script type='text/javascript' src='/external-script-charset-koi-8.js'>\
+                 </script></body></html>"
+            ).into_bytes(),
+            "KOI8-R",
+            "PASS",
+            Some(XHTML_NAMESPACE),
+        ),
+        (
+            "xmlviewer-charset-cp1251",
+            "application/xml",
+            b"<?xml version='1.0' encoding='cp1251'?><root>\
+              <cp1251 id='result'>SU\xd1\xd1\xc5SS</cp1251></root>".to_vec(),
+            "windows-1251",
+            "SUССЕSS",
+            None,
+        ),
+        (
+            "xmlviewer-charset-utf8",
+            "application/xml",
+            "<?xml version='1.0' encoding='utf-8'?><root>\
+             <utf8 id='result'>SUССЕSS</utf8></root>".as_bytes().to_vec(),
+            "UTF-8",
+            "SUССЕSS",
+            None,
+        ),
+        (
+            "utf-16-no-bom",
+            "application/xml",
+            "<?xml version='1.0' encoding='UTF-16'?><TEST id='result'>ё</TEST>"
+                .encode_utf16().flat_map(u16::to_be_bytes).collect(),
+            "UTF-16BE",
+            "ё",
+            None,
+        ),
+    ];
+    let mut fixture = axum::Router::new();
+    for (name, mime, body, _, _, _) in &cases {
+        let mime = *mime;
+        let body = body.clone();
+        fixture = fixture.route(
+            &format!("/{name}"),
+            axum::routing::get(move || {
+                let body = body.clone();
+                async move { ([(header::CONTENT_TYPE, mime)], body) }
+            }),
+        );
+    }
+    fixture = fixture
+        .route(
+            "/external-script-charset-koi-8.js",
+            axum::routing::get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript")],
+                    b"document.getElementById('result').textContent = ('\xf3' == '\\u0421') ? 'PASS' : 'FAIL';".as_slice(),
+                )
+            }),
+        )
+        .route(
+            "/parent/{kind}",
+            axum::routing::get(
+                |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                    (
+                        [(header::CONTENT_TYPE, "text/html; charset=windows-1252")],
+                        format!("<iframe src='/{kind}'></iframe>"),
+                    )
+                },
+            ),
+        );
+    let (addr, _server) = spawn_dedicated_fixture_server(fixture, "chromium-xml-encoding");
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for (name, mime, _, encoding, expected, namespace) in cases {
+        for prefix in ["", "parent/"] {
+            let navigated = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/url"),
+                json!({"url":format!("http://{addr}/{prefix}{name}")}),
+            )
+            .await;
+            assert_eq!(navigated, json!({"value":null}), "{prefix}{name}");
+            let observed = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/execute/sync"),
+                json!({
+                    "script": "const d=document.querySelector('iframe')?.contentDocument ?? document; const result=d.getElementById('result'); return [result.textContent,d.characterSet,d.contentType,result.namespaceURI];",
+                    "args": [],
+                }),
+            ).await;
+            assert_eq!(
+                observed["value"],
+                json!([expected, encoding, mime, namespace]),
+                "{prefix}{name}"
+            );
         }
     }
     classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;

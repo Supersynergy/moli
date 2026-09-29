@@ -25,6 +25,187 @@ fn unexpected_legacy_encoding_detector(
 }
 
 #[test]
+fn xml_document_ignores_html_meta_across_chunk_splits() {
+    for declaration in ["", "<?xml version='1.0' encoding='UTF-8'?>"] {
+        for meta in [
+            "<meta charset='windows-1252'/>",
+            "<meta http-equiv='content-type' content='text/html; charset=windows-1252'/>",
+        ] {
+            let source = format!("{declaration}<root>{meta}<value>café</value></root>");
+            assert_xml_document_decodes_across_chunk_splits(
+                &[],
+                source.as_bytes(),
+                &source,
+                "UTF-8",
+            );
+        }
+    }
+}
+
+fn assert_xml_document_decodes_across_chunk_splits(
+    headers: &[(String, Vec<u8>)],
+    bytes: &[u8],
+    source: &str,
+    encoding: &str,
+) {
+    for split in 0..=bytes.len() {
+        let mut decoder = HtmlDocumentStreamingDecoder::new_xml_document(headers);
+        let mut decoded = decoder.push(&bytes[..split]).concat();
+        decoded.push_str(&decoder.push(&bytes[split..]).concat());
+        decoded.push_str(&decoder.finish().unwrap_or_default());
+        assert_eq!(decoded, source, "{encoding}: split {split}");
+        assert_eq!(decoder.document_encoding_name(), encoding, "split {split}");
+    }
+    let mut decoder = HtmlDocumentStreamingDecoder::new_xml_document(headers);
+    let mut decoded = String::new();
+    for byte in bytes {
+        decoded.push_str(&decoder.push(std::slice::from_ref(byte)).concat());
+    }
+    decoded.push_str(&decoder.finish().unwrap_or_default());
+    assert_eq!(decoded, source, "{encoding}: single-byte chunks");
+    assert_eq!(decoder.document_encoding_name(), encoding);
+}
+
+#[test]
+fn xml_document_preserves_encoding_precedence_across_chunk_splits() {
+    let source = "<?xml version='1.0' encoding='windows-1252'?>\
+                  <root><meta charset='UTF-8'/><value>café</value></root>";
+    let legacy = encoding_rs::WINDOWS_1252.encode(source).0.into_owned();
+    assert_xml_document_decodes_across_chunk_splits(&[], &legacy, source, "windows-1252");
+
+    let headers = [(
+        "Content-Type".to_owned(),
+        b"application/xml; charset=utf-8".to_vec(),
+    )];
+    assert_xml_document_decodes_across_chunk_splits(&headers, source.as_bytes(), source, "UTF-8");
+
+    let headers = [(
+        "Content-Type".to_owned(),
+        b"application/xml; charset=windows-1252".to_vec(),
+    )];
+    let bom_body = [b"\xef\xbb\xbf".as_slice(), source.as_bytes()].concat();
+    assert_xml_document_decodes_across_chunk_splits(&headers, &bom_body, source, "UTF-8");
+
+    let source = "<?xml version='1.0' encoding='UTF-16'?>\
+                  <root><meta charset='windows-1252'/><value>café</value></root>";
+    for (bytes, bom, encoding) in [
+        (utf16le_bytes(source), [0xff, 0xfe], "UTF-16LE"),
+        (utf16be_bytes(source), [0xfe, 0xff], "UTF-16BE"),
+    ] {
+        assert_xml_document_decodes_across_chunk_splits(&[], &bytes, source, encoding);
+        let bom_body = [bom.as_slice(), &bytes].concat();
+        assert_xml_document_decodes_across_chunk_splits(&headers, &bom_body, source, encoding);
+    }
+}
+
+#[test]
+fn xml_document_ignores_encoding_attributes_in_processing_instructions() {
+    let source = "<?xml-stylesheet encoding='windows-1252'?>\
+                  <root><value>café</value></root>";
+    assert_xml_document_decodes_across_chunk_splits(&[], source.as_bytes(), source, "UTF-8");
+}
+
+#[test]
+fn xml_document_selects_encoding_at_the_end_of_its_declaration() {
+    let mut decoder = HtmlDocumentStreamingDecoder::new_xml_document(&[]);
+    let mut decoded = decoder
+        .push(b"<?xml version='1.0' encoding='windows-")
+        .concat();
+    assert_eq!(decoder.selected_encoding_name(), None);
+    decoded.push_str(&decoder.push(b"1252'?>").concat());
+    assert_eq!(decoder.selected_encoding_name(), Some("windows-1252"));
+    decoded.push_str(&decoder.push(b"<root>caf\xe9</root>").concat());
+    decoded.push_str(&decoder.finish().unwrap_or_default());
+    assert_eq!(
+        decoded,
+        "<?xml version='1.0' encoding='windows-1252'?><root>café</root>"
+    );
+}
+
+#[test]
+fn xml_document_finishes_empty_or_incomplete_declarations_with_utf8() {
+    for source in [
+        "",
+        "<",
+        "<?xml",
+        "<?xml version='1.0' encoding='windows-1252'",
+    ] {
+        assert_xml_document_decodes_across_chunk_splits(&[], source.as_bytes(), source, "UTF-8");
+    }
+}
+
+// Chromium a03603fe9af6230a12f1b2fb2c18a7d003a0d937:
+// third_party/blink/renderer/core/html/parser/text_resource_decoder_test.cc,
+// XMLDeclPieces. Also exercise the XML/Text policies with the same byte stream.
+#[test]
+fn chromium_xml_declaration_pieces_follow_the_document_policy() {
+    let source = b"<?xml encoding='utf-8'?>foo";
+    for (mut decoder, expected_encoding) in [
+        (HtmlDocumentStreamingDecoder::new(&[]), "UTF-8"),
+        (HtmlDocumentStreamingDecoder::new_xml_document(&[]), "UTF-8"),
+        (
+            HtmlDocumentStreamingDecoder::new_text_document(
+                &[],
+                "https://example.test/",
+                test_legacy_encoding_detector,
+                false,
+                None,
+            ),
+            "windows-1252",
+        ),
+    ] {
+        let mut decoded = String::new();
+        for byte in source {
+            decoded.push_str(&decoder.push(std::slice::from_ref(byte)).concat());
+        }
+        decoded.push_str(&decoder.finish().unwrap_or_default());
+        assert_eq!(decoded.as_bytes(), source);
+        assert_eq!(decoder.document_encoding_name(), expected_encoding);
+    }
+}
+
+// Chromium text_resource_decoder_test.cc, BrokenBOMs (revision above).
+#[test]
+fn chromium_plain_text_broken_boms_are_flushed_with_the_default_encoding() {
+    for (bytes, expected) in [
+        (b"\xef\xbb".as_slice(), "ï»"),
+        (b"\xff", "ÿ"),
+        (b"\xfe", "þ"),
+    ] {
+        let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+            &[],
+            "https://example.test/",
+            test_legacy_encoding_detector,
+            false,
+            None,
+        );
+        for byte in bytes {
+            assert!(decoder.push(std::slice::from_ref(byte)).is_empty());
+        }
+        assert_eq!(decoder.finish().as_deref(), Some(expected));
+        assert_eq!(decoder.document_encoding_name(), "windows-1252");
+    }
+}
+
+// Adapt Chromium fast/encoding/bom-in-content{,-utf16}.html to the XML policy.
+#[test]
+fn chromium_bom_in_content_is_preserved_by_xml_decoding() {
+    let source = "<?xml version='1.0'?><root>\u{feff}</root>";
+    for (bytes, bom, encoding) in [
+        (
+            source.as_bytes().to_vec(),
+            b"\xef\xbb\xbf".as_slice(),
+            "UTF-8",
+        ),
+        (utf16le_bytes(source), b"\xff\xfe", "UTF-16LE"),
+        (utf16be_bytes(source), b"\xfe\xff", "UTF-16BE"),
+    ] {
+        let bytes = [bom, &bytes].concat();
+        assert_xml_document_decodes_across_chunk_splits(&[], &bytes, source, encoding);
+    }
+}
+
+#[test]
 fn json_text_document_defaults_to_utf8_across_every_chunk_split() {
     let input = "{\"name\":\"Gülçek\"}";
     for split in 0..=input.len() {

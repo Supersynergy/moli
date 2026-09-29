@@ -18,9 +18,7 @@ pub(crate) fn new_document_response_decoder(
             inherited_encoding,
         )
     } else if content_type.is_some_and(is_xml_document_mime) {
-        // XML declarations still apply; neither parent encoding nor heuristics
-        // can replace XML's UTF-8 default.
-        HtmlDocumentStreamingDecoder::new_with_fallback(headers, Some("UTF-8"))
+        HtmlDocumentStreamingDecoder::new_xml_document(headers)
     } else if inherited_encoding.is_some() {
         HtmlDocumentStreamingDecoder::new_with_fallback(headers, inherited_encoding)
     } else {
@@ -51,6 +49,34 @@ pub(crate) fn decode_document_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xml_responses_ignore_html_meta_encoding_declarations() {
+        for mime in [
+            "application/xml",
+            "text/xml",
+            "application/atom+xml",
+            "text/example+xml",
+            "application/xhtml+xml",
+        ] {
+            let headers = [("Content-Type".to_owned(), mime.as_bytes().to_vec())];
+            for declaration in ["", "<?xml version='1.0' encoding='UTF-8'?>"] {
+                let source = format!(
+                    "{declaration}<html xmlns='http://www.w3.org/1999/xhtml'>\
+                     <head><meta charset='windows-1252'/></head><body>café</body></html>"
+                );
+                let (decoded, encoding) = decode_document_response(
+                    source.as_bytes(),
+                    &headers,
+                    Some(mime),
+                    &Url::parse("https://example.test/document").unwrap(),
+                    Some("GBK"),
+                );
+                assert_eq!(decoded, source, "{mime}: {declaration}");
+                assert_eq!(encoding, "UTF-8", "{mime}: {declaration}");
+            }
+        }
+    }
 
     #[test]
     fn json_and_xml_responses_keep_utf8_defaults_with_a_legacy_parent() {

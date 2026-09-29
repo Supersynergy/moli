@@ -2,8 +2,10 @@ use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn external_raw_xml_document_decodes_response_bytes() {
-    const SOURCE: &str = "<feed xmlns='http://www.w3.org/2005/Atom'><title>café</title></feed>";
-    let legacy_body = b"<feed xmlns='http://www.w3.org/2005/Atom'><title>caf\xe9</title></feed>";
+    const SOURCE: &str = "<feed xmlns='http://www.w3.org/2005/Atom'>\
+                         <meta charset='windows-1252'/><title>café</title></feed>";
+    let legacy_body = b"<feed xmlns='http://www.w3.org/2005/Atom'>\
+                        <meta charset='UTF-8'/><title>caf\xe9</title></feed>";
     let cases = [
         (
             "application/atom+xml; charset=windows-1252",
