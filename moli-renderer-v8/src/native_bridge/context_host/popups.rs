@@ -955,7 +955,7 @@ impl JsContextHost {
         } else {
             self.start_lightweight_popup_document_load(
                 navigation_task,
-                initial_url.clone(),
+                Request::get_with_url(initial_url.clone()),
                 about_blank_url(),
                 initial_document_state,
             )
@@ -1064,7 +1064,7 @@ impl JsContextHost {
         } else {
             self.start_lightweight_popup_document_load(
                 navigation_task,
-                target_url,
+                Request::get_with_url(target_url),
                 previous_url,
                 navigation_state,
             )
@@ -1472,6 +1472,21 @@ impl JsContextHost {
         target_url: Url,
         kind: crate::context_bootstrap::LocationNavigationKind,
     ) -> bool {
+        self.navigate_lightweight_popup_window_with_request(
+            scope,
+            popup_id,
+            Request::get_with_url(target_url),
+            kind,
+        )
+    }
+
+    pub(crate) fn navigate_lightweight_popup_window_with_request(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        request: Request,
+        kind: crate::context_bootstrap::LocationNavigationKind,
+    ) -> bool {
         if !self.lightweight_popup_is_open(popup_id) {
             return false;
         }
@@ -1480,10 +1495,13 @@ impl JsContextHost {
         };
         let current_url = lightweight_popup_location_href(scope, window)
             .or_else(|| self.lightweight_popup_location_url(popup_id));
-        if !matches!(
-            kind,
-            crate::context_bootstrap::LocationNavigationKind::Reload
-        ) && urls_refer_to_same_document_except_fragment(current_url.as_ref(), &target_url)
+        let target_url = request.url.clone();
+        if request.method == "GET"
+            && !matches!(
+                kind,
+                crate::context_bootstrap::LocationNavigationKind::Reload
+            )
+            && urls_refer_to_same_document_except_fragment(current_url.as_ref(), &target_url)
         {
             let previous_url = current_url.clone();
             let base_url = self
@@ -1512,11 +1530,13 @@ impl JsContextHost {
             }
             return true;
         }
-        if !matches!(
-            kind,
-            crate::context_bootstrap::LocationNavigationKind::Reload
-        ) && let Some(previous_url) =
-            self.pending_lightweight_popup_same_document_previous_url(popup_id, &target_url)
+        if request.method == "GET"
+            && !matches!(
+                kind,
+                crate::context_bootstrap::LocationNavigationKind::Reload
+            )
+            && let Some(previous_url) =
+                self.pending_lightweight_popup_same_document_previous_url(popup_id, &target_url)
         {
             let base_url = self
                 .lightweight_popup_base_url(scope, popup_id)
@@ -1626,7 +1646,7 @@ impl JsContextHost {
         if self
             .start_lightweight_popup_document_load(
                 navigation_task,
-                target_url,
+                request,
                 previous_url,
                 navigation_state,
             )
@@ -1710,7 +1730,7 @@ impl JsContextHost {
         }
         if let Some(load_id) = self.start_lightweight_popup_document_load(
             navigation_task,
-            target_url,
+            Request::get_with_url(target_url),
             previous_url,
             navigation_state,
         ) {
@@ -2184,7 +2204,7 @@ impl JsContextHost {
     fn start_lightweight_popup_document_load(
         &mut self,
         task: LightweightPopupNavigationTaskToken,
-        target_url: Url,
+        request: Request,
         previous_url: Url,
         document_state: LightweightPopupDocumentState,
     ) -> Option<u64> {
@@ -2196,7 +2216,10 @@ impl JsContextHost {
         self.next_lightweight_popup_document_load_id =
             self.next_lightweight_popup_document_load_id.wrapping_add(1);
         let target = LightweightPopupDocumentFetchTarget::new(load_id, task);
-        let local_snapshot = self.materialize_local_child_snapshot_for_url(&target_url);
+        let target_url = request.url.clone();
+        let local_snapshot = (request.method == "GET")
+            .then(|| self.materialize_local_child_snapshot_for_url(&target_url))
+            .flatten();
         let (resource_loader, request_origin) = if local_snapshot.is_none() {
             let source_owner = self.current_lightweight_popup_document_owner(popup_id)?;
             let initiating_loader = self.document_resource_loader_for_window_owner(
@@ -2267,7 +2290,7 @@ impl JsContextHost {
             let result = async {
                 let response = task_resource_loader
                     .fetch(
-                        Request::get_with_url(target_url.clone())
+                        request
                             .with_request_origin(request_origin)
                             .with_page_network_policy()
                             .with_top_level_navigation_cookie_context(),

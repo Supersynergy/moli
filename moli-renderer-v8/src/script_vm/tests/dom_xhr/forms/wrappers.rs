@@ -117,3 +117,126 @@ fn form_wrappers_share_reset_events_and_keep_inert_submissions_inert() {
     })()"#).unwrap(), "ok");
     assert!(vm.take_pending_location_navigation_with_seed().is_none());
 }
+
+#[tokio::test]
+async fn form_wrappers_submit_get_to_lightweight_popup() {
+    assert_lightweight_popup_form_submission("get").await;
+}
+
+#[tokio::test]
+async fn form_wrappers_submit_post_to_lightweight_popup() {
+    assert_lightweight_popup_form_submission("post").await;
+}
+
+async fn assert_lightweight_popup_form_submission(method: &str) {
+    let cases = [
+        ("", "form.submit()"),
+        ("_self", "HTMLFormElement.prototype.submit.call(form)"),
+        ("_parent", "form.submit()"),
+        ("_top", "form.requestSubmit()"),
+    ];
+    // POST to the current URL must still fetch a new document on every submit.
+    let submissions = if method == "post" { 2 } else { 1 };
+    let server = StaticHttpServer::spawn(cases.len() * submissions).await;
+    let loader = static_http_loader([]);
+    let opener_url = server.base_url().join("opener.html").unwrap();
+    let expected_target = if method == "get" {
+        "/submit?field=a+b%2Bc"
+    } else {
+        "/submit?existing=1"
+    };
+    let expected_url = server.base_url().join(expected_target).unwrap();
+    for (target, invocation) in cases {
+        let mut vm = new_page_task_executor_test_vm_with_loader(opener_url.as_str(), &loader);
+        vm.eval("globalThis.popup = open(); globalThis.originalOpenerDocument = document;")
+            .unwrap();
+        for _ in 0..submissions {
+            vm.eval(&format!(
+                r#"(() => {{
+              globalThis.originalPopupDocument = popup.document;
+              const form = popup.document.body.appendChild(popup.document.createElement('form'));
+              form.action = '/submit?existing=1';
+              form.method = '{method}';
+              form.target = '{target}';
+              form.innerHTML = '<input name="field" value="a b+c">';
+              {invocation};
+            }})()"#
+            ))
+            .expect("popup form submission should evaluate");
+            assert!(
+                vm.take_pending_location_navigation_with_seed().is_none(),
+                "{method} target={target:?} must not navigate the opener"
+            );
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(popup.document !== originalPopupDocument && popup.document.body.textContent === 'child fixture')",
+                "true",
+                "popup form response should replace the popup document",
+            )
+            .await;
+            assert_eq!(
+                vm.eval("popup.location.href").unwrap(),
+                expected_url.as_str()
+            );
+            assert_eq!(vm.eval("location.href").unwrap(), opener_url.as_str());
+            assert_eq!(
+                vm.eval("document === originalOpenerDocument").unwrap(),
+                "true"
+            );
+        }
+        vm.eval("popup.close()").unwrap();
+    }
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), cases.len() * submissions);
+    for request in requests {
+        assert_eq!(request.method, method.to_ascii_uppercase());
+        assert_eq!(request.target, expected_target);
+        if method == "post" {
+            assert_eq!(request.body, b"field=a+b%2Bc");
+            assert_eq!(
+                request.header_value("content-type"),
+                Some("application/x-www-form-urlencoded")
+            );
+        } else {
+            assert!(request.body.is_empty());
+        }
+    }
+}
+
+#[test]
+fn form_wrappers_popup_submission_respects_cancellation_and_closed_documents() {
+    let mut vm = new_storage_test_vm("https://form-popup-cancellation.test/");
+    assert_eq!(
+        vm.eval(r#"(() => {
+          globalThis.popup = open();
+          const original = popup.document;
+          const form = original.body.appendChild(original.createElement('form'));
+          form.action = '/submit';
+          form.innerHTML = '<input name="field" value="data">';
+          const events = [];
+          popup.navigation.addEventListener('navigate', event => {
+            events.push([event.sourceElement === form, event.formData && event.formData.get('field')]);
+            event.preventDefault();
+          });
+          for (const method of ['get', 'post']) {
+            form.method = method;
+            HTMLFormElement.prototype.submit.call(form);
+            if (popup.document !== original || popup.location.href !== 'about:blank') throw Error('canceled navigation');
+          }
+          popup.close();
+          for (const method of ['get', 'post']) {
+            form.method = method;
+            HTMLFormElement.prototype.submit.call(form);
+          }
+          return JSON.stringify(events);
+        })()"#).unwrap(),
+        "[[true,null],[true,\"data\"]]"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+    assert!(
+        !vm._context_host
+            .borrow()
+            .has_pending_lightweight_popup_document_loads()
+    );
+}
