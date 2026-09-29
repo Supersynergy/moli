@@ -125,6 +125,7 @@ DOCUMENT_CHARSET_FIXTURES = {
     "/html/syntax/charset/resources/bogus-charset-http-valid-meta.py":
         b"<meta charset=windows-1251>\xa2\n",
 }
+IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
 
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
@@ -1930,6 +1931,35 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
             return True
 
+        def _serve_iframe_stash_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != IFRAME_STASH_PATH:
+                return False
+            # Only POST reads the body. Other methods take the result without
+            # waiting for an unused upload, including HEAD and custom methods.
+            self.close_connection = True
+            # wptserve defaults the stash namespace to the request URL path.
+            stash_path = parsed.path
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            try:
+                key = params["id"][0]
+                if self.command == "POST":
+                    # wptserve's request.body is bounded by Content-Length,
+                    # even when the request also has Transfer-Encoding.
+                    value = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                    if value is None:
+                        return True
+                    fetch_stash.put(key, value, path=stash_path)
+                    body = b""
+                else:
+                    body = fetch_stash.take(key, path=stash_path)
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return True
+            self._send_python_handler_response(IFRAME_STASH_PATH, parsed.query, body)
+            return True
+
+
         def _send_python_handler_response(
             self, path: str, query: str, body: bytes | None,
             *, headers: list[tuple[str, str]] | None = None,
@@ -2003,6 +2033,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.wfile.write(output)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            return True
+
         def _serve_document_charset_resource(self) -> bool:
             path = unquote(urlsplit(self.path).path)
             if path not in DOCUMENT_CHARSET_FIXTURES:
@@ -2014,6 +2046,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 emit_body=self.command != "HEAD", cache_control=None,
             )
             return True
+
 
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
@@ -2030,6 +2063,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_content_type_resource():
                 return
             if self._serve_document_charset_resource():
+                return
+            if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2081,6 +2116,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_content_type_resource():
                 return
             if self._serve_document_charset_resource():
+                return
+            if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2165,6 +2202,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_document_charset_resource():
                 return
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2214,6 +2253,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_content_type_resource():
                 return
             if self._serve_document_charset_resource():
+                return
+            if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2397,46 +2438,12 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 # wptserve's Request.GET preserves percent-decoded bytes and
                 # MultiDict.first selects the first value, including an empty one.
                 body = params["content"][0].encode("latin-1")
-                headers = [("Content-Type", "text/html"), ("X-XSS-Protection", "0")]
-                status, delay, auto_content_length = 200, 0.0, True
-                for name, args in parse_pipe_commands(parsed.query):
-                    if name == "header":
-                        header_name, value = args[:2]
-                        value = value.replace("\r", " ").replace("\n", " ")
-                        if _valid_static_response_header(header_name, value):
-                            headers = _apply_header_operations(headers, [(
-                                header_name, value,
-                                len(args) == 3 and args[2].lower() in {"true", "1"},
-                            )])
-                    elif name == "status":
-                        status = int(args[0])
-                    elif name == "sub":
-                        body = self._substitute_response_template(
-                            body, COMMON_ECHO_PATH, parsed.query,
-                            escape_type=args[0] if args else "html",
-                        )
-                    elif name == "trickle":
-                        auto_content_length = False
-                        if not any(_headers_include(headers, name)
-                                   for name in ("Cache-Control", "Pragma", "Expires")):
-                            headers.extend([
-                                ("Cache-Control", "no-cache, no-store, must-revalidate"),
-                                ("Pragma", "no-cache"),
-                                ("Expires", "0"),
-                            ])
-                        match = _TRICKLE_DELAY_RE.fullmatch(args[0])
-                        if match is not None:
-                            delay = max(delay, float(match.group(1)))
-            except (KeyError, WptPipeError):
+            except KeyError:
                 self.send_error(500)
                 return True
-            if delay:
-                time.sleep(min(delay, _MAX_TRICKLE_DELAY_SECONDS))
-            self._send_bytes(
-                None, body, emit_body=self.command != "HEAD",
-                extra_headers=[*headers, ("Connection", "close")],
-                status_code=status, cache_control=None,
-                auto_content_length=auto_content_length,
+            self._send_python_handler_response(
+                COMMON_ECHO_PATH, parsed.query, body,
+                headers=[("Content-Type", "text/html"), ("X-XSS-Protection", "0")],
             )
             return True
 
@@ -2446,6 +2453,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_content_type_resource():
                 return
             if self._serve_document_charset_resource():
+                return
+            if self._serve_iframe_stash_resource():
                 return
             try:
                 self._serve_response(emit_body=emit_body)
@@ -3258,6 +3267,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return self._serve_content_type_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) in DOCUMENT_CHARSET_FIXTURES:
                 return self._serve_document_charset_resource
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == IFRAME_STASH_PATH:
+                return self._serve_iframe_stash_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
