@@ -847,6 +847,7 @@ def _supported_wptserve_handler_references(
         supported += _remote_context_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _fetch_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _document_charset_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _iframe_stash_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _navigation_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
@@ -1718,5 +1719,19 @@ def _document_charset_handler_reference_patterns(directory: str) -> tuple[re.Pat
             rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
         )
         for reference in references
+    )
+
+
+
+@lru_cache(maxsize=None)
+def _iframe_stash_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "html/semantics/embedded-content/the-iframe-element/stash.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
     )
 
