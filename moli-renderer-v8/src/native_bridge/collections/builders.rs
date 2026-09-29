@@ -303,7 +303,7 @@ pub(in crate::native_bridge) fn build_collection_wrapper<'s>(
     wrapper
 }
 
-fn build_static_handle_node_list_wrapper<'s>(
+pub(crate) fn build_static_handle_node_list_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handles: &[DomHandle],
@@ -334,11 +334,16 @@ fn build_static_handle_node_list_wrapper<'s>(
     );
     set_collection_prototype(scope, wrapper, CollectionKind::NodeList);
 
-    let collection_id = {
+    let collections = {
         let host = unsafe { &mut *runtime_ptr };
-        host.native_bridge_mut()
-            .register_static_handle_collection(handles.to_vec())
+        host.native_bridge_mut().static_handle_collection_store()
     };
+    let collection_id = collections.borrow_mut().register(handles.to_vec());
+    // Mutation records create short-lived snapshots frequently. Release the
+    // native handle vector when its wrapper dies, without retaining the host.
+    crate::v8_finalizer::track_context_owned_v8_finalizer(scope, wrapper, move || {
+        collections.borrow_mut().remove(collection_id);
+    });
     assert!(
         wrapper.set_internal_field(
             STATIC_HANDLE_COLLECTION_ID_INTERNAL_FIELD,

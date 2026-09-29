@@ -378,7 +378,7 @@ impl LiveCollectionStore {
 }
 
 #[derive(Debug)]
-struct StaticHandleCollectionStore {
+pub(in crate::native_bridge) struct StaticHandleCollectionStore {
     next_id: u32,
     handles: HashMap<u32, Vec<DomHandle>>,
 }
@@ -393,7 +393,7 @@ impl Default for StaticHandleCollectionStore {
 }
 
 impl StaticHandleCollectionStore {
-    fn register(&mut self, handles: Vec<DomHandle>) -> u32 {
+    pub(in crate::native_bridge) fn register(&mut self, handles: Vec<DomHandle>) -> u32 {
         let collection_id = self.next_id;
         self.next_id = self
             .next_id
@@ -405,6 +405,10 @@ impl StaticHandleCollectionStore {
             "static handle collection ids must never be reused"
         );
         collection_id
+    }
+
+    pub(in crate::native_bridge) fn remove(&mut self, collection_id: u32) {
+        self.handles.remove(&collection_id);
     }
 
     fn len(&self, collection_id: u32) -> Option<usize> {
@@ -555,7 +559,7 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
 pub(super) struct BridgeIdentityStore {
     reflector_handles: IndexSet<BridgeHandle>,
     live_collections: LiveCollectionStore,
-    static_handle_collections: StaticHandleCollectionStore,
+    static_handle_collections: Rc<RefCell<StaticHandleCollectionStore>>,
     default_world_wrapper_cache: Rc<RefCell<BridgeContextWrapperCache>>,
 }
 
@@ -666,12 +670,14 @@ impl BridgeIdentityStore {
         });
     }
 
-    pub(super) fn register_static_handle_collection(&mut self, handles: Vec<DomHandle>) -> u32 {
-        self.static_handle_collections.register(handles)
+    pub(super) fn static_handle_collection_store(
+        &self,
+    ) -> Rc<RefCell<StaticHandleCollectionStore>> {
+        self.static_handle_collections.clone()
     }
 
     pub(super) fn static_handle_collection_len(&self, collection_id: u32) -> Option<usize> {
-        self.static_handle_collections.len(collection_id)
+        self.static_handle_collections.borrow().len(collection_id)
     }
 
     pub(super) fn static_handle_collection_handle_at(
@@ -680,15 +686,59 @@ impl BridgeIdentityStore {
         index: usize,
     ) -> Option<DomHandle> {
         self.static_handle_collections
+            .borrow()
             .handle_at(collection_id, index)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::mem::size_of;
+    use std::{cell::RefCell, mem::size_of, rc::Rc};
 
     use super::{BridgeCachedWrapper, BridgeHandle, BridgeIdentityStore, ReflectorId};
+
+    #[test]
+    fn static_handle_collection_releases_its_snapshot_on_wrapper_gc() {
+        crate::ensure_v8_for_test();
+        let store = Rc::new(RefCell::new(super::StaticHandleCollectionStore::default()));
+        let mut isolate = v8::Isolate::new(Default::default());
+        let (wrapper, finalizer, id) = {
+            let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let wrapper = v8::Object::new(scope);
+            let id = store
+                .borrow_mut()
+                .register(vec![super::DomHandle::new(0), super::DomHandle::new(1)]);
+            let finalizer_store = store.clone();
+            let finalizer = v8::Weak::with_guaranteed_finalizer(
+                scope,
+                wrapper,
+                Box::new(move || finalizer_store.borrow_mut().remove(id)),
+            );
+            (v8::Global::new(scope, wrapper), finalizer, id)
+        };
+        isolate.low_memory_notification();
+        assert_eq!(
+            store.borrow().len(id),
+            Some(2),
+            "live wrapper retains its snapshot"
+        );
+        assert_eq!(
+            store.borrow().handle_at(id, 1),
+            Some(super::DomHandle::new(1))
+        );
+        drop(wrapper);
+        isolate.low_memory_notification();
+        assert_eq!(
+            store.borrow().len(id),
+            None,
+            "GC releases the handle vector"
+        );
+        assert!(store.borrow().handles.is_empty());
+        drop(finalizer);
+    }
 
     #[test]
     fn bridge_handle_stays_compact_for_per_wrapper_identity_tables() {

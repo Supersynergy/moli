@@ -342,3 +342,19 @@ fn performance_observer_disconnect_retires_and_reobserve_restores_delivery() {
         .expect("PerformanceObserver re-observe workflow should flush");
     assert_eq!(delivered, r#"["delivered-after-reobserve"]"#);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn mutation_record_node_lists_are_native_readonly_snapshots() {
+    let mut vm = observer_callback_test_vm("https://mutation-record-node-lists.test/");
+    vm.eval(include_str!("mutation_record_node_lists.js"))
+        .expect("MutationRecord NodeList fixture should evaluate");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    vm.advance_timers_until_deadline_for_test(&loader)
+        .await
+        .expect("deliver mutation records");
+    assert_eq!(
+        vm.eval("String(globalThis.__mutationRecordNodeListResult)")
+            .unwrap(),
+        "true"
+    );
+}

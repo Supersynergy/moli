@@ -42,7 +42,6 @@ pub(super) use bridge_callbacks::{
     bridge_resolve_live_collection_callback,
 };
 pub(in crate::native_bridge::collections) use builders::STATIC_HANDLE_COLLECTION_ID_INTERNAL_FIELD;
-pub(crate) use builders::install_collection_template_bindings;
 pub(in crate::native_bridge) use builders::{
     STATIC_COLLECTION_LENGTH_SLOT, build_fresh_document_all_named_collection_value,
     is_document_all_named_collection_value,
@@ -51,6 +50,9 @@ pub(super) use builders::{
     build_collection_wrapper, build_live_child_node_list_for_node, build_live_collection_for_node,
     build_live_collection_wrapper, build_live_collection_wrapper_for_receiver,
     build_live_html_children_collection_for_node, build_node_list_from_handles,
+};
+pub(crate) use builders::{
+    build_static_handle_node_list_wrapper, install_collection_template_bindings,
 };
 pub(in crate::native_bridge) use shared::array_index_property_name;
 // Keep these re-exports visible only inside `collections`; sibling modules use `super::*`

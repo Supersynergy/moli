@@ -1,4 +1,6 @@
-use super::super::LiveCollectionDescriptor;
+use std::{cell::RefCell, rc::Rc};
+
+use super::super::{LiveCollectionDescriptor, identity::StaticHandleCollectionStore};
 use super::NativeDomBridge;
 
 impl NativeDomBridge {
@@ -35,11 +37,10 @@ impl NativeDomBridge {
             .cache_live_collection_wrapper(scope, descriptor, wrapper);
     }
 
-    pub(in crate::native_bridge) fn register_static_handle_collection(
-        &mut self,
-        handles: Vec<crate::document_runtime::DomHandle>,
-    ) -> u32 {
-        self.identity.register_static_handle_collection(handles)
+    pub(in crate::native_bridge) fn static_handle_collection_store(
+        &self,
+    ) -> Rc<RefCell<StaticHandleCollectionStore>> {
+        self.identity.static_handle_collection_store()
     }
 
     pub(in crate::native_bridge) fn static_handle_collection_len(

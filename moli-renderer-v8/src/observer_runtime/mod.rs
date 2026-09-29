@@ -39,14 +39,17 @@ use super::{
     context_bootstrap::build_dom_rect_object,
     host::report_event_callback_exception,
     native_bridge::document::{DETACHED_STATE_SLOT, detached_native_handle_for_runtime},
-    native_bridge::{JsContextHost, callback_value_dom_handle, wrapped_handle_value},
+    native_bridge::{
+        JsContextHost, build_static_handle_node_list_wrapper, callback_value_dom_handle,
+        wrapped_handle_value,
+    },
     native_bridge::{
         compute_mock_intersection_client_rect, compute_mock_intersection_scrollport_client_rect,
     },
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        get_private_object, get_private_value, global_constructor_prototype, serialize_v8_array,
-        serialize_v8_iter_array, throw_range_error, throw_type_error, v8_string, v8str,
+        get_private_object, get_private_value, serialize_v8_array, serialize_v8_iter_array,
+        throw_range_error, throw_type_error, v8_string, v8str,
     },
     window_webidl_callback::WindowWebIdlCallbackFunctionOutcome,
 };
@@ -1338,8 +1341,8 @@ fn build_mutation_record_object<'s>(
                 .and_then(|namespace| v8_string(scope, namespace))
                 .map(v8::Local::<v8::Value>::from)
                 .unwrap_or_else(|| v8::null(scope).into());
-            let added_nodes = empty_node_list_like(scope);
-            let removed_nodes = empty_node_list_like(scope);
+            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
+            let removed_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
             (
                 v8str(scope, "attributes").into(),
                 v8_string(scope, attribute_name)?.into(),
@@ -1356,8 +1359,8 @@ fn build_mutation_record_object<'s>(
             )
         }
         QueuedMutationRecordKind::CharacterData { old_value } => {
-            let added_nodes = empty_node_list_like(scope);
-            let removed_nodes = empty_node_list_like(scope);
+            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
+            let removed_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, &[]);
             (
                 v8str(scope, "characterData").into(),
                 v8::null(scope).into(),
@@ -1379,8 +1382,9 @@ fn build_mutation_record_object<'s>(
             previous_sibling,
             next_sibling,
         } => {
-            let added_nodes = build_node_array(scope, host_ptr, added_nodes);
-            let removed_nodes = build_node_array(scope, host_ptr, removed_nodes);
+            let added_nodes = build_static_handle_node_list_wrapper(scope, host_ptr, added_nodes);
+            let removed_nodes =
+                build_static_handle_node_list_wrapper(scope, host_ptr, removed_nodes);
             let previous_sibling = previous_sibling
                 .and_then(|handle| wrap_node_handle(scope, host_ptr, handle))
                 .map(v8::Local::<v8::Value>::from)
@@ -1506,36 +1510,6 @@ fn create_rect_object<'s>(
     height: f64,
 ) -> v8::Local<'s, v8::Object> {
     build_dom_rect_object(scope, x, y, width, height)
-}
-
-fn build_node_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
-    handles: &[NativeNodeId],
-) -> v8::Local<'s, v8::Array> {
-    let values = handles
-        .iter()
-        .copied()
-        .map(|handle| {
-            wrap_node_handle(scope, host_ptr, handle)
-                .map(v8::Local::<v8::Value>::from)
-                .unwrap_or_else(|| v8::null(scope).into())
-        })
-        .collect::<Vec<_>>();
-    let array =
-        serialize_v8_array(scope, values.as_slice()).unwrap_or_else(|| v8::Array::new(scope, 0));
-    if let Some(prototype) = global_constructor_prototype(scope, "NodeList") {
-        let _ = array.set_prototype(scope, prototype.into());
-    }
-    array
-}
-
-fn empty_node_list_like<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Array> {
-    let array = v8::Array::new(scope, 0);
-    if let Some(prototype) = global_constructor_prototype(scope, "NodeList") {
-        let _ = array.set_prototype(scope, prototype.into());
-    }
-    array
 }
 
 fn wrap_node_handle<'s>(
