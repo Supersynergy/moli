@@ -1358,7 +1358,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["location"]
-notes = "Manual compat coverage for location.protocol failure boundaries: syntactically invalid schemes throw SyntaxError, while valid scheme-state overrides that do not produce an HTTP(S) URL leave the current URL and session history unchanged. Same-scheme and HTTP-to-HTTPS navigation are covered by renderer tests and upstream WPT."
+notes = "Manual compat coverage for location.protocol failure boundaries: invalid syntax throws SyntaxError, while rejected data/custom/file replacements reload a same-origin HTTP iframe at its unchanged URL. The file case uses the fixture's non-default port. Renderer tests also cover credentials, default ports, non-HTTP(S) results, same-scheme assignments and HTTP-to-HTTPS navigation."
 
 [[test]]
 id = "location-assign-fragment-history-basic"
