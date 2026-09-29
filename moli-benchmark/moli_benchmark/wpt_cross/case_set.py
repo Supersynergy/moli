@@ -837,6 +837,8 @@ def _supported_wptserve_handler_references(
     rel: str | None,
 ) -> tuple[re.Pattern[str], ...]:
     supported: tuple[re.Pattern[str], ...] = ()
+    if rel is not None:
+        supported += _service_worker_registration_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None and rel.startswith("fetch/api/"):
         supported += _empty_location_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None:
@@ -1631,3 +1633,26 @@ def explicit_case(wpt_root: Path, case_path: str) -> WptCase:
         timeout_multiplier=timeout_multiplier,
         test_type="crashtest" if _is_crashtest_path(source_case_path) else "testharness",
     )
+
+
+@lru_cache(maxsize=None)
+def _service_worker_registration_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    resources = (
+        "service-workers/service-worker/resources/mime-type-worker.py",
+        "service-workers/service-worker/resources/import-mime-type-worker.py",
+        "service-workers/service-worker/resources/malformed-worker.py",
+        "service-workers/service-worker/resources/invalid-chunked-encoding.py",
+        "service-workers/service-worker/resources/invalid-chunked-encoding-with-flush.py",
+    )
+    for resource in resources:
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
+    )
+
