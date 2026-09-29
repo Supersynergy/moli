@@ -323,6 +323,49 @@ fn child_window_same_realm_alias_boundary_is_explicit() {
 }
 
 #[test]
+fn window_status_uses_native_accessors_and_preserves_dom_strings() {
+    let mut vm = new_parsed_test_vm("https://window-status.test/", "<!doctype html><body>");
+    vm.eval("globalThis.frame = document.body.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Window.status child Realm");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      const check = (value, label) => { if (!value) throw new Error(label); };
+      const other = frame.contentWindow;
+      const descriptor = Object.getOwnPropertyDescriptor(other, 'status');
+      check(typeof descriptor.get === 'function' && typeof descriptor.set === 'function' &&
+        descriptor.enumerable && descriptor.configurable && !('value' in descriptor), 'descriptor');
+      check(status === '' && other.status === '', 'defaults');
+      status = 'parent';
+      descriptor.set.call(other, '\ud800');
+      check(other.status === '\ud800' && status === 'parent', 'separate UTF-16 state');
+      descriptor.set.call(self, null);
+      check(status === 'null', 'borrowed setter conversion');
+      let conversions = 0;
+      const value = {toString() { conversions++; return 'converted'; }};
+      for (const receiver of [{}, Object.create(other), new Proxy(other, {})]) {
+        let error;
+        try { descriptor.set.call(receiver, value); } catch (caught) { error = caught; }
+        check(error instanceof other.TypeError, 'callee realm receiver error');
+      }
+      check(conversions === 0, 'validation before conversion');
+      const sentinel = {};
+      let error;
+      try { other.status = {toString() { throw sentinel; }}; } catch (caught) { error = caught; }
+      check(error === sentinel && other.status === '\ud800', 'conversion exception');
+      descriptor.set.call(null, 'child');
+      check(descriptor.get.call(undefined) === 'child', 'global interface receiver');
+      frame.remove();
+      return true;
+    })()"#
+        )
+        .expect("Window.status fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn window_global_accessors_use_the_borrowed_window_receiver() {
     let mut vm = new_storage_test_vm("https://window-accessor-receiver.test/");
 
