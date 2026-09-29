@@ -1,6 +1,5 @@
 FileAPI/url/sandboxed-iframe.html
 acid/acid3/numbered-tests.html
-cors/response-headers.htm
 css/css-color/parsing/color-computed-hsl.html
 css/selectors/invalidation/has-complexity.html
 custom-elements/form-associated/ElementInternals-target-element-is-held-strongly.html
@@ -60,4 +59,3 @@ quirks/hashless-hex-color/limited-quirks.html
 quirks/hashless-hex-color/no-quirks.html
 quirks/hashless-hex-color/quirks.html
 shadow-dom/declarative/gethtml.html
-xhr/send-redirect-infinite-sync.htm
