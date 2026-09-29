@@ -1,9 +1,9 @@
-use moli_web_mime::{extract_response_mime_essence, is_css_mime, is_json_module_mime};
+use moli_web_mime::{extract_response_mime_essence, is_css_mime, is_json_mime};
 
 pub(crate) fn validate_json_module_response_mime(
     headers: &[(String, Vec<u8>)],
 ) -> Result<(), String> {
-    validate_module_response_mime(headers, "JSON", is_json_module_mime)
+    validate_module_response_mime(headers, "JSON", is_json_mime)
 }
 
 pub(crate) fn validate_css_module_response_mime(

@@ -764,6 +764,64 @@ fn classic_script_header_charset_wins_over_document_character_set() {
 }
 
 #[test]
+fn classic_script_charset_uses_the_extracted_mime_record() {
+    for (values, expected) in [
+        (
+            vec!["text/plain; charset=windows-1252", "text/javascript"],
+            "€",
+        ),
+        (
+            vec!["text/javascript; charset=windows-1252", "text/javascript"],
+            "â‚¬",
+        ),
+        (
+            vec![
+                "text/javascript; charset=windows-1252",
+                "invalid",
+                "text/javascript",
+            ],
+            "â‚¬",
+        ),
+        (
+            vec![
+                "text/javascript; charset=windows-1252",
+                "text/plain",
+                "text/javascript",
+            ],
+            "€",
+        ),
+        (
+            vec![
+                "text/javascript; charset=shift_jis",
+                "text/javascript; charset=windows-1252",
+            ],
+            "â‚¬",
+        ),
+        (
+            vec!["text/javascript; charset=bogus", "text/javascript"],
+            "€",
+        ),
+        (vec!["text/javascript; charset=\" windows-1252 \""], "â‚¬"),
+    ] {
+        for combined in [false, true] {
+            let headers: Vec<_> = if combined {
+                vec![("Content-Type".to_owned(), values.join(", ").into_bytes())]
+            } else {
+                values
+                    .iter()
+                    .map(|value| ("Content-Type".to_owned(), value.as_bytes().to_vec()))
+                    .collect()
+            };
+            assert_eq!(
+                decode_classic_script_source("€".as_bytes(), &headers, None, Some("utf-8")),
+                expected,
+                "combined={combined}: {values:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn classic_script_charset_attribute_is_fallback_before_document_character_set() {
     let script = r#"document.body.textContent = "目次";"#;
     let bytes = encoding_rs::SHIFT_JIS.encode(script).0.into_owned();

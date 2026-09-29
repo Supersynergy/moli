@@ -3957,10 +3957,21 @@ import "./c.mjs";
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn module_graph_fetch_enforces_json_and_css_response_mime() -> anyhow::Result<()> {
+    async fn module_graph_fetch_enforces_response_mime_for_module_kinds() -> anyhow::Result<()> {
         for (kind, mime, body) in [
+            (
+                ModuleKind::JavaScript,
+                "text/javascript",
+                "export const answer = 42;",
+            ),
             (ModuleKind::Json, "application/json", r#"{"answer":42}"#),
+            (ModuleKind::Json, "text/json", r#"{"answer":42}"#),
             (ModuleKind::Css, "text/css", "#test { color: red; }"),
+            (
+                ModuleKind::WebAssembly,
+                "application/wasm",
+                "\0asm\x01\0\0\0",
+            ),
         ] {
             let cases = [
                 (vec![mime.to_owned()], true),
@@ -4018,10 +4029,15 @@ import "./c.mjs";
                 server.await?;
                 assert_eq!(result.is_ok(), accepts, "{kind:?}: {values:?}: {result:?}");
                 if let Err(error) = result {
-                    let expected = if kind == ModuleKind::Json {
-                        "non-JSON module response"
-                    } else {
-                        "non-CSS module response"
+                    let expected = match kind {
+                        ModuleKind::JavaScript | ModuleKind::WebAssembly => {
+                            "unsupported script MIME type"
+                        }
+                        ModuleKind::Json => "non-JSON module response",
+                        ModuleKind::Css => "non-CSS module response",
+                        ModuleKind::ModulePreloadText => {
+                            unreachable!("text preloads do not enforce a response MIME type")
+                        }
                     };
                     assert!(error.to_string().contains(expected), "{error:#}");
                 }

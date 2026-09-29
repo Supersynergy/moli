@@ -36,7 +36,7 @@ use moli_fetch::{
     NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RedirectInfo,
     RequestAuth, RequestAuthScheme, RequestAuthTarget, Response, ResponseBody, ResponseHead,
 };
-use moli_web_mime::is_json_module_mime;
+use moli_web_mime::{extract_response_mime_essence, is_json_mime};
 
 const SUBRESOURCE_RESPONSE_BODY_MEMORY_LIMIT: usize = 1024 * 1024;
 
@@ -1993,10 +1993,10 @@ fn json_path_satisfies(
     path: &[String],
     predicate: impl FnOnce(&Value) -> bool,
 ) -> bool {
-    let Some(content_type) = header_value(headers, "content-type") else {
+    let Some(content_type) = extract_response_mime_essence(headers) else {
         return false;
     };
-    if !is_json_module_mime(&content_type) {
+    if !is_json_mime(&content_type) {
         return false;
     }
 
@@ -2038,16 +2038,6 @@ fn json_value_matches_regex(value: &Value, regex: &Regex) -> bool {
         Value::Null => regex.is_match("null"),
         Value::Array(_) | Value::Object(_) => false,
     }
-}
-
-fn header_value<'a>(
-    headers: &'a [(String, Vec<u8>)],
-    name: &str,
-) -> Option<std::borrow::Cow<'a, str>> {
-    headers
-        .iter()
-        .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| moli_fetch::decode_header_value(value))
 }
 
 impl SubresourceNetworkRecord {
@@ -4343,11 +4333,32 @@ mod tests {
             r#"{"ok":true}"#,
             &expectation,
         ));
-        assert!(!json_path_equals(
+        assert!(json_path_equals(
             &[("content-type".to_owned(), b"text/json".to_vec())],
             r#"{"ok":true}"#,
             &expectation,
         ));
+        assert!(!json_path_equals(
+            &[("content-type".to_owned(), b"text/plain".to_vec())],
+            r#"{"ok":true}"#,
+            &expectation,
+        ));
+        for (values, matches) in [
+            (vec!["text/plain", "text/json"], true),
+            (vec!["text/plain, text/json"], true),
+            (vec!["text/json", "invalid", "*/*"], true),
+            (vec!["text/json", "text/plain"], false),
+        ] {
+            let headers: Vec<_> = values
+                .iter()
+                .map(|value| ("Content-Type".to_owned(), value.as_bytes().to_vec()))
+                .collect();
+            assert_eq!(
+                json_path_equals(&headers, r#"{"ok":true}"#, &expectation),
+                matches,
+                "{values:?}"
+            );
+        }
 
         let regex_expectation = SubresourceJsonPathRegex {
             path: vec!["data".to_owned(), "url".to_owned()],
@@ -4357,6 +4368,14 @@ mod tests {
             &[(
                 "content-type".to_owned(),
                 b"application/json; charset=utf-8".to_vec(),
+            )],
+            r#"{"data":{"url":"/item/42"}}"#,
+            &regex_expectation,
+        ));
+        assert!(json_path_matches_regex(
+            &[(
+                "content-type".to_owned(),
+                b"Text/JSON; charset=utf-8".to_vec(),
             )],
             r#"{"data":{"url":"/item/42"}}"#,
             &regex_expectation,

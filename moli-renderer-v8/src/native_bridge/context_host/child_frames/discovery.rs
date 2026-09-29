@@ -240,7 +240,7 @@ impl JsContextHost {
         moli_web_mime::is_html_document_mime(&mime)
             || moli_web_mime::is_xml_document_mime(&mime)
             || moli_web_mime::is_text_mime(&mime)
-            || moli_web_mime::is_json_module_mime(&mime)
+            || moli_web_mime::is_json_mime(&mime)
             || moli_web_mime::is_javascript_mime(&mime)
     }
 
