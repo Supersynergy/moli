@@ -81,6 +81,13 @@ pub(super) enum NamedElementHandles {
 }
 
 impl NamedElementHandles {
+    pub(super) fn contains(&self, handle: &DomHandle) -> bool {
+        match self {
+            Self::One(current) => current == handle,
+            Self::Many(handles) => handles.contains(handle),
+        }
+    }
+
     pub(super) fn insert(&mut self, handle: DomHandle) {
         match self {
             Self::One(current) if *current == handle => {}

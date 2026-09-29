@@ -36,28 +36,47 @@ mod focus;
 mod forms;
 
 #[cfg(test)]
-std::thread_local! {
-    static FORM_LOOKUP_WORK: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FormLookupWork {
+    pub traversals: u64,
+    pub enumerations: u64,
+    pub inspected_nodes: u64,
 }
 
 #[cfg(test)]
-pub(crate) fn take_form_lookup_work_for_test() -> (u64, u64) {
-    FORM_LOOKUP_WORK.with(|work| work.replace((0, 0)))
+std::thread_local! {
+    static FORM_LOOKUP_WORK: std::cell::Cell<FormLookupWork> = const { std::cell::Cell::new(FormLookupWork { traversals: 0, enumerations: 0, inspected_nodes: 0 }) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_form_lookup_work_for_test() -> FormLookupWork {
+    FORM_LOOKUP_WORK.with(|work| work.replace(FormLookupWork::default()))
 }
 
 #[cfg(test)]
 fn record_form_lookup_traversal_for_test() {
     FORM_LOOKUP_WORK.with(|work| {
-        let (traversals, enumerations) = work.get();
-        work.set((traversals + 1, enumerations));
+        let mut current = work.get();
+        current.traversals += 1;
+        work.set(current);
     });
 }
 
 #[cfg(test)]
 fn record_form_lookup_enumeration_for_test() {
     FORM_LOOKUP_WORK.with(|work| {
-        let (traversals, enumerations) = work.get();
-        work.set((traversals, enumerations + 1));
+        let mut current = work.get();
+        current.enumerations += 1;
+        work.set(current);
+    });
+}
+
+#[cfg(test)]
+fn record_form_lookup_node_for_test() {
+    FORM_LOOKUP_WORK.with(|work| {
+        let mut current = work.get();
+        current.inspected_nodes += 1;
+        work.set(current);
     });
 }
 mod geometry;

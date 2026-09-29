@@ -1,6 +1,152 @@
 use super::*;
 
 #[test]
+fn form_named_lookup_checks_only_index_candidates_and_existence_stops_early() {
+    use crate::native_bridge::element::take_form_lookup_work_for_test;
+    let mut vm = new_parsed_test_vm(
+        "https://form-index-work.test/",
+        "<!doctype html><body></body>",
+    );
+    vm.exec(
+        r#"
+        globalThis.indexForm = document.body.appendChild(document.createElement('form'));
+        globalThis.firstIndexed = indexForm.appendChild(document.createElement('input'));
+        firstIndexed.id = firstIndexed.name = 'indexedGroup';
+        for (let i = 0; i < 63; ++i) {
+          indexForm.appendChild(document.createElement('input')).name = 'indexedGroup';
+        }
+        globalThis.otherForm = document.body.appendChild(document.createElement('form'));
+        otherForm.appendChild(document.createElement('input')).name = 'otherOnly';
+        for (let i = 0; i < 512; ++i) {
+          const div = document.body.appendChild(document.createElement('div'));
+          div.innerHTML = '<span></span><input name="unrelated">';
+        }
+        indexForm.absentPrimeKey;
+    "#,
+        None,
+    )
+    .unwrap();
+    take_form_lookup_work_for_test();
+    assert_eq!(vm.eval("'indexedGroup' in indexForm").unwrap(), "true");
+    let work = take_form_lookup_work_for_test();
+    assert_eq!(work.inspected_nodes, 1);
+    assert_eq!((work.traversals, work.enumerations), (0, 0));
+    assert_eq!(
+        vm.eval("indexForm.otherOnly === undefined").unwrap(),
+        "true"
+    );
+    let work = take_form_lookup_work_for_test();
+    assert_eq!(work.inspected_nodes, 1);
+    assert_eq!((work.traversals, work.enumerations), (0, 0));
+    assert_eq!(
+        vm.eval("globalThis.indexedList = indexForm.indexedGroup; true")
+            .unwrap(),
+        "true"
+    );
+    let work = take_form_lookup_work_for_test();
+    assert_eq!(
+        work.inspected_nodes, 64,
+        "id/name duplicates must be inspected once"
+    );
+    assert_eq!((work.traversals, work.enumerations), (0, 0));
+    assert_eq!(vm.eval("indexedList.length").unwrap(), "64");
+    let work = take_form_lookup_work_for_test();
+    assert_eq!(
+        work.inspected_nodes, 64,
+        "live list evaluation must also use candidates"
+    );
+    assert_eq!(work.traversals, 0);
+}
+
+#[test]
+fn form_named_lookup_existence_does_not_remember_past_names() {
+    let mut vm = new_parsed_test_vm(
+        "https://form-index-existence.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const form = document.body.appendChild(document.createElement('form'));
+      for (const tag of ['input', 'img']) {
+        const item = form.appendChild(document.createElement(tag));
+        item.name = 'existenceOnly';
+        if (!('existenceOnly' in form)) throw Error('missing supported name');
+        item.name = 'renamed';
+        if ('existenceOnly' in form || form.existenceOnly !== undefined) throw Error('query remembered past name');
+        item.remove();
+      }
+      return 'ok';
+    })()"#).unwrap(), "ok");
+}
+
+#[test]
+fn form_named_lookup_index_survives_parsing_import_and_control_type_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://form-index-import.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const empty = document.body.appendChild(document.createElement('form'));
+      empty.primeIndexes;
+      const parsed = new DOMParser().parseFromString('<form><input name="shared"><input id="shared" name="shared"><img name="shared"><img name="shared"></form>', 'text/html');
+      const original = parsed.querySelector('form');
+      const imported = document.importNode(original, true);
+      for (const [mode, form] of [original, imported].entries()) {
+        const inputs = form.querySelectorAll('input');
+        const list = form.shared;
+        if (!list) throw Error(mode + ': missing list: ' + form.outerHTML + '; elements=' + form.elements.length);
+        if (list.length !== 2 || list[0] !== inputs[0] || list[1] !== inputs[1]) throw Error('parsed/imported candidates');
+        form.insertBefore(inputs[1], inputs[0]);
+        if (list[0] !== inputs[1]) throw Error('candidate insertion order leaked');
+        inputs[1].type = 'image';
+        if (list.length !== 1 || form.shared !== inputs[0]) throw Error('type eligibility');
+        inputs[0].type = 'image';
+        if (list.length !== 0 || form.shared.length !== 2 || form.shared[0].tagName !== 'IMG') throw Error('image fallback');
+        document.body.appendChild(document.adoptNode(form));
+        inputs[1].type = 'text';
+        if (list.length !== 1 || list[0] !== inputs[1] || form.shared !== inputs[1]) throw Error('adoption and type restoration');
+      }
+      return 'ok';
+    })()"#).unwrap(), "ok");
+}
+
+#[test]
+fn form_named_lookup_orders_shadow_reference_controls_and_filters_fieldset_scope() {
+    let mut vm = new_parsed_test_vm(
+        "https://form-index-shadow.test/",
+        "<!doctype html><body></body>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const host = document.body.appendChild(document.createElement('div'));
+      host.id = 'formHost';
+      const root = host.attachShadow({mode: 'open', referenceTarget: 'form'});
+      root.innerHTML = '<form id="form"><input name="shared"><input name="shared"></form>';
+      const form = root.querySelector('form');
+      const inside = form.querySelectorAll('input');
+      const external = host.appendChild(document.createElement('input'));
+      external.setAttribute('form', 'formHost');
+      external.name = 'shared';
+      const before = document.body.insertBefore(document.createElement('input'), host);
+      before.setAttribute('form', 'formHost');
+      before.name = 'shared';
+      const list = form.shared;
+      function check(expected) {
+        if (list.length !== expected.length || expected.some((item, i) => list[i] !== item)) throw Error('shadow-including order');
+      }
+      check([before, inside[0], inside[1], external]);
+      document.body.appendChild(before);
+      check([inside[0], inside[1], external, before]);
+      host.remove();
+      check([inside[0], inside[1]]);
+      const fieldset = document.body.appendChild(document.createElement('fieldset'));
+      fieldset.innerHTML = '<input name="shared"><form><input name="shared"></form>';
+      const fieldsetInputs = fieldset.querySelectorAll('input');
+      const fieldsetList = fieldset.elements;
+      if (fieldsetList.length !== 2 || fieldsetList[1] !== fieldsetInputs[1] || fieldsetList.namedItem('shared') !== fieldsetInputs[0]) throw Error('fieldset candidate scope');
+      return 'ok';
+    })()"#).unwrap(), "ok");
+}
+
+#[test]
 fn form_named_lookup_own_properties_take_precedence_over_controls_and_prototypes() {
     let mut vm = new_parsed_test_vm(
         "https://form-lookup-own-properties.test/",
@@ -208,18 +354,21 @@ fn form_named_lookup_misses_do_not_enumerate_or_traverse_controls() {
     assert_eq!(result, "ok");
     assert_eq!(
         crate::native_bridge::element::take_form_lookup_work_for_test(),
-        (0, 0)
+        Default::default()
     );
 
     // Positive control: the counter must observe real supported-property work.
     assert_eq!(vm.eval("lookupForms[0].present.tagName").unwrap(), "INPUT");
-    let (traversals, enumerations) =
-        crate::native_bridge::element::take_form_lookup_work_for_test();
-    assert!(traversals > 0);
-    assert_eq!(enumerations, 0);
+    let work = crate::native_bridge::element::take_form_lookup_work_for_test();
+    assert!(work.inspected_nodes > 0);
+    assert_eq!(work.traversals, 0);
+    assert_eq!(work.enumerations, 0);
     vm.eval("Object.getOwnPropertyNames(lookupForms[0]).length")
         .unwrap();
-    assert!(crate::native_bridge::element::take_form_lookup_work_for_test().1 > 0);
+    let work = crate::native_bridge::element::take_form_lookup_work_for_test();
+    assert!(work.enumerations > 0);
+    assert!(work.traversals > 0);
+    assert!(work.inspected_nodes > 0);
 }
 
 #[test]
