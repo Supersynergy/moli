@@ -44,13 +44,13 @@ struct StoragePrototypeMetadataDeclaration {
     to_string_tag: (),
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct StorageAliasesDeclaration<'scope> {
-    #[webapi(data_property = "localStorage")]
-    local_storage: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = "sessionStorage")]
-    session_storage: v8::Local<'scope, v8::Object>,
+#[derive(Default, WebApiObject)]
+#[webapi(plain, enumerable)]
+struct StorageAliasesDeclaration {
+    #[webapi(accessor_property = "localStorage", getter = window_local_storage_getter)]
+    local_storage: (),
+    #[webapi(accessor_property = "sessionStorage", getter = window_session_storage_getter)]
+    session_storage: (),
 }
 
 #[derive(WebApiObject)]
@@ -91,17 +91,13 @@ pub(crate) fn install_storage_aliases_for_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let local_storage =
-        ensure_storage_runtime_state_for_window(scope, window, WINDOW_LOCAL_STORAGE_SLOT, "local")
-            .ok_or_else(|| anyhow!("failed to install localStorage object"))?;
-    let session_storage = ensure_storage_runtime_state_for_window(
-        scope,
-        window,
-        WINDOW_SESSION_STORAGE_SLOT,
-        "session",
-    )
-    .ok_or_else(|| anyhow!("failed to install sessionStorage object"))?;
-    StorageAliasesDeclaration::new(local_storage, session_storage)
+    ensure_storage_runtime_state_for_window(scope, window, WINDOW_LOCAL_STORAGE_SLOT, "local")
+        .ok_or_else(|| anyhow!("failed to install localStorage object"))?;
+    ensure_storage_runtime_state_for_window(scope, window, WINDOW_SESSION_STORAGE_SLOT, "session")
+        .ok_or_else(|| anyhow!("failed to install sessionStorage object"))?;
+    // Popup aliases must use the same receiver and origin checks as other
+    // Windows, even though their Storage objects are already initialized.
+    StorageAliasesDeclaration::default()
         .initialize(scope, window)
         .map_err(|error| anyhow!("failed to initialize storage aliases: {error}"))
 }
