@@ -1288,6 +1288,10 @@ def _substitute_wpt_template_variables(
         alternate_port = port
     if remote_port is None:
         remote_port = alternate_port
+    template_primary_hostname = primary_hostname or "localhost"
+    if ":" in template_primary_hostname:
+        template_primary_hostname = "localhost"
+    template_primary_host = template_primary_hostname.encode("utf-8")
     if primary_hostname is None:
         primary_hostname = request_hostname
     request_path_bytes = request_path.encode("utf-8", errors="replace")
@@ -1341,16 +1345,16 @@ def _substitute_wpt_template_variables(
             b"http://" + request_url_host_bytes + b":" + str(remote_port).encode("ascii")
         ),
         b"https://{{hosts[][www]}}:{{ports[https][0]}}": (
-            b"http://www.localhost:" + str(port).encode("ascii")
+            b"http://www." + template_primary_host + b":" + str(port).encode("ascii")
         ),
         b"https://{{hosts[][www]}}:{{ports[https][1]}}": (
-            b"http://www.localhost:" + str(alternate_port).encode("ascii")
+            b"http://www." + template_primary_host + b":" + str(alternate_port).encode("ascii")
         ),
         b"https://{{hosts[][]}}:{{ports[https][0]}}": (
-            b"http://localhost:" + str(port).encode("ascii")
+            b"http://" + template_primary_host + b":" + str(port).encode("ascii")
         ),
         b"https://{{hosts[][]}}:{{ports[https][1]}}": (
-            b"http://localhost:" + str(alternate_port).encode("ascii")
+            b"http://" + template_primary_host + b":" + str(alternate_port).encode("ascii")
         ),
         b"https://{{hosts[alt][]}}:{{ports[https][0]}}": (
             b"http://alt.localhost:" + str(port).encode("ascii")
@@ -1382,15 +1386,16 @@ def _substitute_wpt_template_variables(
         b"{{location[host]}}": request_host_bytes,
         b"{{location[hostname]}}": request_hostname_bytes,
         b"{{location[path]}}": request_path_bytes,
-        b"{{hosts[][]}}": b"localhost",
-        b"{{hosts[][www]}}": b"www.localhost",
-        b"{{hosts[][www1]}}": b"www1.localhost",
-        b"{{hosts[][www2]}}": b"www2.localhost",
+        b"{{hosts[][]}}": template_primary_host,
+        b"{{domains[]}}": template_primary_host,
+        b"{{hosts[][www]}}": b"www." + template_primary_host,
+        b"{{hosts[][www1]}}": b"www1." + template_primary_host,
+        b"{{hosts[][www2]}}": b"www2." + template_primary_host,
         b"{{hosts[alt][]}}": b"alt.localhost",
         b"{{hosts[alt][www]}}": b"www.alt.localhost",
-        b"{{domains[www]}}": b"www.localhost",
-        b"{{domains[www1]}}": b"www1.localhost",
-        b"{{domains[www2]}}": b"www2.localhost",
+        b"{{domains[www]}}": b"www." + template_primary_host,
+        b"{{domains[www1]}}": b"www1." + template_primary_host,
+        b"{{domains[www2]}}": b"www2." + template_primary_host,
         b"{{location[port]}}": str(port).encode("ascii"),
         b"{{ports[http][0]}}": str(port).encode("ascii"),
         b"{{ports[http][1]}}": str(alternate_port).encode("ascii"),
@@ -3484,7 +3489,10 @@ class WptFixtureServer:
     refuse loopback fixtures (Obscura).
     """
 
-    def __init__(self, wpt_root: Path) -> None:
+    def __init__(self, wpt_root: Path, *, primary_hostname: str = "localhost") -> None:
+        self.primary_hostname = primary_hostname.encode("idna").decode("ascii").lower()
+        if self.primary_hostname != "localhost" and not self.primary_hostname.endswith(".localhost"):
+            raise ValueError("loopback fixture hostname must be localhost or a .localhost subdomain")
         self.wpt_root = wpt_root.resolve()
         if not self.wpt_root.exists():
             raise RuntimeError(f"WPT root does not exist: {self.wpt_root}")
@@ -3511,7 +3519,7 @@ class WptFixtureServer:
                 httpd,
                 primary_port=self.port,
                 alternate_port=self.alternate_port,
-                primary_hostname="localhost",
+                primary_hostname=self.primary_hostname,
             )
         self.thread = threading.Thread(
             target=self.httpd.serve_forever,
@@ -3599,7 +3607,7 @@ class WptFixtureServer:
 
     @property
     def base_url(self) -> str:
-        return f"http://localhost:{self.port}"
+        return f"http://{self.primary_hostname}:{self.port}"
 
     @property
     def external_base_url(self) -> str | None:
@@ -3621,7 +3629,7 @@ class WptFixtureServer:
 
     @property
     def alternate_base_url(self) -> str:
-        return f"http://localhost:{self.alternate_port}"
+        return f"http://{self.primary_hostname}:{self.alternate_port}"
 
     def _configure_httpd_defaults(
         self,
