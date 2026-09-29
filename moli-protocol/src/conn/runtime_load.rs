@@ -156,11 +156,6 @@ async fn prepare_network_error_page_navigation_with_engine_async(
     .map(NavigationLoadOutcome::response_commit_ready)
 }
 
-fn response_headers_indicate_xml_document(headers: &[(String, Vec<u8>)]) -> bool {
-    moli_web_mime::response_document_content_type(headers)
-        .is_some_and(|mime| moli_web_mime::is_xml_document_mime(&mime))
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct InitialDocumentPageOwner {
     pub(crate) browser_context_id: String,
@@ -306,25 +301,17 @@ pub struct ResponseCommitReady {
     network_error_page: Option<NetworkErrorPageNavigation>,
 }
 
-enum ResponseCommitBodyCapture {
-    Pending(tokio::task::JoinHandle<anyhow::Result<CapturedBody>>),
-    Ready(CapturedBody),
-}
+struct ResponseCommitBodyCapture(tokio::task::JoinHandle<anyhow::Result<CapturedBody>>);
 
 impl ResponseCommitBodyCapture {
     fn abort(self) {
-        if let Self::Pending(task) = self {
-            task.abort();
-        }
+        self.0.abort();
     }
 
     async fn resolve(self) -> anyhow::Result<CapturedBody> {
-        match self {
-            Self::Pending(task) => task
-                .await
-                .context("main document body capture task failed")?,
-            Self::Ready(body) => Ok(body),
-        }
+        self.0
+            .await
+            .context("main document body capture task failed")?
     }
 }
 
@@ -1283,7 +1270,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     let body_network_progress_state =
         body_progress_source.body_network_progress_for_completed_events(network_events);
     let body_progress_source_for_body_finish = body_progress_source.clone();
-    let mut initial_body_chunk = if response_status_may_use_http_error_page(response_status) {
+    let initial_body_chunk = if response_status_may_use_http_error_page(response_status) {
         match first_nonempty_response_body_chunk(&mut response).await? {
             Some(chunk) => Some(chunk),
             None => {
@@ -1308,97 +1295,8 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         None
     };
 
-    if response_headers_indicate_xml_document(&response_headers) {
-        let redirected = response.redirected;
-        let mut body_writer = CapturedBodyWriter::default();
-        if let Some(chunk) = initial_body_chunk.take() {
-            body_writer
-                .append(&chunk)
-                .context("failed to capture XML page body")?;
-        }
-        while let Some(chunk) = response.next_chunk().await {
-            body_writer
-                .append(&chunk)
-                .context("failed to capture XML page body")?;
-        }
-        response
-            .finish()
-            .await
-            .context("failed to read XML page body from stream")?;
-        let captured_body = body_writer
-            .finish()
-            .context("failed to finish captured XML page body")?;
-        let response_text = captured_body
-            .materialize_bytes()
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .context("failed to materialize XML page body")?;
-        let page_storage = load_inputs.page_storage_handles();
-        let main_document_commit = load_inputs
-            .main_document_commit_for_final_url(&final_url, None)
-            .map(Arc::new);
-        let prepared_page = engine
-            .prepare_document_page_from_response_with_storage_and_inspector_session_restores_async(
-                page_reservation,
-                load_inputs.document_replacement.clone(),
-                page_storage.into_navigation_storage(),
-                requested_url.clone(),
-                final_url.clone(),
-                load_inputs.navigation_initiator_url.clone(),
-                redirected,
-                redirect_chain.len(),
-                response_status,
-                response_headers.clone(),
-                response_text,
-                load_inputs.document_start_scripts.clone(),
-                load_inputs.runtime_bindings.clone(),
-                load_inputs
-                    .runtime_inspector_session_restore_snapshots
-                    .clone(),
-                load_inputs.extra_http_headers.clone(),
-                load_inputs.script_execution_disabled,
-                load_inputs.bypass_content_security_policy,
-                load_inputs.emulated_media.clone(),
-                load_inputs.viewport_surface,
-                load_inputs.network_offline,
-                load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                load_inputs.root_frame_id.clone(),
-                resource_source,
-                main_document_commit.as_deref().cloned(),
-            )
-            .await
-            .with_context(|| format!("failed to prepare XML page `{}`", requested_url))?;
-        if timing_enabled {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url = %requested_url,
-                stage = "response_commit_ready",
-                elapsed_ms = timing_started.elapsed().as_millis(),
-            );
-        }
-        return Ok(NavigationLoadOutcome::response_commit_ready(
-            ResponseCommitReady {
-                prepared_page: Some(prepared_page),
-                body_capture: Some(ResponseCommitBodyCapture::Ready(captured_body)),
-                body_completion_sink,
-                body_progress_source: body_progress_source_for_body_finish,
-                body_network_progress_state: Some(body_network_progress_state),
-                synthetic_body: false,
-                requested_url,
-                final_url,
-                request_method,
-                request_headers,
-                response_status,
-                response_headers,
-                response_from_cache,
-                timing_started: timing_enabled.then_some(timing_started),
-                main_document_commit,
-                network_error_page: None,
-            },
-        ));
-    }
-
+    // Preserve response bytes until the renderer selects the document encoding,
+    // including XML charsets and BOMs.
     let (body_tx, body_rx) = mpsc::channel(EXTERNAL_RAW_BODY_CHANNEL_CAPACITY);
     let (completion_tx, completion_rx) = oneshot::channel();
     let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx);
@@ -1467,7 +1365,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     Ok(NavigationLoadOutcome::response_commit_ready(
         ResponseCommitReady {
             prepared_page: Some(prepared_page),
-            body_capture: Some(ResponseCommitBodyCapture::Pending(body_capture_task)),
+            body_capture: Some(ResponseCommitBodyCapture(body_capture_task)),
             body_completion_sink,
             body_progress_source: body_progress_source_for_body_finish,
             body_network_progress_state: Some(body_network_progress_state),
@@ -3804,7 +3702,7 @@ async fn prepare_captured_document_response_with_engine_async(
 
     Ok(ResponseCommitReady {
         prepared_page: Some(prepared_page),
-        body_capture: Some(ResponseCommitBodyCapture::Pending(body_capture_task)),
+        body_capture: Some(ResponseCommitBodyCapture(body_capture_task)),
         body_completion_sink: None,
         body_progress_source,
         body_network_progress_state: Some(body_network_progress_state),
@@ -3950,7 +3848,7 @@ mod tests {
         let task = super::spawn_streaming_body_capture(response, None, body_tx, completion_tx);
         assert_eq!(body_rx.recv().await.unwrap(), b"partial body");
         assert!(body_rx.recv().await.is_none());
-        let navigation_error = super::ResponseCommitBodyCapture::Pending(task)
+        let navigation_error = super::ResponseCommitBodyCapture(task)
             .resolve()
             .await
             .expect_err("partial response must fail navigation capture");
@@ -3977,7 +3875,7 @@ mod tests {
     async fn cancelled_body_capture_retains_join_error() {
         let task = tokio::spawn(std::future::pending::<anyhow::Result<super::CapturedBody>>());
         task.abort();
-        let error = super::ResponseCommitBodyCapture::Pending(task)
+        let error = super::ResponseCommitBodyCapture(task)
             .resolve()
             .await
             .expect_err("cancelled capture must fail");

@@ -159,6 +159,121 @@ async fn webdriver_classic_xml_suffix_navigation_preserves_namespaces_and_dom_pa
 }
 
 #[tokio::test]
+async fn webdriver_classic_xml_main_and_child_documents_decode_response_bytes() {
+    const SOURCE: &str = "<feed xmlns='http://www.w3.org/2005/Atom'><title>café</title></feed>";
+    let legacy_body = b"<feed xmlns='http://www.w3.org/2005/Atom'><title>caf\xe9</title></feed>";
+    let cases = [
+        (
+            "charset",
+            "; charset=windows-1252",
+            legacy_body.to_vec(),
+            "windows-1252",
+        ),
+        (
+            "declaration",
+            "",
+            [
+                b"<?xml version='1.0' encoding='windows-1252'?>".as_slice(),
+                legacy_body,
+            ]
+            .concat(),
+            "windows-1252",
+        ),
+        (
+            "utf16le",
+            "; charset=windows-1252",
+            [
+                vec![0xff, 0xfe],
+                SOURCE.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            ]
+            .concat(),
+            "UTF-16LE",
+        ),
+        (
+            "utf16be",
+            "",
+            [
+                vec![0xfe, 0xff],
+                SOURCE.encode_utf16().flat_map(u16::to_be_bytes).collect(),
+            ]
+            .concat(),
+            "UTF-16BE",
+        ),
+    ];
+    let mimes = [
+        "application/atom+xml",
+        "application/rss+xml",
+        "text/example+xml",
+    ];
+    let mut fixture = axum::Router::new();
+    for (index, mime) in mimes.iter().enumerate() {
+        for (name, charset, body, _) in &cases {
+            let content_type = format!("{mime}{charset}");
+            let body = body.clone();
+            fixture = fixture.route(
+                &format!("/{index}-{name}"),
+                axum::routing::get(move || {
+                    let content_type = content_type.clone();
+                    let body = body.clone();
+                    async move { ([(header::CONTENT_TYPE, content_type)], body) }
+                }),
+            );
+        }
+    }
+    fixture = fixture.route(
+        "/parent/{kind}",
+        axum::routing::get(
+            |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                (
+                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    format!("<iframe src='/{kind}'></iframe>"),
+                )
+            },
+        ),
+    );
+    let (addr, _server) = spawn_dedicated_fixture_server(fixture, "xml-response-encoding");
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for (index, mime) in mimes.iter().enumerate() {
+        for (name, _, _, encoding) in &cases {
+            for prefix in ["", "parent/"] {
+                let path = format!("{prefix}{index}-{name}");
+                let navigated = classic_request_json_with_body(
+                    app.clone(),
+                    Method::POST,
+                    &format!("/session/{session_id}/url"),
+                    json!({"url":format!("http://{addr}/{path}")}),
+                )
+                .await;
+                assert_eq!(navigated, json!({"value":null}), "{path}");
+                let observed = classic_request_json_with_body(
+                    app.clone(),
+                    Method::POST,
+                    &format!("/session/{session_id}/execute/sync"),
+                    json!({
+                        "script": "const d=document.querySelector('iframe')?.contentDocument ?? document; const root=d.getElementsByTagNameNS('http://www.w3.org/2005/Atom','feed')[0]; return [root.localName,root.namespaceURI,root.textContent,d.contentType,d.characterSet];",
+                        "args": [],
+                    }),
+                ).await;
+                assert_eq!(
+                    observed["value"],
+                    json!([
+                        "feed",
+                        "http://www.w3.org/2005/Atom",
+                        "café",
+                        mime,
+                        encoding
+                    ]),
+                    "{path}"
+                );
+            }
+        }
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
 async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents() {
     const PAYLOAD: &str =
         "<meta charset='gbk'><script>window.executed=42;</script><b>literal&amp;Gülçek</b>";
