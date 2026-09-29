@@ -295,14 +295,23 @@ impl JsContextHost {
             .unwrap_or_else(|| self.document_character_set().to_owned());
         let completion_tx = self.resource_completion_tx.clone();
         let task_loader = loader.clone();
+        let browser_context_runtime = self.browser_context_runtime();
+        let client_id = self.service_worker_client_id_for_subresource_owner(
+            crate::native_bridge::context_host::OwnerDispatchScope::Child(handle),
+        );
+        let document_url = network_attribution.document_url.clone();
         loader.spawn_resource_task(async move {
             let outcome =
-                crate::planning::load_prepared_script_source_outcome_with_document_character_set(
+                crate::planning::load_service_worker_aware_external_script_source_outcome(
                     &script_for_load,
                     &task_loader.fetch_context().request_origin(),
                     task_loader.request_client(),
+                    task_loader.task_runner(),
                     Some(&document_character_set),
                     None,
+                    browser_context_runtime,
+                    client_id,
+                    document_url,
                 )
                 .await;
             let _ = completion_tx.send_child_classic_script(ChildClassicScriptLoadCompletion {
@@ -708,14 +717,23 @@ impl JsContextHost {
             return;
         }
         let task_loader = loader.clone();
+        let browser_context_runtime = self.browser_context_runtime();
+        let client_id = self.service_worker_client_id_for_subresource_owner(
+            crate::native_bridge::context_host::OwnerDispatchScope::Child(child_handle),
+        );
+        let document_url = network_attribution.document_url.clone();
         loader.spawn_resource_task(async move {
             let outcome =
-                crate::planning::load_prepared_script_source_outcome_with_document_character_set(
+                crate::planning::load_service_worker_aware_external_script_source_outcome(
                     &script_for_load,
                     &task_loader.fetch_context().request_origin(),
                     task_loader.request_client(),
+                    task_loader.task_runner(),
                     Some(&document_character_set),
                     None,
+                    browser_context_runtime,
+                    client_id,
+                    document_url,
                 )
                 .await;
             let _ = completion_tx.send_child_classic_script(ChildClassicScriptLoadCompletion {
