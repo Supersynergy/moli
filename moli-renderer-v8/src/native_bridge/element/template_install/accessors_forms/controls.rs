@@ -29,9 +29,7 @@ pub(super) fn install_form_control_template_accessors<'s, 'i>(
     }
 }
 
-pub(in crate::native_bridge) fn install_form_property_handlers(
-    template: v8::Local<'_, v8::ObjectTemplate>,
-) {
+fn install_form_property_handlers(template: v8::Local<'_, v8::ObjectTemplate>) {
     template.set_indexed_property_handler(
         v8::IndexedPropertyHandlerConfiguration::new()
             .getter(form_indexed_getter)

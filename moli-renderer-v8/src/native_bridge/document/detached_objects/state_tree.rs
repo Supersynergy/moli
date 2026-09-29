@@ -944,19 +944,6 @@ pub(in crate::native_bridge::document) fn detached_native_element_runtime_and_ha
     Some((runtime_ptr, handle))
 }
 
-pub(crate) fn with_detached_native_element_reaction_scope<'scope, 'pin, R>(
-    scope: &mut v8::PinScope<'scope, 'pin>,
-    element: v8::Local<'scope, v8::Object>,
-    op: impl FnOnce(&mut v8::PinScope<'scope, 'pin>) -> R,
-) -> Option<R> {
-    let (runtime_ptr, _) = detached_native_element_runtime_and_handle(scope, element)?;
-    Some(custom_elements::with_custom_element_reaction_scope(
-        scope,
-        runtime_ptr,
-        op,
-    ))
-}
-
 pub(crate) fn read_detached_native_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,

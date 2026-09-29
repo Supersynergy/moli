@@ -368,7 +368,7 @@ impl NativeBridgeBindings {
         open_object_template(&mut self.isolate_ptr, &self.bridge_template)
     }
 
-    fn node_wrapper_template(
+    pub(super) fn node_wrapper_template(
         &mut self,
         prototype_name: &'static str,
     ) -> Option<&v8::ObjectTemplate> {

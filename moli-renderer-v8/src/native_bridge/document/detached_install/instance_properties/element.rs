@@ -194,3 +194,10 @@ pub(in crate::native_bridge::document) fn install_detached_iframe_instance_prope
         let _ = object.delete(scope, v8str(scope, name).into());
     }
 }
+
+pub(in crate::native_bridge::document) fn install_detached_form_control_instance_properties<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) {
+    let _ = object.delete(scope, v8str(scope, "form").into());
+}
