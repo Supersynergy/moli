@@ -135,9 +135,14 @@ async fn assert_lightweight_popup_form_submission(method: &str) {
         ("_parent", "form.submit()"),
         ("_top", "form.requestSubmit()"),
     ];
-    // POST to the current URL must still fetch a new document on every submit.
-    let submissions = if method == "post" { 2 } else { 1 };
-    let server = StaticHttpServer::spawn(cases.len() * submissions).await;
+    // Submitting to the current URL must still load a new document every time.
+    let submissions = 2;
+    let server = StaticHttpServer::spawn_with_responder(
+        cases.len() * submissions,
+        "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\n",
+        |_, _| "<!doctype html><body>child fixture</body>".to_owned(),
+    )
+    .await;
     let loader = static_http_loader([]);
     let opener_url = server.base_url().join("opener.html").unwrap();
     let expected_target = if method == "get" {
