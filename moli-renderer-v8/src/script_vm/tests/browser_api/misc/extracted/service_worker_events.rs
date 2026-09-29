@@ -3029,6 +3029,87 @@ async fn navigator_service_worker_event_listeners_do_not_drive_lifecycle_state()
         .expect("service worker listener script server should finish");
 }
 #[tokio::test]
+async fn navigator_service_worker_navigation_preload_enabled_during_activate_serves_iframe() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/worker.js",
+            "text/javascript; charset=utf-8",
+            r#"
+            self.addEventListener("activate", event => {
+              event.waitUntil((async () => {
+                const manager = self.registration.navigationPreload;
+                await manager.enable();
+                await manager.disable();
+                await manager.setHeaderValue("activate-preload");
+                await manager.enable();
+                self.preloadStateDuringActivate = await manager.getState();
+              })());
+            });
+            self.addEventListener("fetch", event => {
+              event.respondWith((async () => {
+                const response = await event.preloadResponse;
+                const result = {
+                  duringActivate: self.preloadStateDuringActivate,
+                  mode: event.request.mode,
+                  destination: event.request.destination,
+                  body: await response.text()
+                };
+                return new Response(
+                  "<script>parent.postMessage(" + JSON.stringify(result) + ", '*')</script>",
+                  {headers: {"Content-Type": "text/html"}}
+                );
+              })());
+            });
+            "#,
+        ),
+        ("/app/frame.html", "text/plain", "preloaded-body"),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            &format!("{base_url}/app/page.html"),
+            &loader,
+        );
+    vm.eval(
+        r#"
+        globalThis.preloadIframeResult = "pending";
+        (async () => {
+          const registration = await navigator.serviceWorker.register("worker.js", {scope: "./"});
+          await navigator.serviceWorker.ready;
+          const afterActivate = await registration.navigationPreload.getState();
+          if (!afterActivate.enabled) throw new Error("activate did not enable preload");
+          const iframe = document.createElement("iframe");
+          const message = new Promise(resolve => {
+            addEventListener("message", event => resolve(event.data), {once: true});
+          });
+          iframe.src = "frame.html";
+          document.body.appendChild(iframe);
+          preloadIframeResult = JSON.stringify({afterActivate, response: await message});
+          iframe.remove();
+          await registration.unregister();
+        })().catch(error => { preloadIframeResult = String(error); });
+        "#,
+    )
+    .expect("navigation preload iframe test should schedule");
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &browser_context_runtime,
+        &loader,
+        "String(preloadIframeResult !== 'pending')",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("preloadIframeResult").unwrap(),
+        r#"{"afterActivate":{"enabled":true,"headerValue":"activate-preload"},"response":{"duringActivate":{"enabled":true,"headerValue":"activate-preload"},"mode":"navigate","destination":"iframe","body":"preloaded-body"}}"#
+    );
+    server
+        .await
+        .expect("navigation preload server should finish");
+}
+
+#[tokio::test]
 async fn navigator_service_worker_navigation_preload_state_shared_with_worker() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",

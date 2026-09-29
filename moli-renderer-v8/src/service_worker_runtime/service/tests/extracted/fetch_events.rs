@@ -120,6 +120,79 @@ fn navigation_preload_state_defaults_and_mutation_requires_active_worker() {
     );
 }
 #[test]
+fn navigation_preload_state_survives_initial_activation() {
+    let service = new_service_worker_runtime_service();
+    let registration_id = ServiceWorkerRegistrationId(1);
+    let version_id = ServiceWorkerVersionId(1);
+    let scope_url = url("https://example.test/app/");
+    insert_inactive_registration(
+        &service,
+        registration_id,
+        version_id,
+        url("https://example.test/app/worker.js"),
+        scope_url.clone(),
+    );
+    make_version_persistable(&service, version_id);
+    {
+        let mut state = service.inner.state.lock();
+        let registration = state.registrations.get_mut(&registration_id).unwrap();
+        registration.installing_version_id = None;
+        registration.waiting_version_id = Some(version_id);
+        state.versions.get_mut(&version_id).unwrap().lifecycle_state =
+            ServiceWorkerVersionLifecycleState::Installed;
+    }
+    assert_eq!(
+        service.set_navigation_preload_enabled_for_scope(&scope_url, true),
+        Err(ServiceWorkerNavigationPreloadStateError::InvalidState),
+        "an installed worker that has not started activation is still inactive"
+    );
+    {
+        let mut state = service.inner.state.lock();
+        let version = state.versions.get_mut(&version_id).unwrap();
+        version.lifecycle_state = ServiceWorkerVersionLifecycleState::Activating;
+        version.in_flight_event_count = 1;
+    }
+    assert_eq!(
+        service.navigation_preload_state_for_scope(&scope_url),
+        Some(ServiceWorkerNavigationPreloadState::default())
+    );
+    service
+        .set_navigation_preload_enabled_for_scope(&scope_url, true)
+        .expect("enable must work during the initial activate event");
+    service
+        .set_navigation_preload_header_value_for_scope(&scope_url, "activate-preload".to_owned())
+        .expect("setHeaderValue must work during the initial activate event");
+    let expected = ServiceWorkerNavigationPreloadState {
+        enabled: true,
+        header_value: "activate-preload".to_owned(),
+    };
+    assert_eq!(
+        service.navigation_preload_state_for_scope(&scope_url),
+        Some(expected.clone())
+    );
+    let run = exact_version_run(&service, version_id);
+    service.finish_lifecycle_event_completed(ServiceWorkerLifecycleCompletion {
+        event_id: ServiceWorkerEventId(1),
+        owner: test_run_owner(version_id, &run),
+        kind: ServiceWorkerLifecycleEventKind::Activate,
+        result: Ok(()),
+    });
+    assert_eq!(
+        service.navigation_preload_state_for_scope(&scope_url),
+        Some(expected.clone())
+    );
+    let stored = service
+        .inner
+        .resource_store
+        .lock()
+        .registrations()
+        .into_iter()
+        .find(|registration| registration.scope_url == scope_url)
+        .expect("activation must persist the navigation preload state");
+    assert_eq!(stored.navigation_preload_state, expected);
+}
+
+#[test]
 fn navigation_preload_state_updates_active_registration_and_store() {
     let service = new_service_worker_runtime_service();
     let registration_id = ServiceWorkerRegistrationId(1);
