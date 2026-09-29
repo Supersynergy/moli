@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn xml_documents_preserve_native_element_interfaces() {
+    let mut vm = new_parsed_test_vm("https://xml-interfaces.test/", "<html><body></body></html>");
+    assert_eq!(
+        vm.eval(include_str!("xml_element_interfaces.js"))
+            .expect("XML element interface fixture should evaluate"),
+        "true"
+    );
+}
+
+#[test]
 fn specialized_element_methods_live_on_owner_prototypes() {
     let mut vm = new_parsed_test_vm(
         "https://example.com/",
