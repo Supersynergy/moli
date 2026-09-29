@@ -1964,6 +1964,24 @@ def _form_echo_response(body: bytes) -> bytes:
     return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
 
 
+def _nosniff_javascript_response(query: str) -> tuple[str | None, bytes]:
+    """Model fetch/nosniff/resources/js.py's MIME-controlled script body."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    outcome = next(
+        (value for name, value in params if name == "outcome"),
+        "f",
+    )
+    content_type = next(
+        (value for name, value in params if name == "type"),
+        None,
+    )
+    type_label = content_type if content_type is not None else "Content-Type missing"
+    result_call = "log('FAIL: " + type_label + "')" if outcome == "f" else "p()"
+    body = ("// nothing to see here\n" + result_call).encode()
+    return content_type, body
+
+
 def _make_handler(
     wpt_root: Path,
     results_store: "ResultsStore",
@@ -2697,6 +2715,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if unquote(urlsplit(self.path).path) == "/fetch/nosniff/resources/js.py":
+                self._serve_nosniff_javascript(urlsplit(self.path).query, emit_body=emit_body)
+                return
             if unquote(urlsplit(self.path).path) == FORM_ECHO_PATH:
                 self._send_bytes("text/plain", _form_echo_response(b""), emit_body=emit_body)
                 return
@@ -3619,6 +3640,21 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 "text/plain", b"", emit_body=emit_body, extra_headers=headers,
                 status_code=status_code,
             )
+
+
+        def _serve_nosniff_javascript(self, query: str, *, emit_body: bool) -> None:
+            content_type, body = _nosniff_javascript_response(query)
+            self.send_response(200)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            if content_type is not None:
+                self.send_header("Content-Type", content_type)
+            self.end_headers()
+            if emit_body:
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
 
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
