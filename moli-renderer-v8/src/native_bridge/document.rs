@@ -1277,17 +1277,7 @@ pub(crate) fn document_associated_window_for_handle<'s>(
     let document = unsafe { &mut *runtime_ptr }
         .native_bridge_mut()
         .wrap_handle(scope, runtime_ptr, handle)?;
-    if let Some(window) = get_private_value(scope, document, DOCUMENT_ASSOCIATED_WINDOW_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    {
-        return Some(window);
-    }
-    if unsafe { &*runtime_ptr }.dom_host().document_handle() != handle {
-        return None;
-    }
-    document
-        .get_creation_context(scope)
-        .map(|context| context.global(scope))
+    document_associated_window_for_object(scope, runtime_ptr, handle, document)
 }
 
 pub(in crate::native_bridge) fn set_document_associated_window<'s>(
