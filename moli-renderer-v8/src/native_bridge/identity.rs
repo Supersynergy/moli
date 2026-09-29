@@ -9,7 +9,10 @@ use std::{
 use indexmap::IndexSet;
 
 use super::super::document_runtime::DomHandle;
-use super::element::{control_label_handles, form_control_elements};
+use super::element::{
+    control_label_handles, form_control_elements, form_named_control_matches,
+    form_named_image_matches,
+};
 use super::{JsContextHost, RuntimeObservableContextToken};
 use dense_reflector_map::DenseReflectorMap;
 
@@ -175,6 +178,7 @@ pub(super) enum LiveCollectionQueryKind {
     WindowNamedItems,
     DocumentAllNamedItems,
     FormControlsByName,
+    FormImagesByName,
     Forms,
     Images,
     Scripts,
@@ -204,6 +208,7 @@ impl LiveCollectionQueryKind {
             Self::WindowNamedItems => "windowNamedItems",
             Self::DocumentAllNamedItems => "documentAllNamedItems",
             Self::FormControlsByName => "formControlsByName",
+            Self::FormImagesByName => "formImagesByName",
             Self::Forms => "forms",
             Self::Images => "images",
             Self::Scripts => "scripts",
@@ -302,16 +307,11 @@ impl LiveCollectionDescriptor {
         } else if self.query_kind == LiveCollectionQueryKind::FormControls {
             form_control_elements(host, self.root)
         } else if self.query_kind == LiveCollectionQueryKind::FormControlsByName {
-            let query = self.query.as_deref().unwrap_or_default();
-            form_control_elements(host, self.root)
-                .into_iter()
-                .filter(|handle| {
-                    host.dom_host()
-                        .node(*handle)
-                        .and_then(crate::dom::native::Node::as_element)
-                        .is_some_and(|element| element.matches_named_item_key(query))
-                })
-                .collect()
+            form_named_control_matches(host, self.root, self.query.as_deref().unwrap_or_default())
+        } else if self.query_kind == LiveCollectionQueryKind::FormImagesByName {
+            // A retained image list keeps this filter even if a later form[name]
+            // lookup finds controls. Query kind also distinguishes wrapper caches.
+            form_named_image_matches(host, self.root, self.query.as_deref().unwrap_or_default())
         } else if self.query_kind == LiveCollectionQueryKind::WindowNamedItems {
             crate::native_bridge::named_access::window_named_item_handles(
                 host.dom_host(),

@@ -90,6 +90,7 @@ pub(crate) use forms::{
     form_control_elements, form_data_control_elements, is_valid_submit_button,
     submit_form_with_submit_event,
 };
+pub(in crate::native_bridge) use forms::{form_named_control_matches, form_named_image_matches};
 #[cfg(test)]
 pub(crate) use styles::iframe_width_attribute_viewport_width;
 pub(crate) use styles::{
