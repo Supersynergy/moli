@@ -584,6 +584,9 @@ impl DomHost {
         let _ = clone_element.set_media_network_state(u32::MAX);
         let _ = clone_element.set_media_network_state(element.media_network_state());
         let _ = clone_element.set_media_error_code(element.media_error_code());
+        // Cloning copies attributes directly, bypassing set_attribute's index updates.
+        // Detached clones must be queryable before any tree insertion refreshes them.
+        self.record_named_index_candidate(clone);
     }
 }
 

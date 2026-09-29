@@ -3,6 +3,7 @@ use crate::custom_elements::is_form_associated_custom_element_handle;
 use crate::native_bridge::bridge::wrapped_handle_value_for_receiver;
 use crate::native_bridge::element::{html_element_getter_receiver, html_element_setter_receiver};
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
+use std::ops::ControlFlow;
 
 pub(in crate::native_bridge) fn form_action_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -272,35 +273,55 @@ pub(crate) fn form_control_elements(
     runtime: &JsContextHost,
     form_handle: DomHandle,
 ) -> Vec<DomHandle> {
-    if runtime
-        .dom_host()
-        .is_html_element_named(form_handle, "fieldset")
-    {
-        return collect_form_control_elements_from(runtime, form_handle, false, None, false);
-    }
-
-    if !runtime
-        .dom_host()
-        .is_html_element_named(form_handle, "form")
-    {
+    let Some(scope) = FormControlScope::new(runtime, form_handle) else {
         return Vec::new();
+    };
+    collect_form_control_elements_from(runtime, scope.root, false, scope.owner, false)
+}
+
+#[derive(Clone, Copy)]
+struct FormControlScope {
+    root: DomHandle,
+    owner: Option<DomHandle>,
+}
+
+impl FormControlScope {
+    fn new(runtime: &JsContextHost, form: DomHandle) -> Option<Self> {
+        let dom = runtime.dom_host();
+        if dom.is_html_element_named(form, "fieldset") {
+            return Some(Self {
+                root: form,
+                owner: None,
+            });
+        }
+        if !dom.is_html_element_named(form, "form") {
+            return None;
+        }
+        let root = if dom.is_connected(form) {
+            dom.owner_document_handle(form)
+                .unwrap_or_else(|| dom.document_handle())
+        } else {
+            form
+        };
+        Some(Self {
+            root,
+            owner: Some(form),
+        })
     }
 
-    if !runtime.dom_host().is_connected(form_handle) {
-        return collect_form_control_elements_from(
-            runtime,
-            form_handle,
-            false,
-            Some(form_handle),
-            false,
-        );
+    fn contains(self, runtime: &JsContextHost, candidate: DomHandle) -> bool {
+        let dom = runtime.dom_host();
+        let mut current = dom.parent_node(candidate);
+        while let Some(handle) = current {
+            if handle == self.root {
+                return true;
+            }
+            current = dom
+                .parent_node(handle)
+                .or_else(|| dom.shadow_root_host(handle));
+        }
+        false
     }
-
-    let document_handle = runtime
-        .dom_host()
-        .owner_document_handle(form_handle)
-        .unwrap_or_else(|| runtime.dom_host().document_handle());
-    collect_form_control_elements_from(runtime, document_handle, false, Some(form_handle), false)
 }
 
 pub(crate) fn form_data_control_elements(
@@ -367,10 +388,9 @@ fn collect_form_control_elements_from(
         push_shadow_including_children(runtime, root, &mut stack);
     }
     while let Some(handle) = stack.pop() {
-        if is_form_control_handle(runtime, handle, include_image_inputs)
-            && form_handle
-                .is_none_or(|owner| form_associated_form_owner(runtime, handle) == Some(owner))
-        {
+        #[cfg(test)]
+        crate::native_bridge::element::record_form_lookup_node_for_test();
+        if form_control_matches_owner(runtime, handle, form_handle, include_image_inputs) {
             out.push(handle);
         }
         push_shadow_including_children(runtime, handle, &mut stack);
@@ -423,6 +443,16 @@ fn is_form_control_handle(
                 _ => false,
             }
         })
+}
+
+fn form_control_matches_owner(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    owner: Option<DomHandle>,
+    include_image_inputs: bool,
+) -> bool {
+    is_form_control_handle(runtime, handle, include_image_inputs)
+        && owner.is_none_or(|owner| form_associated_form_owner(runtime, handle) == Some(owner))
 }
 
 pub(in crate::native_bridge) fn fieldset_elements_getter_function<'s>(
@@ -745,9 +775,19 @@ fn form_has_named_item_or_past_name(
     form_handle: DomHandle,
     key: &str,
 ) -> bool {
-    !form_named_item_matches(runtime, form_handle, key)
-        .1
-        .is_empty()
+    let Some(scope) = FormControlScope::new(runtime, form_handle) else {
+        return false;
+    };
+    runtime
+        .dom_host()
+        .visit_element_candidates_by_id_or_name(key, |candidate| {
+            if form_named_candidate_source(runtime, scope, candidate, key).is_some() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .is_break()
         || runtime.form_past_named_item(form_handle, key).is_some()
 }
 
@@ -945,21 +985,27 @@ fn form_named_item_matches(
     form_handle: DomHandle,
     key: &str,
 ) -> (LiveCollectionQueryKind, Vec<DomHandle>) {
-    // Only a miss is conclusive. A hit still needs the existing form-owner,
-    // custom-element, shadow-tree and image-fallback rules below. The caller
-    // separately checks the past-names map even when this returns no matches.
-    if !runtime.dom_host().has_element_with_named_item_key(key) {
+    let Some(scope) = FormControlScope::new(runtime, form_handle) else {
         return (LiveCollectionQueryKind::FormControlsByName, Vec::new());
-    }
-    let controls = form_named_control_matches(runtime, form_handle, key);
-    if controls.is_empty() {
-        (
-            LiveCollectionQueryKind::FormImagesByName,
-            form_named_image_matches(runtime, form_handle, key),
-        )
-    } else {
-        (LiveCollectionQueryKind::FormControlsByName, controls)
-    }
+    };
+    let mut query_kind = LiveCollectionQueryKind::FormImagesByName;
+    let mut matches = Vec::new();
+    let _ = runtime
+        .dom_host()
+        .visit_element_candidates_by_id_or_name(key, |candidate| {
+            if let Some(source) = form_named_candidate_source(runtime, scope, candidate, key) {
+                if source == LiveCollectionQueryKind::FormControlsByName && source != query_kind {
+                    query_kind = source;
+                    matches.clear();
+                }
+                if source == query_kind {
+                    matches.push(candidate);
+                }
+            }
+            ControlFlow::<()>::Continue(())
+        });
+    sort_form_named_matches(runtime, &mut matches);
+    (query_kind, matches)
 }
 
 pub(in crate::native_bridge) fn form_named_control_matches(
@@ -967,16 +1013,12 @@ pub(in crate::native_bridge) fn form_named_control_matches(
     form_handle: DomHandle,
     key: &str,
 ) -> Vec<DomHandle> {
-    form_control_elements(runtime, form_handle)
-        .into_iter()
-        .filter(|handle| {
-            runtime
-                .dom_host()
-                .node(*handle)
-                .and_then(Node::as_element)
-                .is_some_and(|element| element.matches_named_item_key(key))
-        })
-        .collect()
+    form_named_matches_from_source(
+        runtime,
+        form_handle,
+        key,
+        LiveCollectionQueryKind::FormControlsByName,
+    )
 }
 
 pub(in crate::native_bridge) fn form_named_image_matches(
@@ -984,25 +1026,71 @@ pub(in crate::native_bridge) fn form_named_image_matches(
     form_handle: DomHandle,
     key: &str,
 ) -> Vec<DomHandle> {
-    if !runtime
-        .dom_host()
-        .is_html_element_named(form_handle, "form")
-    {
+    form_named_matches_from_source(
+        runtime,
+        form_handle,
+        key,
+        LiveCollectionQueryKind::FormImagesByName,
+    )
+}
+
+fn form_named_matches_from_source(
+    runtime: &JsContextHost,
+    form_handle: DomHandle,
+    key: &str,
+    source: LiveCollectionQueryKind,
+) -> Vec<DomHandle> {
+    let Some(scope) = FormControlScope::new(runtime, form_handle) else {
         return Vec::new();
-    }
-    runtime
+    };
+    let mut matches = Vec::new();
+    let _ = runtime
         .dom_host()
-        .elements_by_tag_name(form_handle, "img", false)
-        .into_iter()
-        .filter(|handle| nearest_form_ancestor(runtime, *handle) == Some(form_handle))
-        .filter(|handle| {
-            runtime
-                .dom_host()
-                .node(*handle)
-                .and_then(Node::as_element)
-                .is_some_and(|element| element.matches_named_item_key(key))
-        })
-        .collect()
+        .visit_element_candidates_by_id_or_name(key, |candidate| {
+            if form_named_candidate_source(runtime, scope, candidate, key) == Some(source) {
+                matches.push(candidate);
+            }
+            ControlFlow::<()>::Continue(())
+        });
+    sort_form_named_matches(runtime, &mut matches);
+    matches
+}
+
+fn form_named_candidate_source(
+    runtime: &JsContextHost,
+    scope: FormControlScope,
+    candidate: DomHandle,
+    key: &str,
+) -> Option<LiveCollectionQueryKind> {
+    #[cfg(test)]
+    crate::native_bridge::element::record_form_lookup_node_for_test();
+    let element = runtime
+        .dom_host()
+        .node(candidate)
+        .and_then(Node::as_element)?;
+    if !element.matches_named_item_key(key) {
+        return None;
+    }
+    if form_control_matches_owner(runtime, candidate, scope.owner, false)
+        && scope.contains(runtime, candidate)
+    {
+        Some(LiveCollectionQueryKind::FormControlsByName)
+    } else if element.is_html_element("img")
+        && scope.owner.is_some()
+        && nearest_form_ancestor(runtime, candidate) == scope.owner
+    {
+        Some(LiveCollectionQueryKind::FormImagesByName)
+    } else {
+        None
+    }
+}
+
+fn sort_form_named_matches(runtime: &JsContextHost, matches: &mut [DomHandle]) {
+    matches.sort_by(|left, right| {
+        runtime
+            .dom_host()
+            .compare_handles_in_shadow_including_tree_order(*left, *right)
+    });
 }
 
 fn nearest_form_ancestor(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {

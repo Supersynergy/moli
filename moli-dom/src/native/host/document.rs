@@ -506,6 +506,50 @@ impl DomHost {
         }
     }
 
+    /// Compare nodes in the order of a traversal that visits shadow children
+    /// before light children. Ordinary document-position comparison treats
+    /// different shadow trees as disconnected and cannot order these queries.
+    pub fn compare_handles_in_shadow_including_tree_order(
+        &self,
+        left: DomHandle,
+        right: DomHandle,
+    ) -> std::cmp::Ordering {
+        let ancestors = |handle| {
+            let mut path = Vec::new();
+            let mut current = Some(handle);
+            while let Some(handle) = current {
+                path.push(handle);
+                current = self
+                    .parent_node(handle)
+                    .or_else(|| self.shadow_root_host(handle));
+            }
+            path.reverse();
+            path
+        };
+        let left_path = ancestors(left);
+        let right_path = ancestors(right);
+        let common = left_path
+            .iter()
+            .zip(&right_path)
+            .take_while(|(a, b)| a == b)
+            .count();
+        if common == 0 {
+            return left.index().cmp(&right.index());
+        }
+        match (left_path.get(common), right_path.get(common)) {
+            (Some(left), Some(right)) => {
+                if self.is_shadow_root(*left) {
+                    std::cmp::Ordering::Less
+                } else if self.is_shadow_root(*right) {
+                    std::cmp::Ordering::Greater
+                } else {
+                    self.compare_handles_in_document_order(*left, *right)
+                }
+            }
+            _ => left_path.len().cmp(&right_path.len()),
+        }
+    }
+
     pub fn is_connected(&self, handle: DomHandle) -> bool {
         self.node(handle)
             .is_some_and(|node| node.flags().connected())
@@ -824,22 +868,60 @@ impl DomHost {
     /// rather than caching misses (custom-element upgrades can change eligibility
     /// without changing an element's id or name).
     pub fn has_element_with_named_item_key(&self, key: &str) -> bool {
+        self.visit_element_candidates_by_id_or_name(key, |handle| {
+            if self
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.matches_named_item_key(key))
+            {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        })
+        .is_break()
+    }
+
+    /// Visit current id/name candidates once each, without restricting document,
+    /// connectivity, or tree scope. Callers supply their eligibility rules and
+    /// sort accepted nodes if needed. Breaking avoids building a result list or
+    /// inspecting the remaining candidates for existence-only queries.
+    pub fn visit_element_candidates_by_id_or_name<B>(
+        &self,
+        key: &str,
+        mut visit: impl FnMut(DomHandle) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
         if key.is_empty() {
-            return false;
+            return std::ops::ControlFlow::Continue(());
         }
         self.ensure_id_index();
         self.ensure_name_index();
-        let matches = |index: &NamedElementIndex| {
-            index.handles_by_value.get(key).is_some_and(|handles| {
-                handles.iter().any(|handle| {
-                    self.node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.matches_named_item_key(key))
+        let ids = self.id_index.borrow();
+        let names = self.name_index.borrow();
+        let ids = ids
+            .as_ref()
+            .and_then(|index| index.handles_by_value.get(key));
+        let names = names
+            .as_ref()
+            .and_then(|index| index.handles_by_value.get(key));
+        let candidates = ids.into_iter().flat_map(NamedElementHandles::iter).chain(
+            names
+                .into_iter()
+                .flat_map(NamedElementHandles::iter)
+                .filter(|handle| ids.is_none_or(|ids| !ids.contains(handle))),
+        );
+        for &handle in candidates {
+            if self
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| {
+                    element.id() == Some(key) || element.name_attribute() == Some(key)
                 })
-            })
-        };
-        self.id_index.borrow().as_ref().is_some_and(matches)
-            || self.name_index.borrow().as_ref().is_some_and(matches)
+            {
+                visit(handle)?;
+            }
+        }
+        std::ops::ControlFlow::Continue(())
     }
 
     pub fn element_handles_by_id_or_name_matching(
@@ -847,41 +929,21 @@ impl DomHost {
         key: &str,
         mut accepts_name: impl FnMut(DomHandle) -> bool,
     ) -> Vec<DomHandle> {
-        self.ensure_id_index();
-        self.ensure_name_index();
-
-        let mut candidates = IndexSet::new();
-        if let Some(handles) = self
-            .id_index
-            .borrow()
-            .as_ref()
-            .and_then(|index| index.handles_by_value.get(key))
-        {
-            candidates.extend(handles.iter().copied());
-        }
-        if let Some(handles) = self
-            .name_index
-            .borrow()
-            .as_ref()
-            .and_then(|index| index.handles_by_value.get(key))
-        {
-            candidates.extend(handles.iter().copied());
-        }
-
         let document_handle = self.document_handle();
-        let mut matches = candidates
-            .into_iter()
-            .filter(|handle| {
-                self.node(*handle).is_some_and(|node| {
-                    node.flags().in_document_tree()
-                        && node.owner_document() == Some(document_handle)
-                        && node.as_element().is_some_and(|element| {
-                            element.id() == Some(key)
-                                || (element.name_attribute() == Some(key) && accepts_name(*handle))
-                        })
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut matches = Vec::new();
+        let _ = self.visit_element_candidates_by_id_or_name(key, |handle| {
+            if self.node(handle).is_some_and(|node| {
+                node.flags().in_document_tree()
+                    && node.owner_document() == Some(document_handle)
+                    && node.as_element().is_some_and(|element| {
+                        element.id() == Some(key)
+                            || (element.name_attribute() == Some(key) && accepts_name(handle))
+                    })
+            }) {
+                matches.push(handle);
+            }
+            std::ops::ControlFlow::<()>::Continue(())
+        });
         matches.sort_by(|left, right| self.compare_handles_in_document_order(*left, *right));
         matches
     }

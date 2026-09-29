@@ -542,6 +542,79 @@ mod tests {
     }
 
     #[test]
+    fn named_candidate_visits_are_unscoped_deduplicated_and_short_circuitable() {
+        use std::ops::ControlFlow;
+        let mut host = test_host();
+        assert!(!host.has_element_with_named_item_key("shared"));
+        let detached = host.create_element("input");
+        let shadow_host = host.create_element("div");
+        let shadow = host.attach_shadow_root(shadow_host, "open").unwrap();
+        let shadow_input = host.create_element("input");
+        assert!(host.append_child(shadow, shadow_input));
+        let other_document = host.create_detached_html_document();
+        let other_input = host.create_element("input");
+        assert!(host.append_child(other_document, other_input));
+        for handle in [detached, shadow_input, other_input] {
+            assert!(host.set_attribute(handle, "id", "shared"));
+            assert!(host.set_attribute(handle, "name", "shared"));
+        }
+        let mut found = Vec::new();
+        let result = host.visit_element_candidates_by_id_or_name("shared", |handle| {
+            found.push(handle);
+            ControlFlow::<()>::Continue(())
+        });
+        assert!(result.is_continue());
+        assert_eq!(found.len(), 3);
+        for handle in [detached, shadow_input, other_input] {
+            assert!(found.contains(&handle));
+        }
+        let mut visits = 0;
+        let first = host.visit_element_candidates_by_id_or_name("shared", |handle| {
+            visits += 1;
+            ControlFlow::Break(handle)
+        });
+        assert!(first.is_break());
+        assert_eq!(visits, 1);
+        assert!(host.set_attribute(detached, "id", "renamed"));
+        assert!(host.remove_attribute(detached, "name"));
+        let _ = host.visit_element_candidates_by_id_or_name("shared", |handle| {
+            assert_ne!(handle, detached);
+            ControlFlow::<()>::Continue(())
+        });
+        assert_eq!(
+            host.visit_element_candidates_by_id_or_name("renamed", ControlFlow::Break),
+            ControlFlow::Break(detached)
+        );
+        assert!(
+            host.element_handles_by_id_or_name_matching("shared", |_| true)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn named_candidates_track_detached_clones_and_imports_after_materialization() {
+        use std::ops::ControlFlow;
+        let mut host = test_host();
+        let source = host.create_element("input");
+        assert!(host.set_attribute(source, "id", "cloned"));
+        assert!(host.set_attribute(source, "name", "cloned"));
+        assert!(host.has_element_with_named_item_key("cloned"));
+        let clone = host.clone_node(source, false).unwrap();
+        let document = host.create_detached_html_document();
+        let imported = host.import_node(document, source, false).unwrap();
+        let foreign = host.snapshot_document();
+        let foreign_import = host
+            .import_foreign_node(document, &foreign, source, false)
+            .unwrap();
+        let mut candidates = Vec::new();
+        let _ = host.visit_element_candidates_by_id_or_name("cloned", |handle| {
+            candidates.push(handle);
+            ControlFlow::<()>::Continue(())
+        });
+        assert_eq!(candidates, vec![source, clone, imported, foreign_import]);
+    }
+
+    #[test]
     fn cached_tag_name_collection_reuses_query_until_mutation() {
         let mut host = test_host();
         let document = host.document_handle();
