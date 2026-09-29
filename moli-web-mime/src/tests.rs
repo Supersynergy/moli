@@ -886,9 +886,53 @@ fn document_text_classification_excludes_html_and_xml() {
         "text/xml",
         "application/xhtml+xml",
         "image/svg+xml",
+        "application/atom+xml",
+        "application/rss+xml",
+        "text/example+xml; charset=utf-8",
         "image/png",
         "application/octet-stream",
     ] {
         assert!(!crate::is_text_document_mime(mime), "{mime}");
     }
+}
+
+#[test]
+fn navigation_xml_mime_classification_keeps_dom_parser_allowlist_separate() {
+    for mime in [
+        "text/xml",
+        "application/xml",
+        "application/xhtml+xml",
+        "image/svg+xml",
+    ] {
+        assert!(is_xml_document_mime(mime), "{mime}");
+        assert!(is_dom_parser_xml_mime(mime), "{mime}");
+    }
+    for mime in [
+        "Application/Atom+XML; charset=utf-8",
+        "application/rss+xml",
+        "text/example+xml",
+    ] {
+        assert!(is_xml_document_mime(mime), "{mime}");
+        assert!(!is_dom_parser_xml_mime(mime), "{mime}");
+        assert!(!is_text_document_mime(mime), "{mime}");
+    }
+    for mime in [
+        "text/html",
+        "text/plain",
+        "application/xml-dtd",
+        "invalid+xml",
+    ] {
+        assert!(!is_xml_document_mime(mime), "{mime}");
+    }
+}
+
+#[test]
+fn navigation_json_mime_includes_text_json_without_changing_module_mime() {
+    for mime in ["application/json", "application/problem+json"] {
+        assert!(is_json_document_mime(mime), "{mime}");
+        assert!(is_json_module_mime(mime), "{mime}");
+    }
+    assert!(is_json_document_mime("Text/JSON; charset=utf-8"));
+    assert!(!is_json_module_mime("Text/JSON; charset=utf-8"));
+    assert!(!is_json_document_mime("text/plain"));
 }

@@ -1,11 +1,10 @@
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, JsContextHost};
 use super::configure_child_document_navigation_request;
+use crate::document_response_decoder::decode_document_response;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
-use moli_encoding::decode_html_document_with_fallback;
 use moli_fetch::Request;
 use moli_web_mime::{
-    is_dom_parser_xml_mime, is_html_document_mime, resource_mime_essence_for_url,
-    response_document_content_type,
+    is_html_document_mime, resource_mime_essence_for_url, response_document_content_type,
 };
 use url::Url;
 
@@ -52,7 +51,7 @@ impl JsContextHost {
                 if !mime_type.is_empty() && !is_html_document_mime(&mime_type) {
                     return None;
                 }
-                let character_set = self.child_document_fallback_character_set(Some("text/html"));
+                let character_set = self.document_character_set().to_owned();
                 Some(ChildBrowsingContextSnapshot::with_character_set(
                     url.clone(),
                     body,
@@ -64,11 +63,12 @@ impl JsContextHost {
             "data" => crate::network_host::local_url_response(url).map(|response| {
                 let head = response.head();
                 let content_type = child_document_content_type_from_headers(&head.headers);
-                let fallback = self.child_document_fallback_character_set(content_type.as_deref());
-                let (body, character_set) = decode_html_document_with_fallback(
+                let (body, character_set) = decode_document_response(
                     response.body_bytes(),
                     &head.headers,
-                    Some(&fallback),
+                    content_type.as_deref(),
+                    &head.final_url,
+                    Some(self.document_character_set()),
                 );
                 let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
                     &head.headers,
@@ -116,11 +116,12 @@ impl JsContextHost {
         let head = response.head();
         let content_type = child_document_content_type_from_headers(&head.headers)
             .or_else(|| child_document_content_type_for_url(&head.final_url));
-        let fallback = self.child_document_fallback_character_set(content_type.as_deref());
-        let (markup, character_set) = decode_html_document_with_fallback(
+        let (markup, character_set) = decode_document_response(
             response.body_bytes(),
             &head.headers,
-            Some(&fallback),
+            content_type.as_deref(),
+            &head.final_url,
+            Some(self.document_character_set()),
         );
         let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
             &head.headers,
@@ -168,17 +169,6 @@ impl JsContextHost {
                 self.materialize_local_child_snapshot_for_navigation_url(handle, url)
             }
             ChildBrowsingContextBootstrap::Request(_) => None,
-        }
-    }
-
-    pub(in crate::native_bridge::context_host) fn child_document_fallback_character_set(
-        &self,
-        content_type: Option<&str>,
-    ) -> String {
-        if content_type.is_some_and(is_dom_parser_xml_mime) {
-            "UTF-8".to_owned()
-        } else {
-            self.document_character_set().to_owned()
         }
     }
 }

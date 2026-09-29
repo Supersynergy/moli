@@ -1,4 +1,4 @@
-use crate::classification::{is_dom_parser_xml_mime, is_html_document_mime};
+use crate::classification::{is_html_document_mime, is_xml_document_mime};
 use crate::parse::mime_essence;
 
 pub const RESOURCE_HEADER_BYTE_LIMIT: usize = 1445;
@@ -212,7 +212,7 @@ fn computed_browsing_mime_type(
 }
 
 fn computed_image_mime_type(supplied: Option<&str>, header: &[u8]) -> String {
-    if supplied.is_some_and(is_xml_mime) {
+    if supplied.is_some_and(is_xml_document_mime) {
         return supplied.expect("checked supplied MIME").into();
     }
     sniff_image_mime_type(header)
@@ -222,7 +222,7 @@ fn computed_image_mime_type(supplied: Option<&str>, header: &[u8]) -> String {
 }
 
 fn computed_audio_video_mime_type(supplied: Option<&str>, header: &[u8]) -> String {
-    if supplied.is_some_and(is_xml_mime) {
+    if supplied.is_some_and(is_xml_document_mime) {
         return supplied.expect("checked supplied MIME").into();
     }
     sniff_audio_video_mime_type(header)
@@ -232,7 +232,7 @@ fn computed_audio_video_mime_type(supplied: Option<&str>, header: &[u8]) -> Stri
 }
 
 fn computed_font_mime_type(supplied: Option<&str>, header: &[u8]) -> String {
-    if supplied.is_some_and(is_xml_mime) {
+    if supplied.is_some_and(is_xml_document_mime) {
         return supplied.expect("checked supplied MIME").into();
     }
     sniff_font_mime_type(header)
@@ -424,11 +424,7 @@ fn is_binary_data_byte(byte: u8) -> bool {
 }
 
 fn is_xml_or_html_mime(mime: &str) -> bool {
-    is_xml_mime(mime) || is_html_mime(mime)
-}
-
-fn is_xml_mime(mime: &str) -> bool {
-    is_dom_parser_xml_mime(mime) || mime.ends_with("+xml")
+    is_xml_document_mime(mime) || is_html_mime(mime)
 }
 
 fn is_html_mime(mime: &str) -> bool {

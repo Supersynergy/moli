@@ -52,14 +52,23 @@ pub struct HtmlDocumentStreamingDecoder {
 
 impl HtmlDocumentStreamingDecoder {
     /// Decode a text document without interpreting literal HTML/XML declarations.
-    /// JSON defaults to UTF-8; other text retains the configured legacy detector.
+    /// BOMs and transport charsets take precedence. JSON then defaults to UTF-8;
+    /// other text uses a valid inherited encoding before heuristic detection.
     pub fn new_text_document(
         headers: &[(String, Vec<u8>)],
         url_hint: &str,
         detector: LegacyEncodingDetector,
         json: bool,
+        inherited_encoding: Option<&str>,
     ) -> Self {
-        let mut decoder = Self::new_with_options(headers, None, Some(url_hint), Some(detector));
+        let inherited_encoding =
+            inherited_encoding.filter(|label| encoding_for_label(label).is_some());
+        let mut decoder = Self::new_with_options(
+            headers,
+            inherited_encoding,
+            Some(url_hint),
+            inherited_encoding.is_none().then_some(detector),
+        );
         decoder.sniff_html_declarations = false;
         if json && decoder.transport_encoding.is_none() {
             decoder.transport_encoding = Some(encoding_rs::UTF_8);
@@ -169,6 +178,9 @@ impl HtmlDocumentStreamingDecoder {
             return Some(encoding);
         }
         if !self.sniff_html_declarations {
+            if self.legacy_encoding_detector.is_none() {
+                return Some(self.fallback_encoding);
+            }
             return (finishing || self.sniff_buffer.len() >= 1024).then(|| {
                 self.detected_legacy_content_encoding()
                     .unwrap_or(self.fallback_encoding)

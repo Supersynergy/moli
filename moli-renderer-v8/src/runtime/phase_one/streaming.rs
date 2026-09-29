@@ -3,8 +3,8 @@ use super::super::script_preloads::{ServiceWorkerScriptPreloadContext, admit_pen
 use super::parser_blocking_pending::main_parser_blocking_classic_script_item;
 use super::scaffold::continue_phase_one_until_streaming_boundary_on_execution_context;
 use super::*;
+use crate::document_response_decoder::new_document_response_decoder;
 use moli_encoding::HtmlDocumentStreamingDecoder;
-use moli_encoding_detector::detect_legacy_html_encoding;
 use moli_web_mime::response_headers_indicate_attachment_download;
 use tokio::sync::{mpsc, oneshot};
 
@@ -471,7 +471,7 @@ impl ConcurrentParseTimeRuntime {
 
 fn response_headers_indicate_xml_document(headers: &[(String, Vec<u8>)]) -> bool {
     moli_web_mime::response_document_content_type(headers)
-        .is_some_and(|mime| moli_web_mime::is_dom_parser_xml_mime(&mime))
+        .is_some_and(|mime| moli_web_mime::is_xml_document_mime(&mime))
 }
 
 const EXTERNAL_RAW_DOCUMENT_BODY_BUFFERED_CHUNKS: usize = 8;
@@ -615,8 +615,10 @@ fn response_document_parser(
     env: &PageVmEnvConfig,
 ) -> (ParseTimeDriverState, HtmlDocumentStreamingDecoder) {
     let content_type = moli_web_mime::response_document_content_type(headers);
-    let text_type = content_type.filter(|mime| moli_web_mime::is_text_document_mime(mime));
-    let mut state = if let Some(mime) = &text_type {
+    let text_type = content_type
+        .as_deref()
+        .filter(|mime| moli_web_mime::is_text_document_mime(mime));
+    let mut state = if let Some(mime) = text_type {
         ParseTimeDriverState::new_text(final_url, mime)
     } else {
         ParseTimeDriverState::new_with_scripting_enabled(
@@ -624,20 +626,8 @@ fn response_document_parser(
             main_document_parser_scripting_enabled(env),
         )
     };
-    let decoder = if let Some(mime) = text_type {
-        HtmlDocumentStreamingDecoder::new_text_document(
-            headers,
-            state.final_url.as_str(),
-            detect_legacy_html_encoding,
-            moli_web_mime::is_json_module_mime(&mime) || mime == "text/json",
-        )
-    } else {
-        HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
-            headers,
-            state.final_url.as_str(),
-            detect_legacy_html_encoding,
-        )
-    };
+    let decoder =
+        new_document_response_decoder(headers, content_type.as_deref(), &state.final_url, None);
     // Headers/defaults are observable even when no body chunk is ready yet.
     // A later BOM or decoder decision can still replace this tentative value.
     sync_state_document_character_set_from_decoder(&mut state, &decoder);
