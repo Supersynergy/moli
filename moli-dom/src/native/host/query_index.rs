@@ -298,8 +298,20 @@ impl DomHost {
         &self,
         scope: ElementQueryScope,
         candidates: impl IntoIterator<Item = DomHandle>,
-        mut matches: impl FnMut(&Element) -> bool,
+        candidate_count: usize,
+        matches: impl Fn(&Element) -> bool,
     ) -> Vec<DomHandle> {
+        if candidate_count == 0 {
+            return Vec::new();
+        }
+        // A small subtree must not pay for unrelated retained nodes in the
+        // global index. Bound the traversal by the candidate count so sparse
+        // queries in large trees can still use the index.
+        if let Some(handles) =
+            self.element_query_matches_within_budget(scope, candidate_count, &matches)
+        {
+            return handles;
+        }
         let mut handles = candidates
             .into_iter()
             .filter(|handle| {
@@ -307,7 +319,7 @@ impl DomHost {
                     && self
                         .node(*handle)
                         .and_then(Node::as_element)
-                        .is_some_and(&mut matches)
+                        .is_some_and(&matches)
             })
             .collect::<Vec<_>>();
         if handles.len() <= 1 {
@@ -320,6 +332,32 @@ impl DomHost {
         handles
             .sort_unstable_by(|left, right| self.compare_handles_in_document_order(*left, *right));
         handles
+    }
+
+    fn element_query_matches_within_budget(
+        &self,
+        scope: ElementQueryScope,
+        candidate_count: usize,
+        matches: &impl Fn(&Element) -> bool,
+    ) -> Option<Vec<DomHandle>> {
+        let (root, inclusion) = scope.traversal_root();
+        let mut nodes = self
+            .dom
+            .light_subtree_handles(root, inclusion == QueryRootInclusion::Inclusive);
+        let mut handles = Vec::new();
+        for _ in 0..candidate_count {
+            let Some(handle) = nodes.next() else {
+                return Some(handles);
+            };
+            if self
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(matches)
+            {
+                handles.push(handle);
+            }
+        }
+        nodes.next().is_none().then_some(handles)
     }
 
     fn element_query_candidates_in_scope_tree_order(
@@ -361,21 +399,24 @@ impl DomHost {
         self.ensure_qualified_name_element_index();
         let lowercase_tag_name = is_html_document.then(|| tag_name.to_ascii_lowercase());
         let index = self.element_query_index.borrow();
-        let exact_candidates = index
-            .qualified_name_candidates(tag_name)
-            .into_iter()
-            .flat_map(|candidates| candidates.iter().copied());
+        let exact_candidates = index.qualified_name_candidates(tag_name);
         let html_case_folded_candidates = lowercase_tag_name
             .as_deref()
             .filter(|lowercase_tag_name| *lowercase_tag_name != tag_name)
-            .and_then(|lowercase_tag_name| index.qualified_name_candidates(lowercase_tag_name))
-            .into_iter()
-            .flat_map(|candidates| candidates.iter().copied());
-        Some(self.element_query_matches_in_tree_order(
-            scope,
-            exact_candidates.chain(html_case_folded_candidates),
-            |element| element.matches_tag_name_in_html_document(tag_name, is_html_document),
-        ))
+            .and_then(|lowercase_tag_name| index.qualified_name_candidates(lowercase_tag_name));
+        let candidate_count = exact_candidates.map_or(0, IndexSet::len)
+            + html_case_folded_candidates.map_or(0, IndexSet::len);
+        Some(
+            self.element_query_matches_in_tree_order(
+                scope,
+                exact_candidates
+                    .into_iter()
+                    .chain(html_case_folded_candidates)
+                    .flat_map(|candidates| candidates.iter().copied()),
+                candidate_count,
+                |element| element.matches_tag_name_in_html_document(tag_name, is_html_document),
+            ),
+        )
     }
 
     pub fn elements_by_tag_name(
@@ -479,13 +520,15 @@ impl DomHost {
         self.ensure_namespace_local_name_element_index();
         let namespace = namespace.unwrap_or_default();
         let index = self.element_query_index.borrow();
-        let candidates = index
-            .namespace_local_name_candidates(namespace, local_name)
-            .into_iter()
-            .flat_map(|candidates| candidates.iter().copied());
-        self.element_query_matches_in_tree_order(scope, candidates, |element| {
-            element.matches_tag_name_ns(Some(namespace), local_name)
-        })
+        let candidates = index.namespace_local_name_candidates(namespace, local_name);
+        self.element_query_matches_in_tree_order(
+            scope,
+            candidates
+                .into_iter()
+                .flat_map(|candidates| candidates.iter().copied()),
+            candidates.map_or(0, IndexSet::len),
+            |element| element.matches_tag_name_ns(Some(namespace), local_name),
+        )
     }
 
     pub fn elements_by_class_name(
@@ -798,6 +841,79 @@ mod tests {
             host.elements_by_tag_name_ns(detached_style, Some(HTML_NAMESPACE_URI), "style", false,)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn tag_queries_keep_subtree_boundaries_with_unrelated_index_candidates() {
+        fn assert_query(
+            host: &DomHost,
+            root: DomHandle,
+            name: &str,
+            include_root: bool,
+            expected: &[DomHandle],
+        ) {
+            assert_eq!(
+                host.elements_by_tag_name_ns(root, Some(HTML_NAMESPACE_URI), name, include_root),
+                expected
+            );
+            assert_eq!(
+                host.cached_elements_by_tag_name_in_html_document(root, name, include_root, true),
+                expected
+            );
+        }
+
+        let mut host = test_host();
+        let document = host.document_handle();
+        let parent = host.create_element("section");
+        assert!(host.append_child(document, parent));
+        let root = host.create_element("meta");
+        let text = host.create_text_node("between elements");
+        let nested = host.create_element("meta");
+        let outside = host.create_element("meta");
+        assert!(host.append_child(parent, root));
+        assert!(host.append_child(parent, outside));
+        assert!(host.append_child(root, text));
+        assert!(host.append_child(root, nested));
+        // Materialize both indexes before retained, unrelated nodes are added.
+        assert_query(&host, root, "meta", true, &[root, nested]);
+        let unrelated = host.create_detached_html_document();
+        for _ in 0..64 {
+            let meta = host.create_element("meta");
+            assert!(host.append_child(unrelated, meta));
+        }
+        assert_query(&host, root, "meta", true, &[root, nested]);
+        assert_query(&host, root, "meta", false, &[nested]);
+        assert_query(&host, nested, "meta", true, &[nested]);
+        assert_query(&host, nested, "meta", false, &[]);
+        assert!(host.insert_before(root, nested, Some(text)));
+        assert_query(&host, parent, "meta", false, &[root, nested, outside]);
+
+        let shadow = host.attach_shadow_root(parent, "open").unwrap();
+        let shadow_meta = host.create_element("meta");
+        assert!(host.append_child(shadow, shadow_meta));
+        assert_query(&host, parent, "meta", false, &[root, nested, outside]);
+        assert_query(&host, shadow, "meta", false, &[shadow_meta]);
+        let fragment = host.create_document_fragment();
+        assert!(host.append_child(fragment, root));
+        assert_query(&host, fragment, "meta", true, &[root, nested]);
+        assert_query(&host, document, "meta", true, &[outside]);
+
+        // Sparse matches must retain the same scope and order in a wider tree.
+        let wide = host.create_element("div");
+        assert!(host.append_child(parent, wide));
+        for _ in 0..64 {
+            let leaf = host.create_element("span");
+            assert!(host.append_child(wide, leaf));
+        }
+        let last = host.create_element("needle");
+        let first = host.create_element("needle");
+        let excluded = host.create_element("needle");
+        assert!(host.append_child(wide, first));
+        assert!(host.append_child(wide, last));
+        assert!(host.append_child(parent, excluded));
+        assert_query(&host, wide, "needle", false, &[first, last]);
+        assert!(host.insert_before(wide, last, Some(first)));
+        assert_query(&host, wide, "needle", false, &[last, first]);
     }
 
     #[test]
