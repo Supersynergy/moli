@@ -846,6 +846,7 @@ def _supported_wptserve_handler_references(
         supported += _common_echo_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _remote_context_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _fetch_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _document_charset_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _navigation_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
@@ -1700,5 +1701,22 @@ def _fetch_content_type_handler_reference_patterns(directory: str) -> tuple[re.P
             rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
         )
         for reference in ("/" + resource, relative, "./" + relative)
+    )
+
+
+
+@lru_cache(maxsize=None)
+def _document_charset_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    references = []
+    for name in ("bogus-charset-http.py", "bogus-charset-http-valid-meta.py"):
+        resource = f"html/syntax/charset/resources/{name}"
+        relative = posixpath.relpath(resource, directory)
+        references.extend(("/" + resource, relative, "./" + relative))
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in references
     )
 

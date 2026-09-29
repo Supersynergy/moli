@@ -120,6 +120,11 @@ REMOTE_CONTEXT_EXECUTOR_PATH = (
 
 REMOTE_CONTEXT_RESOURCE_PATHS = {DISPATCHER_PATH, REMOTE_CONTEXT_EXECUTOR_PATH}
 FETCH_CONTENT_TYPE_PATH = "/fetch/content-type/resources/content-type.py"
+DOCUMENT_CHARSET_FIXTURES = {
+    "/html/syntax/charset/resources/bogus-charset-http.py": b"\xa2\n",
+    "/html/syntax/charset/resources/bogus-charset-http-valid-meta.py":
+        b"<meta charset=windows-1251>\xa2\n",
+}
 
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
@@ -1998,6 +2003,16 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.wfile.write(output)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+        def _serve_document_charset_resource(self) -> bool:
+            path = unquote(urlsplit(self.path).path)
+            if path not in DOCUMENT_CHARSET_FIXTURES:
+                return False
+            # These upstream handlers assign response.content and return None,
+            # so wptserve does not apply the query's response pipes.
+            self._send_bytes(
+                "text/html;charset=this-is-not-a-charset", DOCUMENT_CHARSET_FIXTURES[path],
+                emit_body=self.command != "HEAD", cache_control=None,
+            )
             return True
 
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
@@ -2013,6 +2028,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
+                return
+            if self._serve_document_charset_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2062,6 +2079,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
+                return
+            if self._serve_document_charset_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2144,6 +2163,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_content_type_resource():
                 return
+            if self._serve_document_charset_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2191,6 +2212,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
+                return
+            if self._serve_document_charset_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2421,6 +2444,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if self._serve_remote_context_resource():
                 return
             if self._serve_content_type_resource():
+                return
+            if self._serve_document_charset_resource():
                 return
             try:
                 self._serve_response(emit_body=emit_body)
@@ -3231,6 +3256,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return self._serve_remote_context_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_CONTENT_TYPE_PATH:
                 return self._serve_content_type_resource
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in DOCUMENT_CHARSET_FIXTURES:
+                return self._serve_document_charset_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
