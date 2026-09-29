@@ -429,10 +429,22 @@ fn location_writable_attribute_setter_callback<'s>(
             let Ok(mut target) = url::Url::parse(&current_href) else {
                 return;
             };
-            // A syntactically valid scheme can still be incompatible with the
-            // current URL (for example, changing an HTTP URL to `data`). URL's
-            // scheme-state override treats that as a non-failing no-op.
-            if target.set_scheme(&scheme).is_err() || !matches!(target.scheme(), "http" | "https") {
+            // Without credentials or a port, an HTTP(S)-to-file change would
+            // produce a non-HTTP(S) URL and stop here. Url::set_scheme rejects
+            // file changes more broadly (for any URL with an authority), so
+            // handle this non-navigating result before applying the scheme.
+            if scheme == "file"
+                && target.username().is_empty()
+                && target.password().is_none_or(str::is_empty)
+                && target.port().is_none()
+            {
+                return;
+            }
+            // Syntax was validated above. Rejected scheme replacements keep
+            // the original URL and are non-failing URL parser terminations;
+            // Location must still navigate if that URL remains HTTP(S).
+            let _ = target.set_scheme(&scheme);
+            if !matches!(target.scheme(), "http" | "https") {
                 return;
             }
             // Unlike the other component setters, protocol assignment must

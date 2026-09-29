@@ -854,36 +854,6 @@ fn location_protocol_setter_rejects_invalid_schemes_without_navigation() {
 #[test]
 fn location_protocol_setter_uses_scheme_state_override_navigation_rules() {
     let original = "http://example.com/path?x=1#frag";
-    let mut ignored_vm = new_storage_test_vm(original);
-    let ignored = ignored_vm
-        .eval(
-            r#"
-(() => {
-  const results = [];
-  for (const scheme of ["x", "data", "file", "ftp", "http+x"]) {
-    try {
-      location.protocol = scheme;
-      results.push(location.href);
-    } catch (error) {
-      results.push(error.name);
-    }
-  }
-  return JSON.stringify(results);
-})()
-"#,
-        )
-        .expect("non-HTTP Location protocol probe should evaluate");
-    assert_eq!(
-        ignored,
-        r#"["http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag"]"#
-    );
-    assert!(
-        ignored_vm
-            .take_pending_location_navigation_with_seed()
-            .is_none(),
-        "non-HTTP(S) protocol results must not queue navigation"
-    );
-
     let mut same_vm = new_storage_test_vm(original);
     same_vm
         .eval(r#"location.protocol = "ht\ntp:gunk"; "queued""#)
@@ -909,4 +879,57 @@ fn location_protocol_setter_uses_scheme_state_override_navigation_rules() {
             .as_str(),
         "https://example.com/path?x=1#frag"
     );
+}
+
+#[test]
+fn location_protocol_setter_navigates_after_rejected_scheme_changes() {
+    for (original, scheme) in [
+        ("http://example.com/path?x=1#frag", "data"),
+        ("http://example.com/path?x=1#frag", "x"),
+        ("http://example.com/path?x=1#frag", "http+x"),
+        ("https://example.com/path?x=1#frag", "data:gunk"),
+        ("http://example.com:8080/path?x=1#frag", "file"),
+        ("https://example.com:8443/path?x=1#frag", "file"),
+        ("http://user@example.com/path?x=1#frag", "file"),
+        ("http://:password@example.com/path?x=1#frag", "file"),
+    ] {
+        let mut vm = new_storage_test_vm(original);
+        let result = vm
+            .eval(&format!(
+                "location.protocol = {}; location.href",
+                serde_json::to_string(scheme).unwrap()
+            ))
+            .expect("incompatible scheme assignment should not throw");
+        assert_eq!(result, original, "{original} -> {scheme}");
+        let navigation = vm
+            .take_pending_location_navigation_with_seed()
+            .unwrap_or_else(|| panic!("{original} -> {scheme} must still navigate"));
+        assert_eq!(navigation.url.as_str(), original);
+    }
+}
+
+#[test]
+fn location_protocol_setter_does_not_navigate_non_http_results() {
+    for (original, scheme) in [
+        ("http://example.com/path?x=1#frag", "ftp"),
+        ("http://example.com/path?x=1#frag", "ws"),
+        ("http://example.com/path?x=1#frag", "wss"),
+        ("http://example.com/path?x=1#frag", "file"),
+        ("http://:@example.com/path?x=1#frag", "file"),
+        ("http://example.com:80/path?x=1#frag", "file"),
+        ("https://example.com:443/path?x=1#frag", "file"),
+        ("about:blank", "https"),
+        ("file:///path", "https"),
+    ] {
+        let mut vm = new_storage_test_vm(original);
+        vm.eval(&format!(
+            "location.protocol = {}",
+            serde_json::to_string(scheme).unwrap()
+        ))
+        .expect("valid scheme assignment should not throw");
+        assert!(
+            vm.take_pending_location_navigation_with_seed().is_none(),
+            "{original} -> {scheme} must not navigate"
+        );
+    }
 }
