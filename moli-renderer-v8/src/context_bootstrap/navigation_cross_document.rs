@@ -57,7 +57,9 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         NavigationNavigateHistoryKind::Push => NavigationHistoryMutation::Push,
         NavigationNavigateHistoryKind::Replace => NavigationHistoryMutation::Replace,
         NavigationNavigateHistoryKind::Default => {
-            if current_href.as_deref() == Some("about:blank") && current_entry_is_about_blank {
+            if current_href.as_deref() == Some(next_url.as_str())
+                || (current_href.as_deref() == Some("about:blank") && current_entry_is_about_blank)
+            {
                 NavigationHistoryMutation::Replace
             } else {
                 NavigationHistoryMutation::Push

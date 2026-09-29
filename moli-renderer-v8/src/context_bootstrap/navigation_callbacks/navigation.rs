@@ -237,12 +237,11 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
     };
     let current_url = url::Url::parse(&current_href).ok();
     let can_update_current_entry = navigation_document_can_update_current_entry(scope, owner);
-    let exact_same_url_push = matches!(navigate_history_kind, NavigationNavigateHistoryKind::Push)
-        && next_url.as_str() == current_href;
-    if can_update_current_entry
-        && is_same_document_fragment_navigation(current_url.as_ref(), &next_url)
-        && !exact_same_url_push
-    {
+    // History behavior chooses which entry changes, not whether the navigation
+    // replaces the Document. Even an empty fragment is a fragment navigation.
+    let fragment_navigation = next_url.fragment().is_some()
+        && is_same_document_fragment_navigation(current_url.as_ref(), &next_url);
+    if can_update_current_entry && fragment_navigation {
         let navigation_for_event = window_navigation_for_holder(scope, owner);
         let canceled_cross_document = if let Some(navigation) = navigation_for_event {
             let _ = cancel_active_navigation_event(scope, navigation);
@@ -373,28 +372,6 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             .as_ref()
             .and_then(|outcome| outcome.redirected_state)
             .or(cloned_navigation_state);
-        if effective_href == current_href
-            && matches!(effective_kind, LocationNavigationKind::Replace)
-            && !runtime_window_is_global(scope, owner)
-            && !navigate_outcome
-                .as_ref()
-                .is_some_and(|outcome| outcome.intercepted)
-        {
-            rv.set(handle_navigation_navigate_cross_document(
-                scope,
-                owner,
-                history,
-                &next_url,
-                NavigationNavigateHistoryKind::Replace,
-                navigation_for_event.map(|navigation| {
-                    (
-                        navigation,
-                        navigate_outcome.as_ref().and_then(|outcome| outcome.signal),
-                    )
-                }),
-            ));
-            return;
-        }
         if let Some(outcome) = navigate_outcome.as_ref()
             && let Some(precommit_event) = outcome.precommit_event
             && let Some(pending) = navigation_result_with_pending_commit(scope)

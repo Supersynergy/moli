@@ -720,3 +720,196 @@ fn same_document_location_intercept_reject_dispatches_navigateerror() {
         .expect("location intercept reject microtasks should evaluate");
     assert_eq!(after_microtasks, "error:true:#one|microtask");
 }
+
+#[test]
+fn same_url_navigation_classifies_fragments_before_interception() {
+    for (fragment, remove_fragment, same_document) in [
+        ("", false, false),
+        ("#", false, true),
+        ("#fragment", false, true),
+        ("#fragment", true, false),
+    ] {
+        for history in ["auto", "push", "replace"] {
+            for action in ["navigate", "intercept", "cancel"] {
+                let mut vm = new_storage_test_vm(&format!(
+                    "https://same-url-navigation.test/page{fragment}"
+                ));
+                vm.exec(
+                    &format!(
+                        r#"
+const beforeLength = history.length;
+const events = [], settled = [];
+navigation.addEventListener('navigate', event => {{
+  events.push([event.navigationType, event.destination.sameDocument, event.hashChange]);
+  if ({action:?} === 'intercept') event.intercept();
+  if ({action:?} === 'cancel') event.preventDefault();
+}});
+const destination = {remove_fragment} ? location.href.split('#')[0] : location.href;
+const result = navigation.navigate(destination, {{history: {history:?}}});
+for (const name of ['committed', 'finished'])
+  result[name].then(() => settled.push(name), error => settled.push(name + ':' + error.name));
+"#
+                    ),
+                    None,
+                )
+                .unwrap();
+                let context = format!("{fragment}/{remove_fragment}/{history}/{action}");
+                let pushes = history == "push" || (history == "auto" && remove_fragment);
+                let navigation_type = if pushes { "push" } else { "replace" };
+                let pending = vm.take_pending_location_navigation_with_seed();
+                assert_eq!(
+                    pending.is_some(),
+                    !same_document && action == "navigate",
+                    "{context}"
+                );
+                if let Some(pending) = pending {
+                    assert_eq!(
+                        pending.url.as_str(),
+                        "https://same-url-navigation.test/page"
+                    );
+                    assert_eq!(
+                        pending
+                            .entry_seed
+                            .unwrap()
+                            .activation
+                            .unwrap()
+                            .navigation_type
+                            .as_deref(),
+                        Some(navigation_type),
+                        "{context}"
+                    );
+                }
+                let result = vm
+                    .eval("JSON.stringify({events, settled, delta: history.length - beforeLength})")
+                    .unwrap();
+                let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+                let committed = action != "cancel" && (same_document || action == "intercept");
+                let settled = if action == "cancel" {
+                    serde_json::json!(["committed:AbortError", "finished:AbortError"])
+                } else if committed {
+                    serde_json::json!(["committed", "finished"])
+                } else {
+                    serde_json::json!([])
+                };
+                assert_eq!(
+                    result,
+                    serde_json::json!({
+                        "events": [[navigation_type, same_document, false]],
+                        "settled": settled,
+                        "delta": i32::from(committed && pushes),
+                    }),
+                    "{context}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn same_url_navigation_preserves_fragment_documents_in_iframes() {
+    for (fragment, remove_fragment, same_document) in [
+        ("", false, false),
+        ("#", false, true),
+        ("#fragment", false, true),
+        ("#fragment", true, false),
+    ] {
+        for history in ["auto", "push", "replace"] {
+            let request_count = if same_document { 1 } else { 2 };
+            let server = StaticHttpServer::spawn(request_count).await;
+            let parent = server.base_url().join("parent").unwrap();
+            let loader = static_http_loader([]);
+            let mut vm =
+                new_storage_page_task_executor_test_vm_with_loader(parent.as_str(), &loader);
+            let context = format!("{fragment}/{remove_fragment}/{history}");
+            vm.eval(
+                r#"
+const frame = document.createElement('iframe');
+frame.src = '/child'; document.body.append(frame);
+const child = frame.contentWindow;
+"#,
+            )
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm, &loader,
+                "(() => { try { return String(child.location.pathname === '/child' && child.document.readyState === 'complete'); } catch { return 'false'; } })()",
+                "true", &context,
+            ).await;
+            vm.exec(
+                &format!(
+                    r#"
+child.history.replaceState(null, '', child.location.pathname + {fragment:?});
+const originalDocument = child.document;
+const beforeLength = child.history.length;
+const beforeEntries = child.navigation.entries().length;
+const beforeIndex = child.navigation.currentEntry.index;
+const events = [], settled = [];
+child.navigation.addEventListener('navigate', event =>
+  events.push([event.navigationType, event.destination.sameDocument, event.hashChange]));
+const destination = {remove_fragment} ? child.location.href.split('#')[0] : child.location.href;
+const result = child.navigation.navigate(destination, {{history: {history:?}}});
+for (const name of ['committed', 'finished'])
+  result[name].then(() => settled.push(name), error => settled.push(error.name));
+"#
+                ),
+                None,
+            )
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm, &loader,
+                if same_document {
+                    "String(settled.length === 2)"
+                } else {
+                    "(() => { try { return String(child.document !== originalDocument && child.document.readyState === 'complete'); } catch { return 'false'; } })()"
+                },
+                "true", &context,
+            ).await;
+            let result = vm
+                .eval(
+                    r#"JSON.stringify({
+sameDocument: originalDocument === child.document,
+historyDelta: child.history.length - beforeLength,
+entriesDelta: child.navigation.entries().length - beforeEntries,
+indexDelta: child.navigation.currentEntry.index - beforeIndex,
+events, settled})"#,
+                )
+                .unwrap();
+            let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+            let pushes = history == "push" || (history == "auto" && remove_fragment);
+            assert_eq!(
+                result["sameDocument"],
+                serde_json::json!(same_document),
+                "{context}"
+            );
+            assert_eq!(
+                result["events"],
+                serde_json::json!([[
+                    if pushes { "push" } else { "replace" },
+                    same_document,
+                    false
+                ]]),
+                "{context}"
+            );
+            assert_eq!(
+                result["settled"],
+                serde_json::json!(if same_document {
+                    vec!["committed", "finished"]
+                } else {
+                    vec![]
+                }),
+                "{context}"
+            );
+            for key in ["historyDelta", "entriesDelta", "indexDelta"] {
+                assert_eq!(
+                    result[key],
+                    serde_json::json!(i32::from(pushes)),
+                    "{context}/{key}"
+                );
+            }
+            assert_eq!(
+                server.finish_targets().await,
+                vec!["/child"; request_count],
+                "{context}"
+            );
+        }
+    }
+}
