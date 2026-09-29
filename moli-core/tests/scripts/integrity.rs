@@ -335,6 +335,11 @@ fn fixture_response(
             );
             ("200 OK", javascript.to_owned(), body)
         }
+        "/child-classic.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            "<!doctype html><body><script>globalThis.sriExecutions=0</script><script src='/sw-default.js?parser'></script>".to_owned(),
+        ),
         "/page.html" | "/parser.html" | "/cookie-page.html" | "/csp-page.html" => {
             let mut html = "<!doctype html><body><script>globalThis.sriEvents = {}; globalThis.sriExecutions = 0;</script>".to_owned();
             if path == "/csp-page.html" {
@@ -789,6 +794,53 @@ async fn manifest_roundtrip_checks_intermediate_and_final_cors_responses() -> Re
         assert_eq!(request.origin.as_deref(), expected_origin, "{request:?}");
         assert_eq!(request.sec_fetch_dest.as_deref(), Some("manifest"));
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_classic_scripts_use_the_controlling_service_worker() -> Result<()> {
+    let servers = IntegrityServers::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&format!("{}/page.html", servers.origin))
+        .await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+                const controlled = navigator.serviceWorker.controller ? Promise.resolve() :
+                    new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, {once:true}));
+                await navigator.serviceWorker.register('/worker.js', {scope:'/'});
+                await navigator.serviceWorker.ready;
+                await controlled;
+                const child = document.createElement('iframe');
+                child.src='/child-classic.html';
+                await new Promise(resolve => {child.onload=resolve;document.body.append(child);});
+                const other = child.contentWindow;
+                if (other.sriExecutions !== 1) throw new Error('parser script did not execute');
+                const script = other.document.createElement('script');
+                script.src='/sw-default.js?dynamic';
+                await new Promise((resolve,reject) => {
+                    script.onload=resolve;
+                    script.onerror=() => reject(new Error('dynamic script failed'));
+                    other.document.body.append(script);
+                });
+                const executions = other.sriExecutions;
+                child.remove();
+                return executions;
+            })()"#,
+            true,
+        ),
+    ).await??;
+    assert_eq!(result["value"], 2, "{result}");
+    assert!(
+        !servers
+            .requests
+            .lock()
+            .iter()
+            .any(|request| request.path.starts_with("/sw-default.js")),
+        "both child script paths must be served by the controlling service worker"
+    );
     Ok(())
 }
 
