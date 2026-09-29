@@ -10,7 +10,7 @@ use moli_encoding::{
 };
 use moli_web_mime::{
     effective_response_mime_essence, is_dom_parser_xml_mime, is_html_document_mime,
-    is_javascript_mime_essence, is_json_module_mime, is_text_mime_essence,
+    is_javascript_mime_essence, is_json_mime, is_text_mime_essence,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -395,7 +395,7 @@ fn decode_resource_content(
     ) {
         return decode_text_for_legacy_web(bytes, response_charset);
     }
-    if is_dom_parser_xml_mime(&mime) || is_json_module_mime(&mime) {
+    if is_dom_parser_xml_mime(&mime) || is_json_mime(&mime) {
         return decode_text_for_legacy_web(bytes, response_charset);
     }
     if is_text_mime_essence(&mime) {

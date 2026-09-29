@@ -1,4 +1,4 @@
-use moli_web_mime::{is_text_mime, response_header_values};
+use moli_web_mime::is_text_mime;
 
 pub(crate) fn ensure_worker_wasm_module_mime(
     response: &moli_fetch::Response,
@@ -28,7 +28,7 @@ pub(crate) fn ensure_worker_css_module_mime(response: &moli_fetch::Response) -> 
 pub(crate) fn ensure_worker_text_module_mime(
     response: &moli_fetch::Response,
 ) -> Result<(), String> {
-    let content_type = worker_module_response_content_type(&response.headers);
+    let content_type = super::script_mime::worker_response_content_type(&response.headers);
     let Some(content_type) = content_type else {
         return Err(
             "non-text module response for text import attribute: missing Content-Type".to_owned(),
@@ -40,10 +40,4 @@ pub(crate) fn ensure_worker_text_module_mime(
     Err(format!(
         "non-text module response for text import attribute: `{content_type}`"
     ))
-}
-
-fn worker_module_response_content_type(headers: &[(String, Vec<u8>)]) -> Option<String> {
-    response_header_values(headers, "content-type")
-        .into_iter()
-        .next_back()
 }

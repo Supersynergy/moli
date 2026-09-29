@@ -1,6 +1,6 @@
 use moli_encoding::HtmlDocumentStreamingDecoder;
 use moli_encoding_detector::detect_legacy_html_encoding;
-use moli_web_mime::{is_json_document_mime, is_text_document_mime, is_xml_document_mime};
+use moli_web_mime::{is_json_mime, is_text_document_mime, is_xml_document_mime};
 use url::Url;
 
 pub(crate) fn new_document_response_decoder(
@@ -14,7 +14,7 @@ pub(crate) fn new_document_response_decoder(
             headers,
             final_url.as_str(),
             detect_legacy_html_encoding,
-            is_json_document_mime(mime),
+            is_json_mime(mime),
             inherited_encoding,
         )
     } else if content_type.is_some_and(is_xml_document_mime) {

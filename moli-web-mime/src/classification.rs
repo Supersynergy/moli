@@ -64,7 +64,7 @@ pub fn is_text_mime_essence(input: &str) -> bool {
 pub fn is_text_document_mime(input: &str) -> bool {
     !is_html_document_mime(input)
         && !is_xml_document_mime(input)
-        && (is_text_mime(input) || is_json_module_mime(input) || is_javascript_mime(input))
+        && (is_text_mime(input) || is_json_mime(input) || is_javascript_mime(input))
 }
 
 /// Whether a `style` element's raw `type` attribute selects classic CSS.
@@ -131,6 +131,16 @@ pub fn is_font_mime(input: &str) -> bool {
 
 pub fn is_font_mime_essence(input: &str) -> bool {
     input.starts_with("font/")
+        || matches!(
+            input,
+            "application/font-cff"
+                | "application/font-otf"
+                | "application/font-sfnt"
+                | "application/font-ttf"
+                | "application/font-woff"
+                | "application/vnd.ms-fontobject"
+                | "application/vnd.ms-opentype"
+        )
 }
 
 pub fn is_form_urlencoded_mime(input: &str) -> bool {
@@ -147,14 +157,13 @@ pub fn multipart_form_data_boundary(input: &str) -> Option<String> {
         .flatten()
 }
 
-pub fn is_json_module_mime(input: &str) -> bool {
-    mime_essence(input).is_some_and(|mime| mime == "application/json" || mime.ends_with("+json"))
+/// The JSON MIME type group shared by JSON modules and documents.
+pub fn is_json_mime(input: &str) -> bool {
+    mime_essence(input).is_some_and(|mime| is_json_mime_essence(&mime))
 }
 
-pub fn is_json_document_mime(input: &str) -> bool {
-    mime_essence(input).is_some_and(|mime| {
-        matches!(mime.as_str(), "application/json" | "text/json") || mime.ends_with("+json")
-    })
+pub fn is_json_mime_essence(input: &str) -> bool {
+    matches!(input, "application/json" | "text/json") || input.ends_with("+json")
 }
 
 pub fn is_webassembly_mime(input: &str) -> bool {
@@ -174,8 +183,7 @@ pub fn is_supported_document_mime_type(input: &str) -> bool {
         || is_audio_mime_essence(&essence)
         || is_video_mime_essence(&essence)
         || is_javascript_mime_essence(&essence)
-        || essence == "application/json"
-        || essence.ends_with("+json")
+        || is_json_mime_essence(&essence)
         || matches!(
             essence.as_str(),
             "application/xml"

@@ -5667,6 +5667,10 @@ async fn worker_importscripts_cross_origin_failure_reports_helper_callsite_from_
 async fn worker_json_imports_use_shared_response_mime_extraction() {
     ensure_v8();
     for (mime, accepts) in [
+        ("text/json", true),
+        ("TeXt/JsOn; charset=windows-1250", true),
+        ("text/plain, text/json", true),
+        ("text/json, text/plain", false),
         ("text/plain, application/json", true),
         ("application/json, invalid, */*", true),
         ("application/json, text/plain", false),

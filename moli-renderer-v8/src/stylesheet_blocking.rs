@@ -422,6 +422,37 @@ mod tests {
     }
 
     #[test]
+    fn validates_stylesheet_response_using_complete_content_type_header_list() {
+        let url = Url::parse("https://example.com/app.css").unwrap();
+        for (values, accepts) in [
+            (vec!["text/plain", "text/css"], true),
+            (vec!["text/plain, text/css"], true),
+            (vec!["TEXT/CSS; charset=utf-8", "invalid", "*/*"], true),
+            (vec!["text/css", "text/plain"], false),
+            (vec!["text/css, text/plain"], false),
+            (vec![r#"text/plain; a=",text/css""#], false),
+        ] {
+            for nosniff in [false, true] {
+                let mut response = stylesheet_response(&url, None, "body { color: red; }");
+                response.headers = values
+                    .iter()
+                    .map(|value| ("Content-Type".to_owned(), value.as_bytes().to_vec()))
+                    .collect();
+                if nosniff {
+                    response
+                        .headers
+                        .push(("X-Content-Type-Options".to_owned(), b"nosniff".to_vec()));
+                }
+                assert_eq!(
+                    validate_stylesheet_response(&url, response).is_ok(),
+                    accepts,
+                    "nosniff={nosniff}: {values:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn linked_stylesheet_request_uses_captured_processing_attributes() {
         let document_url = Url::parse("https://example.com/page").unwrap();
         let stylesheet_url = Url::parse("https://cdn.example.test/app.css").unwrap();

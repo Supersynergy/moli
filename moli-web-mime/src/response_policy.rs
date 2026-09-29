@@ -1,10 +1,10 @@
 use crate::classification::{
     is_audio_mime_essence, is_css_mime, is_font_mime_essence, is_image_mime_essence,
-    is_javascript_mime, is_video_mime_essence,
+    is_javascript_mime, is_json_mime_essence, is_video_mime_essence,
 };
 use crate::destination::FetchDestination;
-use crate::headers::response_header_value;
-use crate::parse::{mime_charset, mime_essence};
+use crate::headers::{extract_response_mime_essence, extract_response_mime_type};
+use crate::parse::mime_charset;
 use crate::sniffing::{MimeSniffingContext, computed_mime_type, sniff_image_mime_type};
 
 pub fn determine_nosniff(headers: &[(String, Vec<u8>)]) -> bool {
@@ -27,7 +27,7 @@ pub fn should_response_be_blocked_due_to_nosniff(
         return false;
     }
 
-    let content_type = response_header_value(headers, "content-type");
+    let content_type = extract_response_mime_essence(headers);
     if destination.is_script_like() {
         return content_type
             .as_deref()
@@ -42,23 +42,10 @@ pub fn should_response_be_blocked_due_to_nosniff(
 }
 
 pub fn should_opaque_response_be_blocked_by_orb(headers: &[(String, Vec<u8>)]) -> bool {
-    let content_type = response_header_value(headers, "content-type");
-    if determine_nosniff(headers)
-        && content_type
-            .as_deref()
-            .is_none_or(|content_type| content_type.trim().is_empty())
-    {
-        return true;
-    }
-
-    let Some(content_type) = content_type else {
-        return false;
-    };
-    let Some(essence) = mime_essence(&content_type) else {
+    let Some(essence) = extract_response_mime_essence(headers) else {
         return determine_nosniff(headers);
     };
-    if is_javascript_mime(&content_type) || is_css_mime(&content_type) || essence == "image/svg+xml"
-    {
+    if is_javascript_mime(&essence) || is_css_mime(&essence) || essence == "image/svg+xml" {
         return false;
     }
 
@@ -67,9 +54,7 @@ pub fn should_opaque_response_be_blocked_by_orb(headers: &[(String, Vec<u8>)]) -
         || essence == "text/xml"
         || essence == "application/xml"
         || essence == "application/xhtml+xml"
-        || essence == "application/json"
-        || essence == "text/json"
-        || essence.ends_with("+json")
+        || is_json_mime_essence(&essence)
         || essence == "application/dash+xml"
         || essence == "application/gzip"
         || essence == "application/x-gzip"
@@ -127,14 +112,12 @@ pub fn should_opaque_response_be_blocked_by_orb_with_body(
         return false;
     }
 
-    let Some(content_type) = response_header_value(headers, "content-type") else {
+    let Some(mime) = extract_response_mime_type(headers) else {
         return true;
     };
-    let Some(essence) = mime_essence(&content_type) else {
-        return true;
-    };
-    if is_json_like_mime_essence(&essence)
-        && response_body_looks_like_orb_allowed_javascript(&content_type, body)
+    let essence = mime.essence();
+    if is_json_mime_essence(&essence)
+        && response_body_looks_like_orb_allowed_javascript(&mime.to_string(), body)
     {
         return false;
     }
@@ -147,7 +130,7 @@ pub fn computed_response_mime_type(
     context: MimeSniffingContext,
     body: &[u8],
 ) -> String {
-    let content_type = response_header_value(headers, "content-type");
+    let content_type = extract_response_mime_type(headers).map(|mime| mime.to_string());
     computed_mime_type(
         content_type.as_deref(),
         determine_nosniff(headers),
@@ -176,10 +159,7 @@ pub fn check_script_response_mime(
         // A script-context sniffing default cannot satisfy an explicit
         // JavaScript MIME requirement, including when Content-Type is absent
         // or cannot be parsed.
-        let supplied_mime_type = response_header_value(headers, "content-type")
-            .as_deref()
-            .and_then(mime_essence)
-            .unwrap_or_default();
+        let supplied_mime_type = extract_response_mime_essence(headers).unwrap_or_default();
         return is_javascript_mime(&supplied_mime_type)
             .then_some(())
             .ok_or(ScriptResponseMimeError::Unsupported(supplied_mime_type));
@@ -196,20 +176,13 @@ pub fn check_script_response_mime(
 pub fn should_script_like_response_be_blocked_due_to_mime_type(
     headers: &[(String, Vec<u8>)],
 ) -> bool {
-    let Some(content_type) = response_header_value(headers, "content-type") else {
-        return false;
-    };
-    let Some(essence) = mime_essence(&content_type) else {
+    let Some(essence) = extract_response_mime_essence(headers) else {
         return false;
     };
     is_audio_mime_essence(&essence)
         || is_image_mime_essence(&essence)
         || is_video_mime_essence(&essence)
         || essence == "text/csv"
-}
-
-fn is_json_like_mime_essence(essence: &str) -> bool {
-    essence == "application/json" || essence == "text/json" || essence.ends_with("+json")
 }
 
 fn response_body_looks_like_orb_allowed_javascript(content_type: &str, body: &[u8]) -> bool {

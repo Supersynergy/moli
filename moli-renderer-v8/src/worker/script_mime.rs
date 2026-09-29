@@ -1,5 +1,6 @@
 use moli_web_mime::{
-    FetchDestination, ScriptResponseMimeError, check_script_response_mime, response_header_values,
+    FetchDestination, ScriptResponseMimeError, check_script_response_mime,
+    extract_response_mime_type,
 };
 use url::Url;
 
@@ -13,9 +14,7 @@ pub(crate) fn ensure_worker_script_mime_acceptable(
 }
 
 pub(crate) fn worker_response_content_type(headers: &[(String, Vec<u8>)]) -> Option<String> {
-    response_header_values(headers, "content-type")
-        .into_iter()
-        .next_back()
+    extract_response_mime_type(headers).map(|mime| mime.to_string())
 }
 
 pub(crate) fn worker_response_has_webassembly_mime(headers: &[(String, Vec<u8>)]) -> bool {
@@ -86,5 +85,35 @@ mod tests {
             vec![("x-content-type-options".to_owned(), b"nosniff".to_vec())];
 
         assert!(ensure_worker_script_mime_acceptable(&url, &headers, b"").is_err());
+    }
+
+    #[test]
+    fn worker_javascript_and_wasm_mime_use_complete_header_lists() {
+        let url = Url::parse("https://example.test/worker").unwrap();
+        for mime in ["text/javascript", "application/wasm"] {
+            for (values, accepts) in [
+                (vec!["text/plain".to_owned(), mime.to_owned()], true),
+                (vec![format!("text/plain, {mime}")], true),
+                (
+                    vec![mime.to_owned(), "invalid".to_owned(), "*/*".to_owned()],
+                    true,
+                ),
+                (vec![mime.to_owned(), "text/plain".to_owned()], false),
+                (vec![format!("{mime}, text/plain")], false),
+                (vec![format!(r#"text/plain; a=",{mime}""#)], false),
+                (vec![], false),
+            ] {
+                let headers: Vec<_> = values
+                    .iter()
+                    .map(|value| ("Content-Type".to_owned(), value.as_bytes().to_vec()))
+                    .collect();
+                let accepted = if mime == "application/wasm" {
+                    worker_response_has_webassembly_mime(&headers)
+                } else {
+                    ensure_worker_script_mime_acceptable(&url, &headers, b"").is_ok()
+                };
+                assert_eq!(accepted, accepts, "{mime}: {values:?}");
+            }
+        }
     }
 }
