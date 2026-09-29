@@ -1654,3 +1654,15 @@ fn relative_range_boundaries_share_selection_updates() {
         .unwrap();
     assert_eq!(result, "true");
 }
+
+#[test]
+fn selection_endpoints_follow_associated_live_range_mutations() {
+    let mut vm = new_storage_test_vm("https://selection-live-mutations.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../../tests/fixtures/selection-live-range-mutations.js"
+        ))
+        .expect("Selection endpoints should follow their live Range"),
+        ""
+    );
+}
