@@ -31,6 +31,7 @@ use crate::dom::native::{
     DomHost, DomMutationEffects, DomMutationRecord, DomMutationRecordKind, NativeNodeId,
 };
 use crate::webidl;
+use indexmap::IndexSet;
 use moli_css_parse::{normalize_root_margin, root_margin_components};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -356,7 +357,8 @@ enum QueuedMutationRecordKind {
 struct IntersectionObserverState {
     observer: v8::Global<v8::Object>,
     callback: callback::ObserverCallback,
-    observed_targets: HashSet<NativeNodeId>,
+    // Preserve observation order; duplicate observe() leaves the position unchanged.
+    observed_targets: IndexSet<NativeNodeId>,
     queued_entries: Vec<QueuedIntersectionEntry>,
     last_reported_entries: HashMap<NativeNodeId, LastReportedIntersection>,
     options: IntersectionObserverOptions,
@@ -660,7 +662,7 @@ impl ObserverStore {
             IntersectionObserverState {
                 observer: v8::Global::new(scope, observer),
                 callback,
-                observed_targets: HashSet::new(),
+                observed_targets: IndexSet::new(),
                 queued_entries: Vec::new(),
                 last_reported_entries: HashMap::new(),
                 options,
@@ -700,7 +702,7 @@ impl ObserverStore {
         let Some(state) = self.intersection_observers.get_mut(&id) else {
             return;
         };
-        state.observed_targets.remove(&target);
+        state.observed_targets.shift_remove(&target);
         state
             .queued_entries
             .retain(|queued| queued.target != target);
