@@ -119,6 +119,7 @@ REMOTE_CONTEXT_EXECUTOR_PATH = (
 )
 
 REMOTE_CONTEXT_RESOURCE_PATHS = {DISPATCHER_PATH, REMOTE_CONTEXT_EXECUTOR_PATH}
+FETCH_CONTENT_TYPE_PATH = "/fetch/content-type/resources/content-type.py"
 
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
@@ -1974,6 +1975,31 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 auto_content_length=auto_content_length,
             )
 
+        def _serve_content_type_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != FETCH_CONTENT_TYPE_PATH:
+                return False
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            values = [value.encode("latin-1") for value in params.get("value", [])]
+            body = params.get("content", ["<b>hi</b>\n"])[0].encode("latin-1")
+            # The upstream fixture writes the entire HTTP/1.1 response directly,
+            # bypassing pipelines, default headers, and HEAD body suppression.
+            # Keep malformed values and duplicate fields intact for MIME tests.
+            output = b"HTTP/1.1 200 OK\r\nX-Content-Type-Options: nosniff\r\n"
+            if "single_header" in params:
+                output += b"Content-Type: " + b",".join(values) + b"\r\n"
+            else:
+                for value in values:
+                    output += b"Content-Type: " + value + b"\r\n"
+            output += b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+            output += b"Connection: close\r\n\r\n" + body
+            self.close_connection = True
+            try:
+                self.wfile.write(output)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return True
+
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_websocket()
@@ -1985,6 +2011,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
 
         def do_OPTIONS(self) -> None:  # noqa: N802
             if self._serve_remote_context_resource():
+                return
+            if self._serve_content_type_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2032,6 +2060,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
 
         def do_POST(self) -> None:  # noqa: N802
             if self._serve_remote_context_resource():
+                return
+            if self._serve_content_type_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2112,6 +2142,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
         def _serve_fetch_resource_method(self) -> None:
             if self._serve_remote_context_resource():
                 return
+            if self._serve_content_type_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2157,6 +2189,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
             if self._serve_remote_context_resource():
+                return
+            if self._serve_content_type_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2385,6 +2419,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
 
         def _serve(self, *, emit_body: bool) -> None:
             if self._serve_remote_context_resource():
+                return
+            if self._serve_content_type_resource():
                 return
             try:
                 self._serve_response(emit_body=emit_body)
@@ -3193,6 +3229,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
         def __getattr__(self, name: str):
             if name.startswith("do_") and unquote(urlsplit(self.path).path) in REMOTE_CONTEXT_RESOURCE_PATHS:
                 return self._serve_remote_context_resource
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_CONTENT_TYPE_PATH:
+                return self._serve_content_type_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
