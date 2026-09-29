@@ -10,6 +10,7 @@ use crate::{
     content_security_policy::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
     },
+    document_response_decoder::decode_document_response,
     document_runtime::{DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle},
     document_script_scheduler::FrameDocumentClassicScriptSchedulerWork,
     frame_owner_model::{
@@ -21,8 +22,6 @@ use crate::{
         LoadedChildDocument, SubresourceResponseBody,
     },
 };
-use moli_encoding::{HtmlDocumentStreamingDecoder, decode_html_document_with_fallback};
-use moli_encoding_detector::detect_legacy_html_encoding;
 
 pub(crate) struct AppliedChildDocumentLoadCompletion {
     /// Initial parser-classic work produced by the committed child document.
@@ -757,17 +756,6 @@ impl JsContextHost {
     }
 }
 
-fn child_document_fallback_character_set(
-    parent_character_set: &str,
-    content_type: Option<&str>,
-) -> String {
-    if content_type.is_some_and(moli_web_mime::is_dom_parser_xml_mime) {
-        "UTF-8".to_owned()
-    } else {
-        parent_character_set.to_owned()
-    }
-}
-
 fn child_document_load_outcome_from_response(
     request_url: String,
     request_method: String,
@@ -786,30 +774,17 @@ fn child_document_load_outcome_from_response(
     let encoded_data_length = response_body.len();
     let content_type = child_document_content_type_from_headers(&head.headers)
         .or_else(|| child_document_content_type_for_url(&head.final_url));
-    let fallback =
-        child_document_fallback_character_set(parent_character_set, content_type.as_deref());
     let (markup, character_set) = {
         let body_bytes = response_body
             .try_bytes()
             .map_err(|error| format!("failed to read child document response body: {error}"))?;
-        let (markup, character_set) = if let Some(mime) = content_type
-            .as_deref()
-            .filter(|mime| moli_web_mime::is_text_document_mime(mime))
-        {
-            let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
-                &head.headers,
-                head.final_url.as_str(),
-                detect_legacy_html_encoding,
-                moli_web_mime::is_json_module_mime(mime) || mime == "text/json",
-            );
-            let mut markup = decoder.push(&body_bytes).concat();
-            if let Some(tail) = decoder.finish() {
-                markup.push_str(&tail);
-            }
-            (markup, decoder.document_encoding_name())
-        } else {
-            decode_html_document_with_fallback(&body_bytes, &head.headers, Some(&fallback))
-        };
+        let (markup, character_set) = decode_document_response(
+            &body_bytes,
+            &head.headers,
+            content_type.as_deref(),
+            &head.final_url,
+            Some(parent_character_set),
+        );
         (markup, character_set.to_owned())
     };
     let policy_container =

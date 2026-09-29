@@ -33,6 +33,7 @@ fn json_text_document_defaults_to_utf8_across_every_chunk_split() {
             "https://example.test/",
             unexpected_legacy_encoding_detector,
             true,
+            Some("GBK"),
         );
         let mut output = decoder.push(&input.as_bytes()[..split]).join("");
         output.push_str(&decoder.push(&input.as_bytes()[split..]).join(""));
@@ -53,6 +54,7 @@ fn plain_text_document_honors_transport_charset() {
         "https://example.test/",
         unexpected_legacy_encoding_detector,
         false,
+        Some("UTF-8"),
     );
     let mut output = decoder.push(&gbk_bytes("<b>家居</b>")).join("");
     output.push_str(&decoder.finish().unwrap_or_default());
@@ -71,6 +73,7 @@ fn text_document_bom_precedes_transport_charset() {
         "https://example.test/",
         unexpected_legacy_encoding_detector,
         false,
+        Some("windows-1251"),
     );
     assert_eq!(decoder.document_encoding_name(), "GBK");
     assert_eq!(decoder.selected_encoding_name(), None);
@@ -92,8 +95,50 @@ fn plain_text_document_retains_legacy_detection_without_a_charset() {
         "https://legacy.example/",
         test_legacy_encoding_detector,
         false,
+        None,
     );
     let mut output = decoder.push(&[0x80]).join("");
+    output.push_str(&decoder.finish().unwrap_or_default());
+    assert_eq!(output, "А");
+    assert_eq!(decoder.selected_encoding_name(), Some("IBM866"));
+}
+
+#[test]
+fn plain_text_document_inherits_encoding_before_detection_across_chunk_splits() {
+    for (input, encoding) in [
+        ("plain ASCII", encoding_rs::UTF_8),
+        ("<meta charset=gbk>吴姓－姓氏渊源", encoding_rs::UTF_8),
+        ("<?xml encoding='utf-8'?>家居", encoding_rs::GBK),
+    ] {
+        let bytes = encoding.encode(input).0;
+        for split in 0..=bytes.len() {
+            let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+                &[],
+                "https://example.test/",
+                unexpected_legacy_encoding_detector,
+                false,
+                Some(encoding.name()),
+            );
+            assert_eq!(decoder.document_encoding_name(), encoding.name());
+            let mut output = decoder.push(&bytes[..split]).concat();
+            output.push_str(&decoder.push(&bytes[split..]).concat());
+            output.push_str(&decoder.finish().unwrap_or_default());
+            assert_eq!(output, input, "{} split {split}", encoding.name());
+            assert_eq!(decoder.selected_encoding_name(), Some(encoding.name()));
+        }
+    }
+}
+
+#[test]
+fn invalid_inherited_text_encoding_does_not_disable_detection() {
+    let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
+        &[],
+        "https://legacy.example/",
+        test_legacy_encoding_detector,
+        false,
+        Some("not-an-encoding"),
+    );
+    let mut output = decoder.push(&[0x80]).concat();
     output.push_str(&decoder.finish().unwrap_or_default());
     assert_eq!(output, "А");
     assert_eq!(decoder.selected_encoding_name(), Some("IBM866"));
@@ -112,6 +157,7 @@ fn plain_text_document_ignores_literal_encoding_declarations() {
             "https://example.test/",
             test_legacy_encoding_detector,
             false,
+            None,
         );
         let mut output = decoder.push(&input).join("");
         output.push_str(&decoder.finish().unwrap_or_default());

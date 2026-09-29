@@ -13,6 +13,14 @@ pub fn is_dom_parser_xml_mime(input: &str) -> bool {
     })
 }
 
+/// XML navigation responses, including registered and custom `+xml` subtypes.
+/// DOMParser's Web API accepts a narrower, separately classified set of types.
+pub fn is_xml_document_mime(input: &str) -> bool {
+    mime_essence(input).is_some_and(|mime| {
+        matches!(mime.as_str(), "text/xml" | "application/xml") || mime.ends_with("+xml")
+    })
+}
+
 pub fn is_javascript_mime(input: &str) -> bool {
     mime_essence(input).is_some_and(|mime| is_javascript_mime_essence(&mime))
 }
@@ -55,7 +63,7 @@ pub fn is_text_mime_essence(input: &str) -> bool {
 /// This also includes JSON and JavaScript resources opened as documents.
 pub fn is_text_document_mime(input: &str) -> bool {
     !is_html_document_mime(input)
-        && !is_dom_parser_xml_mime(input)
+        && !is_xml_document_mime(input)
         && (is_text_mime(input) || is_json_module_mime(input) || is_javascript_mime(input))
 }
 
@@ -141,6 +149,12 @@ pub fn multipart_form_data_boundary(input: &str) -> Option<String> {
 
 pub fn is_json_module_mime(input: &str) -> bool {
     mime_essence(input).is_some_and(|mime| mime == "application/json" || mime.ends_with("+json"))
+}
+
+pub fn is_json_document_mime(input: &str) -> bool {
+    mime_essence(input).is_some_and(|mime| {
+        matches!(mime.as_str(), "application/json" | "text/json") || mime.ends_with("+json")
+    })
 }
 
 pub fn is_webassembly_mime(input: &str) -> bool {

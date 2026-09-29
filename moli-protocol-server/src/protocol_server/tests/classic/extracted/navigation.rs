@@ -1,6 +1,164 @@
 use super::*;
 
 #[tokio::test]
+async fn webdriver_classic_text_children_preserve_parent_encoding_without_a_charset() {
+    const LITERAL: &str = "<meta charset=gbk>吴姓－姓氏渊源";
+    let cases = [
+        ("ascii", "plain ASCII"),
+        ("utf8", "吴姓－姓氏渊源"),
+        ("literal", LITERAL),
+        ("data", LITERAL),
+    ];
+    let mut fixture = axum::Router::new();
+    for (name, payload) in cases {
+        fixture = fixture.route(
+            &format!("/{name}"),
+            axum::routing::get(
+                move || async move { ([(header::CONTENT_TYPE, "text/plain")], payload) },
+            ),
+        );
+    }
+    fixture = fixture.route(
+        "/parent/{kind}",
+        axum::routing::get(
+            |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                let target = if kind == "data" {
+                    format!(
+                        "data:text/plain;base64,{}",
+                        base64::Engine::encode(&BASE64_STANDARD, LITERAL)
+                    )
+                } else {
+                    format!("/{kind}")
+                };
+                (
+                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                    format!("<iframe src='{target}'></iframe>"),
+                )
+            },
+        ),
+    );
+    let (addr, _server) = spawn_dedicated_fixture_server(fixture, "inherited-text-encoding");
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for (name, payload) in cases {
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/url"),
+            json!({"url":format!("http://{addr}/parent/{name}")}),
+        )
+        .await;
+        let parent = classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/execute/sync"),
+            json!({"script": "return document.characterSet;", "args": []}),
+        )
+        .await;
+        assert_eq!(parent["value"], json!("UTF-8"), "{name}");
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/frame"),
+            json!({"id": 0}),
+        )
+        .await;
+        let observed = classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/execute/sync"),
+            json!({
+                "script": "return [document.body.textContent,document.characterSet,document.contentType];",
+                "args": [],
+            }),
+        ).await;
+        assert_eq!(
+            observed["value"],
+            json!([payload, "UTF-8", "text/plain"]),
+            "{name}"
+        );
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/frame"),
+            json!({"id": null}),
+        )
+        .await;
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_xml_suffix_navigation_preserves_namespaces_and_dom_parser_types() {
+    let cases = [
+        ("atom.xml", "application/atom+xml"),
+        ("rss.xml", "application/rss+xml"),
+        ("custom.xml", "text/example+xml"),
+    ];
+    let mut fixture = axum::Router::new();
+    for (name, mime) in cases {
+        fixture = fixture.route(
+            &format!("/{name}"),
+            axum::routing::get(move || async move {
+                (
+                    [(header::CONTENT_TYPE, mime)],
+                    "<feed xmlns='http://www.w3.org/2005/Atom'><title>吴姓</title></feed>",
+                )
+            }),
+        );
+    }
+    fixture = fixture.route(
+        "/parent/{kind}",
+        axum::routing::get(
+            |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                (
+                    [(header::CONTENT_TYPE, "text/html; charset=windows-1252")],
+                    format!("<iframe src='/{kind}'></iframe>"),
+                )
+            },
+        ),
+    );
+    let (addr, _server) = spawn_dedicated_fixture_server(fixture, "xml-suffix-navigation");
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for (name, mime) in cases {
+        for prefix in ["", "parent/"] {
+            classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/url"),
+                json!({"url":format!("http://{addr}/{prefix}{name}")}),
+            )
+            .await;
+            let observed = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/execute/sync"),
+                json!({
+                    "script": "const d=document.querySelector('iframe')?.contentDocument ?? document; let rejected=false; try { new DOMParser().parseFromString('<feed/>',d.contentType); } catch(error) { rejected=error instanceof TypeError; } const root=d.getElementsByTagNameNS('http://www.w3.org/2005/Atom','feed')[0]; return [root.localName,root.namespaceURI,root.textContent,d.contentType,d.characterSet,rejected];",
+                    "args": [],
+                }),
+            ).await;
+            assert_eq!(
+                observed["value"],
+                json!([
+                    "feed",
+                    "http://www.w3.org/2005/Atom",
+                    "吴姓",
+                    mime,
+                    "UTF-8",
+                    true
+                ]),
+                "{prefix}{name}"
+            );
+        }
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
 async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents() {
     const PAYLOAD: &str =
         "<meta charset='gbk'><script>window.executed=42;</script><b>literal&amp;Gülçek</b>";

@@ -48,6 +48,7 @@ mod document_cookie_owner;
 mod document_language;
 mod document_last_modified;
 mod document_module_graph;
+mod document_response_decoder;
 mod document_runtime;
 mod document_script_scheduler;
 mod document_task_lane;

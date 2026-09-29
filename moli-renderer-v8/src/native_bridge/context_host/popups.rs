@@ -2310,7 +2310,7 @@ impl JsContextHost {
                     super::child_documents::child_document_content_type_from_headers(&head.headers);
                 let fallback = if content_type
                     .as_deref()
-                    .is_some_and(moli_web_mime::is_dom_parser_xml_mime)
+                    .is_some_and(moli_web_mime::is_xml_document_mime)
                 {
                     "UTF-8".to_owned()
                 } else {

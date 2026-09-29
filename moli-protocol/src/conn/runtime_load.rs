@@ -158,7 +158,7 @@ async fn prepare_network_error_page_navigation_with_engine_async(
 
 fn response_headers_indicate_xml_document(headers: &[(String, Vec<u8>)]) -> bool {
     moli_web_mime::response_document_content_type(headers)
-        .is_some_and(|mime| moli_web_mime::is_dom_parser_xml_mime(&mime))
+        .is_some_and(|mime| moli_web_mime::is_xml_document_mime(&mime))
 }
 
 #[derive(Clone, Debug)]

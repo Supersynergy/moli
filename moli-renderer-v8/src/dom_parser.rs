@@ -1,5 +1,5 @@
 use crate::web_api_interfaces;
-use moli_web_mime::{is_dom_parser_xml_mime, is_html_document_mime};
+use moli_web_mime::{is_dom_parser_xml_mime, is_html_document_mime, is_xml_document_mime};
 use moli_webapi_declare::WebApiFunctionTemplate;
 use url::Url;
 
@@ -379,7 +379,7 @@ pub(crate) fn preserve_decoded_bom_only_browsing_context_body<'a>(
 ) -> std::borrow::Cow<'a, str> {
     if source == "\u{feff}"
         && !content_type.is_some_and(|mime| {
-            is_dom_parser_xml_mime(mime) || moli_web_mime::is_text_document_mime(mime)
+            is_xml_document_mime(mime) || moli_web_mime::is_text_document_mime(mime)
         })
     {
         std::borrow::Cow::Borrowed("<body>\u{feff}</body>")
@@ -394,7 +394,7 @@ fn parse_browsing_context_document_snapshot(
     content_type: Option<&str>,
     html_parser: HtmlParser,
 ) -> (DomHost, DetachedDocumentKind) {
-    if content_type.is_some_and(is_dom_parser_xml_mime)
+    if content_type.is_some_and(is_xml_document_mime)
         || (content_type.is_none() && child_document_url_is_xml_like(&document_url))
     {
         let parser = XmlParser;
@@ -583,6 +583,34 @@ mod tests {
 
         let disabled = parse(HtmlParser::SCRIPTING_DISABLED);
         assert!(disabled.element_handle_by_id("fallback").is_some());
+    }
+
+    #[test]
+    fn child_projection_preserves_xml_suffix_document_structure_and_namespace() {
+        let source = "<feed xmlns='http://www.w3.org/2005/Atom'><title>Example</title></feed>";
+        for mime in [
+            "application/atom+xml",
+            "application/rss+xml",
+            "text/example+xml",
+        ] {
+            for path in ["feed.xml", "feed.html", "feed"] {
+                let (document, kind) = parse_browsing_context_document_snapshot(
+                    Url::parse(&format!("https://example.test/{path}")).unwrap(),
+                    source,
+                    Some(mime),
+                    HtmlParser::SCRIPTING_ENABLED,
+                );
+                let root = first_document_element(&document);
+                let element = document
+                    .node(root)
+                    .and_then(|node| node.as_element())
+                    .unwrap();
+                assert_eq!(kind, DetachedDocumentKind::Xml, "{mime} at {path}");
+                assert_eq!(element.local_name(), "feed", "{mime} at {path}");
+                assert_eq!(element.namespace(), "http://www.w3.org/2005/Atom");
+                assert_eq!(document.text_content(root).as_deref(), Some("Example"));
+            }
+        }
     }
 
     #[test]

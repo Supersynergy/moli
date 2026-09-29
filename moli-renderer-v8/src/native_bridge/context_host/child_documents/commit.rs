@@ -6,7 +6,7 @@ use crate::frame_owner_model::{
     FrameDocumentLocalWindowTransition, FrameLocalWindowOwnerTransition,
 };
 use crate::{document_runtime::DomHandle, frame_owner_model::FrameDocumentOwnerTransition};
-use moli_web_mime::is_dom_parser_xml_mime;
+use moli_web_mime::is_xml_document_mime;
 use url::Url;
 
 pub(crate) struct ChildDocumentInstallResult {
@@ -135,7 +135,7 @@ impl JsContextHost {
         let is_xml_document = snapshot
             .content_type
             .as_deref()
-            .is_some_and(is_dom_parser_xml_mime);
+            .is_some_and(is_xml_document_mime);
         self.install_live_child_document_from_snapshot(
             scope,
             handle,
