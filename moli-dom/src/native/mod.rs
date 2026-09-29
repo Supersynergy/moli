@@ -2723,6 +2723,62 @@ mod tests {
     }
 
     #[test]
+    fn inherited_about_base_url_survives_document_url_updates() {
+        for initial in ["about:blank", "about:blank?query", "about:srcdoc"] {
+            for inherited in ["https://parent.test/path/page.html", initial] {
+                let initial_url = url::Url::parse(initial).unwrap();
+                let inherited_url = url::Url::parse(inherited).unwrap();
+                let mut host = DomHost::from_dom(NativeDom::new_html(initial_url.clone()));
+                let document = host.document_handle();
+                host.set_document_fallback_base_url_for_handle(
+                    document,
+                    Some(inherited_url.clone()),
+                );
+                host.reset_html_document_shell();
+
+                let mut updated = initial_url.clone();
+                updated.set_fragment(Some("updated"));
+                assert!(host.set_document_url(updated.clone()));
+                assert_eq!(host.document_url(), Some(&updated));
+                assert_eq!(host.document_base_url(), Some(inherited_url.clone()));
+
+                let head = host.document_head_handle().unwrap();
+                let base = host.create_element("base");
+                host.set_attribute(base, "href", "https://explicit.test/assets/");
+                host.append_child(head, base);
+                updated.set_fragment(Some("again"));
+                assert!(host.set_document_url(updated.clone()));
+                assert_eq!(
+                    host.document_base_url().unwrap().as_str(),
+                    "https://explicit.test/assets/"
+                );
+                host.remove_child(head, base);
+                assert_eq!(host.document_base_url(), Some(inherited_url));
+
+                // Clearing inheritance restores the current URL, including its fragment.
+                assert!(host.set_document_fallback_base_url_for_handle(document, None));
+                assert_eq!(host.document_base_url(), Some(updated));
+            }
+        }
+    }
+
+    #[test]
+    fn document_without_inherited_base_tracks_its_url() {
+        for initial in [
+            "about:blank",
+            "about:srcdoc",
+            "https://ordinary.test/path/page.html",
+        ] {
+            let mut url = url::Url::parse(initial).unwrap();
+            let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+            host.reset_html_document_shell();
+            url.set_fragment(Some("updated"));
+            assert!(host.set_document_url(url.clone()));
+            assert_eq!(host.document_base_url(), Some(url));
+        }
+    }
+
+    #[test]
     fn document_base_url_uses_body_base_href_in_tree_order() {
         let mut host = DomHost::from_dom(NativeDom::new_html(
             url::Url::parse("https://example.test/path/page.html").unwrap(),

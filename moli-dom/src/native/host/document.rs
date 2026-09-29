@@ -1199,11 +1199,9 @@ impl DomHost {
         else {
             return false;
         };
-        let fallback_base_url = fallback_base_url.unwrap_or_else(|| document.url().clone());
-        if document.fallback_base_url() == &fallback_base_url {
+        if !document.set_fallback_base_url(fallback_base_url) {
             return false;
         }
-        document.set_fallback_base_url(fallback_base_url);
         self.dom.process_base_element(document_handle, true);
         self.record_mutation(MutationScope::LocalState);
         true
