@@ -3013,3 +3013,30 @@ fn css_style_declaration_exposes_iterator() {
         "true|function|values|0|false|true|false|true|true|color,margin-top|display,opacity|display|opacity"
     );
 }
+
+#[test]
+fn windowless_inline_style_tracks_native_attributes_and_adoption() {
+    let mut vm = new_parsed_test_vm(
+        "https://windowless-inline-style.test/",
+        "<!doctype html><body>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const owner = document.implementation.createHTMLDocument('');
+      const element = owner.createElement('div');
+      element.setAttribute('style', 'color: red');
+      const style = element.style;
+      if (style.color !== 'red' || element.style !== style) throw Error('initial style');
+      element.setAttribute('style', 'color: blue; --token: before');
+      if (style.color !== 'blue' || style.getPropertyValue('--token') !== 'before') throw Error('attribute sync');
+      style.setProperty('width', '12px', 'important');
+      if (!element.getAttribute('style').includes('12px')) throw Error('style write');
+      document.adoptNode(element);
+      document.body.append(element);
+      if (element.style !== style || style.width !== '12px') throw Error('adoption identity');
+      element.setAttribute('style', 'height: 9px');
+      if (style.height !== '9px' || style.width !== '') throw Error('held style');
+      element.removeAttribute('style');
+      if (style.length !== 0 || style.cssText !== '') throw Error('attribute removal');
+      return 'pass';
+    })()"#).unwrap(), "pass");
+}

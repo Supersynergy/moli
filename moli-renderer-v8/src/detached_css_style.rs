@@ -702,14 +702,6 @@ pub(crate) fn build_lightweight_css_style_declaration<'s>(
     build_lightweight_css_style_declaration_with_interface(scope, "CSSStyleProperties", true)
 }
 
-pub(crate) fn build_lightweight_detached_css_style_declaration<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> v8::Local<'s, v8::Object> {
-    let style = build_lightweight_css_style_declaration(scope);
-    set_style_uses_stylo_declaration_block(scope, style);
-    style
-}
-
 pub(crate) fn build_lightweight_css_rule_style_declaration<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {

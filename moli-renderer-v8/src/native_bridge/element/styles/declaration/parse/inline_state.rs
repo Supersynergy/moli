@@ -135,7 +135,7 @@ pub(super) fn inline_css_text_pdb_storage_state(
     if entries
         .iter()
         .any(style_entry_is_pdb_supplemental_side_entry)
-        || inline_css_text_contains_animation_shorthand(css_text)
+        || inline_css_text_requires_entry_projection(css_text)
     {
         let mut state = inline_style_declaration_state_from_entries(&entries);
         state.refresh_pdb_entries();
@@ -147,10 +147,15 @@ pub(super) fn inline_css_text_pdb_storage_state(
     })
 }
 
-pub(super) fn inline_css_text_contains_animation_shorthand(css_text: &str) -> bool {
+fn inline_css_text_requires_entry_projection(css_text: &str) -> bool {
     parse_css_declaration_list(css_text)
         .into_iter()
-        .any(|declaration| canonical_style_property_name(&declaration.name) == "animation")
+        .any(|declaration| {
+            let name = canonical_style_property_name(&declaration.name.to_ascii_lowercase());
+            // CSSOM's compatibility aliases are normalized by the entry parser;
+            // feeding the original name directly to Stylo can drop declarations.
+            name == "animation" || !name.eq_ignore_ascii_case(declaration.name.trim())
+        })
 }
 
 pub(super) fn inline_css_text_can_seed_plain_pdb_block(css_text: &str) -> bool {

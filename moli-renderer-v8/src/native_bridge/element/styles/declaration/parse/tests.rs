@@ -1262,11 +1262,26 @@ fn inline_state_pdb_queries_use_stored_block_when_it_wins_order() {
     );
 
     let overflow_state = CssInlineStyleDeclarationState {
-        block: moli_css_parse::parse_declaration_block("overflow-x: hidden; overflow-y: scroll;"),
+        block: moli_css_parse::parse_declaration_block(
+            "overflow-x: hidden !important; overflow-y: scroll !important;",
+        ),
+        ..Default::default()
+    };
+    assert_eq!(
+        inline_state_property_value_with_pdb(&overflow_state, "overflow").as_deref(),
+        Some("hidden scroll")
+    );
+    assert_eq!(
+        inline_state_property_priority_with_pdb(&overflow_state, "overflow"),
+        Some(true)
+    );
+
+    let animation_state = CssInlineStyleDeclarationState {
+        block: moli_css_parse::parse_declaration_block("animation: spin 1s;"),
         ..Default::default()
     };
     assert!(
-        inline_state_property_value_with_pdb(&overflow_state, "overflow").is_none(),
+        inline_state_property_value_with_pdb(&animation_state, "animation").is_none(),
         "non-whitelisted shorthand queries must keep their CSSOM adapter semantics"
     );
 }
