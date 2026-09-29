@@ -1,6 +1,107 @@
 use super::*;
 
 #[test]
+fn form_named_lookup_own_properties_take_precedence_over_controls_and_prototypes() {
+    let mut vm = new_parsed_test_vm(
+        "https://form-lookup-own-properties.test/",
+        "<!doctype html><html><body><form id='parsed'></form></body></html>",
+    );
+    let result = vm.eval(r#"
+      (() => {
+        const detachedDocument = document.implementation.createHTMLDocument('forms');
+        const adopted = detachedDocument.createElement('form');
+        document.body.appendChild(document.adoptNode(adopted));
+        const childDocument = document.body.appendChild(document.createElement('iframe')).contentDocument;
+        const forms = [
+          document.getElementById('parsed'),
+          document.createElement('form'),
+          detachedDocument.body.appendChild(detachedDocument.createElement('form')),
+          adopted,
+          childDocument.body.appendChild(childDocument.createElement('form'))
+        ];
+        const names = [
+          'addEventListener', 'removeEventListener', 'dispatchEvent',
+          'nodeType', 'nodeName', 'ownerDocument', 'namespaceURI', 'prefix', 'localName',
+          'title', 'lang', 'dir', 'acceptCharset', 'action', 'autocomplete', 'enctype',
+          'encoding', 'method', 'name', 'noValidate', 'target', 'elements', 'length',
+          'submit', 'reset', 'requestSubmit', 'checkValidity', 'reportValidity', 'ordinaryKey'
+        ];
+        for (const [mode, form] of forms.entries()) {
+          const doc = form.ownerDocument;
+          for (const name of names) {
+            const label = mode + ': ' + name;
+            if (Object.hasOwn(form, name)) throw Error(label + ': native instance property');
+            let reads = 0;
+            const getter = () => { ++reads; return 'user-defined'; };
+            Object.defineProperty(form, name, {get: getter, configurable: true, enumerable: true});
+            const input = doc.createElement('input');
+            input.name = name;
+            form.appendChild(input);
+            if (!(name in form) || reads !== 0) throw Error(label + ': query invoked accessor');
+            const descriptor = Object.getOwnPropertyDescriptor(form, name);
+            if (descriptor.get !== getter || !descriptor.enumerable || reads !== 0)
+              throw Error(label + ': own descriptor');
+            if (form[name] !== 'user-defined' || reads !== 1) throw Error(label + ': own accessor lost');
+            if (!Reflect.deleteProperty(form, name) || reads !== 1) throw Error(label + ': own deletion');
+            if (form[name] !== input) throw Error(label + ': named control must override prototype');
+            if (Reflect.deleteProperty(form, name)) throw Error(label + ': named deletion');
+            input.remove();
+            if (Object.hasOwn(form, name)) throw Error(label + ': removed control still visible');
+
+            Object.defineProperty(form, name, {value: 'own-data', configurable: true, writable: true});
+            form.appendChild(input);
+            if (form[name] !== 'own-data' || Object.getOwnPropertyDescriptor(form, name).value !== 'own-data')
+              throw Error(label + ': own data lost');
+            if (!Reflect.deleteProperty(form, name) || form[name] !== input)
+              throw Error(label + ': data deletion must expose control');
+            input.remove();
+          }
+        }
+        return 'ok';
+      })()
+    "#).expect("real own properties must win regardless of their names or wrapper construction path");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn form_named_lookup_define_property_uses_supported_names_not_visibility() {
+    let mut vm = new_parsed_test_vm(
+        "https://form-lookup-define-property.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    let result = vm.eval(r#"
+      (() => {
+        for (const doc of [document, document.implementation.createHTMLDocument('forms')]) {
+          const form = doc.body.appendChild(doc.createElement('form'));
+          for (const name of ['submit', 'ordinaryKey']) {
+            Object.defineProperty(form, name, {value: 'own', configurable: true, writable: true});
+            const input = form.appendChild(doc.createElement('input'));
+            input.name = name;
+            if (Reflect.defineProperty(form, name, {value: 'replacement'}))
+              throw Error(name + ': hidden supported name must reject definition');
+            let threw = false;
+            try { Object.defineProperty(form, name, {value: 'replacement'}); }
+            catch (error) { threw = error instanceof TypeError; }
+            if (!threw || form[name] !== 'own') throw Error(name + ': definition failure changed own property');
+            if (!delete form[name] || form[name] !== input) throw Error(name + ': reveal named property');
+            if (Reflect.defineProperty(form, name, {value: 'replacement'}))
+              throw Error(name + ': visible supported name must reject definition');
+            input.removeAttribute('name');
+            if (Reflect.defineProperty(form, name, {value: 'replacement'}))
+              throw Error(name + ': past name must reject definition');
+            input.remove();
+            if (!Reflect.defineProperty(form, name, {value: 'replacement', configurable: true}))
+              throw Error(name + ': unsupported name must allow definition');
+            if (!delete form[name]) throw Error(name + ': ordinary deletion');
+          }
+        }
+        return 'ok';
+      })()
+    "#).expect("defineProperty must reject supported names even when an own property hides them");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn form_named_lookup_misses_do_not_enumerate_or_traverse_controls() {
     let mut vm = new_parsed_test_vm(
         "https://form-lookup-work.test/",

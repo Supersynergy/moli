@@ -2,7 +2,6 @@ use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
 use crate::native_bridge::bridge::wrapped_handle_value_for_receiver;
 use crate::native_bridge::element::{html_element_getter_receiver, html_element_setter_receiver};
-use crate::util::throw_type_error;
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
 
 pub(in crate::native_bridge) fn form_action_getter_function<'s>(
@@ -558,10 +557,11 @@ pub(in crate::native_bridge) fn form_named_getter<'s>(
     let Ok(key) = v8::Local::<v8::String>::try_from(key) else {
         return v8::Intercepted::kNo;
     };
+    if object_has_expando_named_property(scope, args.holder(), key.into()) {
+        return v8::Intercepted::kNo;
+    }
     let key = key.to_rust_string_lossy(scope);
-    if is_array_index_property_name(&key)
-        || object_has_expando_named_property(scope, args.holder(), &key)
-    {
+    if is_array_index_property_name(&key) {
         return v8::Intercepted::kNo;
     }
     let Some(context) = args.holder().get_creation_context(scope) else {
@@ -620,10 +620,11 @@ pub(in crate::native_bridge) fn form_named_descriptor<'s>(
     let Ok(key) = v8::Local::<v8::String>::try_from(key) else {
         return v8::Intercepted::kNo;
     };
+    if object_has_expando_named_property(scope, args.holder(), key.into()) {
+        return v8::Intercepted::kNo;
+    }
     let key = key.to_rust_string_lossy(scope);
-    if is_array_index_property_name(&key)
-        || object_has_expando_named_property(scope, args.holder(), &key)
-    {
+    if is_array_index_property_name(&key) {
         return v8::Intercepted::kNo;
     }
     let Some(context) = args.holder().get_creation_context(scope) else {
@@ -685,10 +686,11 @@ pub(in crate::native_bridge) fn form_named_deleter<'s>(
     let Ok(key) = v8::Local::<v8::String>::try_from(key) else {
         return v8::Intercepted::kNo;
     };
+    if object_has_expando_named_property(scope, args.holder(), key.into()) {
+        return v8::Intercepted::kNo;
+    }
     let key = key.to_rust_string_lossy(scope);
-    if is_array_index_property_name(&key)
-        || object_has_expando_named_property(scope, args.holder(), &key)
-    {
+    if is_array_index_property_name(&key) {
         return v8::Intercepted::kNo;
     }
     if !form_has_named_item_or_past_name(unsafe { &*runtime_ptr }, handle, &key) {
@@ -703,7 +705,7 @@ pub(in crate::native_bridge) fn form_named_definer<'s>(
     key: v8::Local<'_, v8::Name>,
     _desc: &v8::PropertyDescriptor,
     args: v8::PropertyCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Boolean>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.holder())
@@ -714,69 +716,28 @@ pub(in crate::native_bridge) fn form_named_definer<'s>(
         return v8::Intercepted::kNo;
     };
     let key = key.to_rust_string_lossy(scope);
-    if is_array_index_property_name(&key)
-        || object_has_expando_named_property(scope, args.holder(), &key)
-    {
+    if is_array_index_property_name(&key) {
         return v8::Intercepted::kNo;
     }
     if !form_has_named_item_or_past_name(unsafe { &*runtime_ptr }, handle, &key) {
         return v8::Intercepted::kNo;
     }
-    throw_type_error(scope, "Cannot redefine an HTMLFormElement named property.");
+    // LegacyOverrideBuiltIns rejects defining any supported name, even when
+    // a real own property makes that name invisible to getters and deleters.
+    // Let V8 distinguish Object.defineProperty (throws) from Reflect (false).
+    rv.set_bool(false);
     v8::Intercepted::kYes
 }
 
 fn object_has_expando_named_property(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-    key: &str,
+    key: v8::Local<'_, v8::Name>,
 ) -> bool {
-    if form_native_property_can_be_overridden(key) {
-        return false;
-    }
-    let Some(key) = v8_string(scope, key) else {
-        return false;
-    };
     // Enumerating own keys invokes the indexed interceptor, which resolves every
     // form control. A real-property check neither enumerates virtual properties
     // nor evaluates an own accessor getter.
-    object
-        .has_real_named_property(scope, key.into())
-        .unwrap_or(false)
-}
-
-fn form_native_property_can_be_overridden(key: &str) -> bool {
-    matches!(
-        key,
-        "addEventListener"
-            | "removeEventListener"
-            | "dispatchEvent"
-            | "nodeType"
-            | "nodeName"
-            | "ownerDocument"
-            | "namespaceURI"
-            | "prefix"
-            | "localName"
-            | "title"
-            | "lang"
-            | "dir"
-            | "acceptCharset"
-            | "action"
-            | "autocomplete"
-            | "enctype"
-            | "encoding"
-            | "method"
-            | "name"
-            | "noValidate"
-            | "target"
-            | "elements"
-            | "length"
-            | "submit"
-            | "reset"
-            | "requestSubmit"
-            | "checkValidity"
-            | "reportValidity"
-    )
+    object.has_real_named_property(scope, key).unwrap_or(false)
 }
 
 fn form_has_named_item_or_past_name(
@@ -961,10 +922,11 @@ pub(in crate::native_bridge) fn form_named_query<'s>(
     let Ok(key) = v8::Local::<v8::String>::try_from(key) else {
         return v8::Intercepted::kNo;
     };
+    if object_has_expando_named_property(scope, args.holder(), key.into()) {
+        return v8::Intercepted::kNo;
+    }
     let key = key.to_rust_string_lossy(scope);
-    if is_array_index_property_name(&key)
-        || object_has_expando_named_property(scope, args.holder(), &key)
-    {
+    if is_array_index_property_name(&key) {
         return v8::Intercepted::kNo;
     }
     if !form_has_named_item_or_past_name(unsafe { &*runtime_ptr }, handle, &key) {
