@@ -1,5 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_has_discarded_child_browsing_context, window_hidden_value,
+    window_host_ptr, window_receiver,
 };
 use super::*;
 
@@ -295,4 +296,22 @@ pub(in crate::context_bootstrap) fn window_self_getter<'s>(
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     set_receiver_window_alias(scope, &args, WINDOW_SELF_SLOT, rv);
+}
+
+pub(in crate::context_bootstrap) fn window_closed_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+    {
+        let closed = window_host_ptr(scope, receiver)
+            .is_none_or(|host_ptr| !unsafe { &*host_ptr }.lightweight_popup_is_open(popup_id));
+        rv.set_bool(closed);
+        return;
+    }
+    rv.set_bool(window_has_discarded_child_browsing_context(scope, receiver));
 }

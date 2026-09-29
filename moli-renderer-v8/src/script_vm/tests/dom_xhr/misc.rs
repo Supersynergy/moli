@@ -2069,3 +2069,62 @@ container.querySelector('a').click();
 
     assert_eq!(result, "true|true|true");
 }
+#[test]
+fn window_closed_reflects_top_popup_and_popup_child_liveness() {
+    let mut vm = new_storage_test_vm("https://window-closed.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const popup = open();
+  popup.document.body.appendChild(popup.document.createElement("iframe"));
+  const child = popup[0];
+  const descriptor = Object.getOwnPropertyDescriptor(window, "closed");
+  const before = [window.closed, popup.closed, child.closed];
+  popup.close();
+  return JSON.stringify({
+    descriptor: [
+      descriptor.get.name,
+      descriptor.get.length,
+      typeof descriptor.set,
+      descriptor.enumerable,
+      descriptor.configurable
+    ],
+    before,
+    after: [
+      popup.closed,
+      child.closed,
+      descriptor.get.call(popup),
+      descriptor.get.call(child)
+    ]
+  });
+})()
+"#,
+        )
+        .expect("Window.closed liveness probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptor":["get closed",0,"undefined",true,true],"before":[false,false,false],"after":[true,false,true,false]}"#
+    );
+}
+
+#[test]
+fn window_closed_reflects_removed_iframe_state() {
+    let mut vm = new_parsed_test_vm("https://child-window-closed.test/", "<!doctype html><body>");
+    let result = vm
+        .eval(
+            r#"(() => {
+      const frame = document.body.appendChild(document.createElement('iframe'));
+      const child = frame.contentWindow;
+      const getter = Object.getOwnPropertyDescriptor(window, 'closed').get;
+      const states = [child.closed, getter.call(child)];
+      frame.remove();
+      states.push(child.closed, getter.call(child));
+      return JSON.stringify(states);
+    })()"#,
+        )
+        .expect("closed should reflect iframe removal through the native getter");
+    assert_eq!(result, "[false,false,true,true]");
+}
