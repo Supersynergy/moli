@@ -110,6 +110,7 @@ from moli_benchmark.wpt_cross.scheduler import (
     build_run_schedule,
 )
 from moli_benchmark.wpt_cross.server import (
+    _workers_url_encoding_response,
     _fetch_status_response,
     BENCH_REPORT_BRIDGE,
     BENCH_TESTDRIVER_VENDOR_BRIDGE,
