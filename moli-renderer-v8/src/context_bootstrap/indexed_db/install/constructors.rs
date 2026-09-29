@@ -11,6 +11,11 @@ pub(in crate::context_bootstrap) fn install_indexed_db_template_bindings<'s>(
     interface_name: &str,
 ) {
     let prototype = template.prototype_template(scope);
+    super::super::event_target::install_version_change_event_template_bindings(
+        scope,
+        prototype,
+        interface_name,
+    );
     install_dom_string_list_template_bindings(scope, prototype, interface_name);
     factory_request::install_factory_and_request_template_bindings(
         scope,
