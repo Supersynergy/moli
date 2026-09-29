@@ -5,6 +5,7 @@ use crate::native::{NativeDom, NativeNodeId, Node};
 
 #[derive(Debug, Clone)]
 pub(super) struct DocumentBaseUrlState {
+    inherited_base_url: Option<Url>,
     fallback_base_url: Url,
     base_url_override: Option<Url>,
     base_element_url: Option<Url>,
@@ -15,6 +16,7 @@ pub(super) struct DocumentBaseUrlState {
 impl DocumentBaseUrlState {
     pub(super) fn new(document_url: &Url) -> Self {
         Self {
+            inherited_base_url: None,
             fallback_base_url: document_url.clone(),
             base_url_override: None,
             base_element_url: None,
@@ -40,11 +42,33 @@ impl DocumentBaseUrlState {
     }
 
     pub(super) fn set_document_url(&mut self, url: &Url) {
-        self.fallback_base_url = url.clone();
+        // The about base URL belongs to the Document, not its history entry.
+        // Fragment and History API updates must retain this inherited value.
+        // Documents without one still use their current URL as the fallback.
+        // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#fallback-base-url
+        let uses_inherited_base = url.scheme() == "about"
+            && url.host().is_none()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && (url.path() == "blank" || (url.path() == "srcdoc" && url.query().is_none()));
+        self.fallback_base_url = if uses_inherited_base {
+            self.inherited_base_url.as_ref().unwrap_or(url).clone()
+        } else {
+            url.clone()
+        };
     }
 
-    pub(super) fn set_fallback_base_url(&mut self, url: Url) {
-        self.fallback_base_url = url;
+    pub(super) fn set_fallback_base_url(
+        &mut self,
+        document_url: &Url,
+        inherited_base_url: Option<Url>,
+    ) -> bool {
+        if self.inherited_base_url == inherited_base_url {
+            return false;
+        }
+        self.inherited_base_url = inherited_base_url;
+        self.set_document_url(document_url);
+        true
     }
 
     pub(super) fn set_base_url_override(&mut self, url: Option<Url>) {

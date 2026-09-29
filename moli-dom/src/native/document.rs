@@ -158,8 +158,9 @@ impl Document {
         self.base_url_state.set_base_url_override(url);
     }
 
-    pub fn set_fallback_base_url(&mut self, fallback_base_url: Url) {
-        self.base_url_state.set_fallback_base_url(fallback_base_url);
+    pub fn set_fallback_base_url(&mut self, fallback_base_url: Option<Url>) -> bool {
+        self.base_url_state
+            .set_fallback_base_url(&self.url, fallback_base_url)
     }
 
     pub fn set_content_type(&mut self, content_type: impl Into<String>) {

@@ -2733,3 +2733,49 @@ fn iframe_src_navigation_uses_owner_document_encoding_for_query() {
         "iframe navigation must use the same owner-document encoding as its reflected src: {attribute_bootstrap:?}"
     );
 }
+
+#[test]
+fn about_document_fragment_updates_preserve_relative_element_urls() {
+    for kind in ["srcdoc", "popup"] {
+        let mut vm = new_storage_test_vm("https://inherited-base.test/path/page.html");
+        vm.exec(
+            &format!(
+                r#"
+let child;
+if ('{kind}' === 'popup') {{
+  child = open();
+}} else {{
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '<p>child</p>';
+  (document.body || document.documentElement || document).append(frame);
+  child = frame.contentWindow;
+}}
+"#
+            ),
+            None,
+        )
+        .expect("about Document should be created");
+        vm.drain_pending_child_frame_work_for_test();
+        assert_eq!(
+            vm.eval(
+                r#"
+(() => {
+  const saved = child.document;
+  const href = child.location.href + '#updated';
+  child.location.href = href;
+  const anchor = saved.createElement('a'); anchor.href = 'next.html';
+  const image = saved.createElement('img'); image.src = 'next.html';
+  const form = saved.createElement('form'); form.action = 'next.html';
+  const expected = 'https://inherited-base.test/path/next.html';
+  return [saved === child.document, saved.URL === href,
+    saved.baseURI === 'https://inherited-base.test/path/page.html',
+    anchor.href === expected, image.src === expected, form.action === expected].join('|');
+})()
+"#
+            )
+            .expect("relative URL resolution after fragment update should evaluate"),
+            "true|true|true|true|true|true",
+            "{kind}"
+        );
+    }
+}
