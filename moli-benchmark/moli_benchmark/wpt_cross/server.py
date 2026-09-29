@@ -193,6 +193,7 @@ FETCH_PREFLIGHT_RESOURCE_PATHS = {
     "/fetch/api/resources/clean-stash.py",
 }
 
+FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 FORM_SUBMISSION_PATH = (
     "/html/semantics/forms/form-submission-0/resources/form-submission.py"
 )
@@ -1959,6 +1960,10 @@ def _workers_url_encoding_response(query: str) -> bytes:
     return b"PASS" if value == "å" else b"FAIL"
 
 
+def _form_echo_response(body: bytes) -> bytes:
+    return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
+
+
 def _make_handler(
     wpt_root: Path,
     results_store: "ResultsStore",
@@ -2263,6 +2268,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if unquote(urlsplit(self.path).path) == FORM_ECHO_PATH:
+                raw = self._read_content_length_request_body()
+                if raw is not None:
+                    self._send_bytes("text/plain", _form_echo_response(raw), emit_body=True)
+                return
             if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
                 self._serve_fetch_inspect_headers(
                     urlsplit(self.path).query, emit_body=self.command != "HEAD",
@@ -2687,6 +2697,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if unquote(urlsplit(self.path).path) == FORM_ECHO_PATH:
+                self._send_bytes("text/plain", _form_echo_response(b""), emit_body=emit_body)
+                return
             if unquote(urlsplit(self.path).path) == "/workers/semantics/encodings/003-1.py":
                 self._send_bytes(
                     "text/plain; charset=utf-8",
