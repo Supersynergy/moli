@@ -829,6 +829,9 @@ fn detached_insert_node_with_current_queue_policy<'s>(
             "The operation would yield an invalid node tree.",
         ));
     }
+    if insert_nodes.is_empty() {
+        return Ok(child);
+    }
 
     for node in &insert_nodes {
         if !parent_has_native_handle {
@@ -843,26 +846,29 @@ fn detached_insert_node_with_current_queue_policy<'s>(
             copy_detached_element_bridge_members(scope, *node);
             remove_detached_element_instance_selector_matching_methods(scope, *node);
         }
-        if parent_has_native_handle {
-            let inserted = if append_to_current_reaction_queue {
-                sync_detached_native_insert_appending_to_current_reaction_queue(
-                    scope,
-                    parent,
-                    *node,
-                    reference_child,
-                )
-            } else {
-                sync_detached_native_insert(scope, parent, *node, reference_child)
-            };
-            if !inserted {
-                return Err((
-                    "HierarchyRequestError",
-                    3,
-                    "The operation would yield an invalid node tree.",
-                ));
-            }
-        } else {
+        if !parent_has_native_handle {
             detached_set_parent(scope, *node, parent);
+        }
+    }
+    if parent_has_native_handle {
+        // Pass the fragment itself so the native mutation pipeline removes
+        // and inserts its children as a batch, with one record at each end.
+        let inserted = if append_to_current_reaction_queue {
+            sync_detached_native_insert_appending_to_current_reaction_queue(
+                scope,
+                parent,
+                child,
+                reference_child,
+            )
+        } else {
+            sync_detached_native_insert(scope, parent, child, reference_child)
+        };
+        if !inserted {
+            return Err((
+                "HierarchyRequestError",
+                3,
+                "The operation would yield an invalid node tree.",
+            ));
         }
     }
     for (offset, node) in insert_nodes.iter().enumerate() {
