@@ -231,7 +231,7 @@ class FetchPreflightFixtureTests(unittest.TestCase):
         }
         utils = self.root / "fetch/api/resources/utils.js"
         utils.parent.mkdir(parents=True)
-        utils.write_text('var RESOURCES_DIR = "../resources/";')
+        utils.write_text('var RESOURCES_DIR = "../resources/"; fetch(RESOURCES_DIR + "inspect-headers.py");')
         for name, source in cases.items():
             path = self.root / f"fetch/api/cors/{name}.any.js"
             path.parent.mkdir(parents=True, exist_ok=True)
