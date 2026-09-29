@@ -353,6 +353,8 @@ interfaces! {
     RTCDataChannel: EventTarget;
     RTCIceCandidate;
     RTCPeerConnection: EventTarget;
+    RTCPeerConnectionIceEvent: Event;
+    RTCDataChannelEvent: Event;
     RTCRtpReceiver;
     RTCSessionDescription;
     RadioNodeList: NodeList;
