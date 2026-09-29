@@ -569,11 +569,11 @@ pub(in crate::native_bridge) fn form_named_getter<'s>(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let runtime = unsafe { &mut *runtime_ptr };
-    let matches = form_named_item_matches(runtime, handle, &key);
+    let (query_kind, matches) = form_named_item_matches(runtime, handle, &key);
     if matches.len() > 1 {
         let descriptor = LiveCollectionDescriptor {
             collection_kind: CollectionKind::RadioNodeList,
-            query_kind: LiveCollectionQueryKind::FormControlsByName,
+            query_kind,
             root: handle,
             query: Some(key),
             include_root: false,
@@ -632,11 +632,11 @@ pub(in crate::native_bridge) fn form_named_descriptor<'s>(
     };
     let scope = &mut v8::ContextScope::new(scope, context);
     let runtime = unsafe { &mut *runtime_ptr };
-    let matches = form_named_item_matches(runtime, handle, &key);
+    let (query_kind, matches) = form_named_item_matches(runtime, handle, &key);
     let value = if matches.len() > 1 {
         let descriptor = LiveCollectionDescriptor {
             collection_kind: CollectionKind::RadioNodeList,
-            query_kind: LiveCollectionQueryKind::FormControlsByName,
+            query_kind,
             root: handle,
             query: Some(key),
             include_root: false,
@@ -745,7 +745,9 @@ fn form_has_named_item_or_past_name(
     form_handle: DomHandle,
     key: &str,
 ) -> bool {
-    !form_named_item_matches(runtime, form_handle, key).is_empty()
+    !form_named_item_matches(runtime, form_handle, key)
+        .1
+        .is_empty()
         || runtime.form_past_named_item(form_handle, key).is_some()
 }
 
@@ -942,14 +944,30 @@ fn form_named_item_matches(
     runtime: &JsContextHost,
     form_handle: DomHandle,
     key: &str,
-) -> Vec<DomHandle> {
+) -> (LiveCollectionQueryKind, Vec<DomHandle>) {
     // Only a miss is conclusive. A hit still needs the existing form-owner,
     // custom-element, shadow-tree and image-fallback rules below. The caller
     // separately checks the past-names map even when this returns no matches.
     if !runtime.dom_host().has_element_with_named_item_key(key) {
-        return Vec::new();
+        return (LiveCollectionQueryKind::FormControlsByName, Vec::new());
     }
-    let controls = form_control_elements(runtime, form_handle)
+    let controls = form_named_control_matches(runtime, form_handle, key);
+    if controls.is_empty() {
+        (
+            LiveCollectionQueryKind::FormImagesByName,
+            form_named_image_matches(runtime, form_handle, key),
+        )
+    } else {
+        (LiveCollectionQueryKind::FormControlsByName, controls)
+    }
+}
+
+pub(in crate::native_bridge) fn form_named_control_matches(
+    runtime: &JsContextHost,
+    form_handle: DomHandle,
+    key: &str,
+) -> Vec<DomHandle> {
+    form_control_elements(runtime, form_handle)
         .into_iter()
         .filter(|handle| {
             runtime
@@ -958,15 +976,10 @@ fn form_named_item_matches(
                 .and_then(Node::as_element)
                 .is_some_and(|element| element.matches_named_item_key(key))
         })
-        .collect::<Vec<_>>();
-    if controls.is_empty() {
-        form_named_image_matches(runtime, form_handle, key)
-    } else {
-        controls
-    }
+        .collect()
 }
 
-fn form_named_image_matches(
+pub(in crate::native_bridge) fn form_named_image_matches(
     runtime: &JsContextHost,
     form_handle: DomHandle,
     key: &str,

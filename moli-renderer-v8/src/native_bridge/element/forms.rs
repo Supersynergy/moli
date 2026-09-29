@@ -126,9 +126,10 @@ pub(in crate::native_bridge) use self::form_element::{
     form_indexed_deleter, form_indexed_descriptor, form_indexed_enumerator, form_indexed_getter,
     form_indexed_query, form_indexed_setter, form_length_getter_function,
     form_method_getter_function, form_method_setter_function, form_name_getter_function,
-    form_name_setter_function, form_named_definer, form_named_deleter, form_named_descriptor,
-    form_named_getter, form_named_query, form_no_validate_getter_function,
-    form_no_validate_setter_function, form_target_getter_function, form_target_setter_function,
+    form_name_setter_function, form_named_control_matches, form_named_definer, form_named_deleter,
+    form_named_descriptor, form_named_getter, form_named_image_matches, form_named_query,
+    form_no_validate_getter_function, form_no_validate_setter_function,
+    form_target_getter_function, form_target_setter_function,
 };
 pub(crate) use self::input::{cache_input_files_from_selected_files, input_files_for_object};
 pub(in crate::native_bridge) use self::input::{

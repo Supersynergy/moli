@@ -102,6 +102,73 @@ fn form_named_lookup_define_property_uses_supported_names_not_visibility() {
 }
 
 #[test]
+fn form_named_lookup_live_lists_preserve_their_control_or_image_source() {
+    let mut vm = new_parsed_test_vm(
+        "https://form-lookup-image-lists.test/",
+        "<!doctype html><html><body><form id='parsed'></form></body></html>",
+    );
+    let result = vm.eval(r#"
+      (() => {
+        const detachedDocument = document.implementation.createHTMLDocument('forms');
+        const forms = [
+          document.getElementById('parsed'),
+          document.createElement('form'),
+          detachedDocument.body.appendChild(detachedDocument.createElement('form'))
+        ];
+        for (const [mode, form] of forms.entries()) {
+          const doc = form.ownerDocument;
+          const first = form.appendChild(doc.createElement('img'));
+          first.name = 'photos';
+          first.id = 'photos';
+          const second = form.appendChild(doc.createElement('img'));
+          second.id = 'photos';
+          const nested = form.appendChild(doc.createElement('form'));
+          nested.appendChild(doc.createElement('img')).name = 'photos';
+          const imageInput = form.appendChild(doc.createElement('input'));
+          imageInput.type = 'image';
+          imageInput.name = 'photos';
+          const images = form.photos;
+          const descriptor = Object.getOwnPropertyDescriptor(form, 'photos');
+          const descriptorImages = descriptor.value;
+          if (!(images instanceof RadioNodeList) || images.length !== 2 || images[0] !== first || images[1] !== second)
+            throw Error(mode + ': image list membership');
+          if (descriptor.writable || descriptor.enumerable || !descriptor.configurable || descriptorImages.length !== 2)
+            throw Error(mode + ': image descriptor');
+          if (form.elements.namedItem('photos') !== null) throw Error(mode + ': elements must exclude images');
+          const control = form.appendChild(doc.createElement('input'));
+          control.name = 'photos';
+          if (form.photos !== control || images.length !== 2 || images[0] !== first)
+            throw Error(mode + ': existing image list changed source');
+          const otherControl = form.appendChild(doc.createElement('input'));
+          otherControl.name = 'photos';
+          const controls = form.photos;
+          if (controls.length !== 2 || controls[0] !== control || controls[1] !== otherControl)
+            throw Error(mode + ': control list membership');
+          control.remove();
+          otherControl.remove();
+          if (controls.length !== 0 || form.photos.length !== 2) throw Error(mode + ': control list fell back to images');
+          form.insertBefore(second, first);
+          if (images[0] !== second || descriptorImages[0] !== second) throw Error(mode + ': image tree order');
+          second.id = 'renamed';
+          if (images.length !== 1 || images[0] !== first || descriptorImages.length !== 1 || form.photos !== first)
+            throw Error(mode + ': live image rename');
+          first.remove();
+          if (images.length !== 0 || descriptorImages.length !== 0) throw Error(mode + ': live image removal');
+          second.name = 'photos';
+          if (images.length !== 1 || images[0] !== second) throw Error(mode + ': live image insertion');
+          if (mode === 2) {
+            document.body.appendChild(document.adoptNode(form));
+            if (images.length !== 1 || images[0] !== second || form.photos !== second)
+              throw Error('adoption changed image list identity');
+          }
+        }
+        return 'ok';
+      })()
+    "#).expect("live RadioNodeLists must retain the source selected by the initial named lookup");
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn form_named_lookup_misses_do_not_enumerate_or_traverse_controls() {
     let mut vm = new_parsed_test_vm(
         "https://form-lookup-work.test/",
