@@ -320,6 +320,7 @@ contenteditable/select-text-change-crash.html
 cookies/cookie-enabled-noncookie-frame.html
 cookies/meta-blocked.html
 cookies/navigated-away.html
+cors/response-headers.htm
 credential-management/require_securecontext.html
 css/compositing/inheritance.html
 css/compositing/parsing/background-blend-mode-computed-multiple.html
@@ -1659,6 +1660,7 @@ css/css-grid/abspos/positioned-grid-descendants-006.html
 css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
+css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
@@ -1790,6 +1792,7 @@ css/css-grid/alignment/grid-item-aspect-ratio-justify-self-002.html
 css/css-grid/alignment/grid-item-auto-margins-001.html
 css/css-grid/alignment/grid-item-auto-margins-002.html
 css/css-grid/alignment/grid-item-auto-margins-alignment.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-002.html
 css/css-grid/alignment/grid-self-alignment-baseline-with-grid-001.html
@@ -5824,7 +5827,6 @@ html/browsers/windows/browsing-context-window.html
 html/browsers/windows/embedded-opener-a-form.html
 html/browsers/windows/nested-browsing-contexts/window-parent.html
 html/browsers/windows/nested-browsing-contexts/window-top.html
-html/browsers/windows/noreferrer-null-opener.html
 html/browsers/windows/targeting-cross-origin-nested-browsing-contexts.html
 html/browsers/windows/targeting-with-embedded-null-in-target.html
 html/cross-origin-embedder-policy/no-secure-context.html
@@ -6049,6 +6051,8 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme-single-value-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html
@@ -6586,6 +6590,7 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
+html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/permission-element/geolocation-element/iframe-use-after-free-crash.html
 html/semantics/popovers/chrome-392042073-crash.html
@@ -6755,6 +6760,7 @@ html/semantics/scripting-1/the-script-element/execution-timing/121.html
 html/semantics/scripting-1/the-script-element/execution-timing/122.html
 html/semantics/scripting-1/the-script-element/execution-timing/123.html
 html/semantics/scripting-1/the-script-element/execution-timing/124.html
+html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/126.html
 html/semantics/scripting-1/the-script-element/execution-timing/127.html
 html/semantics/scripting-1/the-script-element/execution-timing/129.html
@@ -6790,10 +6796,13 @@ html/semantics/scripting-1/the-script-element/import-attributes/empty-attributes
 html/semantics/scripting-1/the-script-element/import-attributes/invalid-import-errors-order.html
 html/semantics/scripting-1/the-script-element/import-attributes/invalid-type-attribute-error.html
 html/semantics/scripting-1/the-script-element/import-attributes/unsupported-attribute.html
+html/semantics/scripting-1/the-script-element/json-module/charset-2.html
+html/semantics/scripting-1/the-script-element/json-module/charset.html
 html/semantics/scripting-1/the-script-element/json-module/integrity.html
 html/semantics/scripting-1/the-script-element/json-module/module.html
 html/semantics/scripting-1/the-script-element/json-module/parse-error.html
 html/semantics/scripting-1/the-script-element/json-module/script-element-json-src.html
+html/semantics/scripting-1/the-script-element/json-module/valid-content-type.html
 html/semantics/scripting-1/the-script-element/load-error-events-1.html
 html/semantics/scripting-1/the-script-element/microtasks/evaluation-order-3.html
 html/semantics/scripting-1/the-script-element/microtasks/evaluation-order-4.html
@@ -7313,7 +7322,6 @@ html/webappapis/dynamic-markup-insertion/document-writeln/document.writeln-02.ht
 html/webappapis/dynamic-markup-insertion/document-writeln/document.writeln-03.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-encoding.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
@@ -7889,7 +7897,6 @@ navigation-timing/nav2-test-navigation-type-navigate.html
 navigation-timing/nav2-test-redirect-none.html
 navigation-timing/nav2-test-unique-nav-instances.html
 navigation-timing/po-navigation.html
-navigation-timing/prefetch-transfer-size-executor.html
 navigation-timing/prefetch-transfer-size-iframe.html
 navigation-timing/test-document-open.html
 navigation-timing/test-document-readiness-exist.html
@@ -9182,7 +9189,6 @@ workers/SharedWorker-constructor.html
 workers/SharedWorker-detach-frame-in-error-event.html
 workers/SharedWorker-exception-propagation.html
 workers/SharedWorker-exception.html
-workers/SharedWorker-extendedLifetime.html
 workers/SharedWorker-script-error.html
 workers/SharedWorker-simple.html
 workers/SharedWorkerPerformanceNow.html
@@ -9457,6 +9463,7 @@ xhr/send-entity-body-none.htm
 xhr/send-no-response-event-loadend.htm
 xhr/send-no-response-event-loadstart.htm
 xhr/send-non-same-origin.htm
+xhr/send-redirect-infinite-sync.htm
 xhr/send-redirect-infinite.htm
 xhr/send-redirect-to-non-cors.htm
 xhr/send-response-upload-event-loadend.htm
@@ -9514,7 +9521,6 @@ xhr/xmlhttprequest-timeout-worker-overrides.html?timeout enabled after initially
 xhr/xmlhttprequest-timeout-worker-overrides.html?timeout overrides load after a delay
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expired value before load fires
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expiring value after load fires
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xhr/xmlhttprequest-timeout-worker-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?no time out scheduled, load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?timeout hit before load
