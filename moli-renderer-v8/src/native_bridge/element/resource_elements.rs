@@ -2190,6 +2190,20 @@ pub(super) struct HtmlLinkElementUrlPrototypeDeclaration {
         data = DomStringReflection::LinkIntegrity
     )]
     integrity: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::LinkRev
+    )]
+    rev: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::LinkType
+    )]
+    r#type: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -2423,6 +2437,13 @@ pub(super) struct HtmlMetaElementPrototypeDeclaration {
         setter = meta_http_equiv_setter_function
     )]
     http_equiv: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::MetaScheme
+    )]
+    scheme: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

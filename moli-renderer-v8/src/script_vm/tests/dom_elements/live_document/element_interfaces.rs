@@ -727,3 +727,44 @@ fn legacy_boolean_accessors_live_on_owner_prototypes() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn link_and_meta_legacy_metadata_reflect_on_native_owner_prototypes() {
+    let mut vm = new_parsed_test_vm(
+        "https://metadata-reflection.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let result = vm.eval(r#"
+(() => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  for (const owner of [document, document.implementation.createHTMLDocument('')]) {
+    for (const [tag, property, prototype] of [
+      ['link', 'rev', HTMLLinkElement.prototype],
+      ['link', 'type', HTMLLinkElement.prototype],
+      ['meta', 'scheme', HTMLMetaElement.prototype]
+    ]) {
+      const element = owner.createElement(tag);
+      owner.head.appendChild(element);
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
+      assert(descriptor && descriptor.enumerable && descriptor.configurable, `${tag}.${property} descriptor`);
+      assert(typeof descriptor.get === 'function' && typeof descriptor.set === 'function', 'accessors');
+      assert(element[property] === '', 'missing value');
+      element[property] = 'MiXeD\u00E9\u{1F642}';
+      assert(element.getAttribute(property) === 'MiXeD\u00E9\u{1F642}', 'DOMString reflection');
+      element.setAttribute(property, 'updated');
+      assert(element[property] === 'updated', 'attribute mutation');
+      element.removeAttribute(property);
+      assert(element[property] === '', 'attribute removal');
+      let converted = false;
+      try {
+        descriptor.set.call({}, { toString() { converted = true; return 'forged'; } });
+        throw new Error('accepted forged receiver');
+      } catch (error) { assert(error instanceof TypeError, 'receiver brand'); }
+      assert(!converted, 'receiver validation precedes conversion');
+    }
+  }
+  return 'ok';
+})()
+"#).expect("link and meta metadata reflection probe should evaluate");
+    assert_eq!(result, "ok");
+}

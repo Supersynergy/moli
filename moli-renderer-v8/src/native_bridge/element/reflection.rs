@@ -212,11 +212,14 @@ pub(super) enum DomStringReflection {
     LinkIntegrity,
     LinkMedia,
     LinkReferrerPolicy,
+    LinkRev,
+    LinkType,
     LiType,
     MarqueeBgColor,
     MarqueeHeight,
     MarqueeWidth,
     MetaMedia,
+    MetaScheme,
     ModDateTime,
     ObjectArchive,
     ObjectCode,
@@ -561,6 +564,24 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             ),
         ),
         (
+            DomStringReflection::LinkRev,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "rev",
+                "rev",
+            ),
+        ),
+        (
+            DomStringReflection::LinkType,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "type",
+                "type",
+            ),
+        ),
+        (
             DomStringReflection::LiType,
             DomStringReflectionDescriptor::new("HTMLLIElement", "type", "type"),
         ),
@@ -579,6 +600,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::MetaMedia,
             DomStringReflectionDescriptor::new("HTMLMetaElement", "media", "media"),
+        ),
+        (
+            DomStringReflection::MetaScheme,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLMetaElement",
+                "meta",
+                "scheme",
+                "scheme",
+            ),
         ),
         (
             DomStringReflection::ModDateTime,
