@@ -98,6 +98,14 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
 }
+DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
+
+REMOTE_CONTEXT_EXECUTOR_PATH = (
+    "/html/browsers/browsing-the-web/remote-context-helper/resources/executor-window.py"
+)
+
+REMOTE_CONTEXT_RESOURCE_PATHS = {DISPATCHER_PATH, REMOTE_CONTEXT_EXECUTOR_PATH}
+
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
@@ -1682,6 +1690,19 @@ class FetchStash:
         with self._lock:
             return self._values.pop(parsed_key, None)
 
+    def exchange_queue(self, key: str, value: bytes | None = None, *, path: str) -> bytes | None:
+        """Atomically append a message or take the oldest message in a stash queue."""
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            queue = self._values.pop(parsed_key, None) or []
+            if value is not None:
+                queue.append(value)
+                result = None
+            else:
+                result = queue.pop(0) if queue else None
+            self._values[parsed_key] = queue
+            return result
+
 
 def _directory_listing_body(directory: Path, path: str) -> bytes:
     items = [] if path == "/" else ['<li><a href="../">..</a></li>']
@@ -1707,6 +1728,151 @@ def _make_handler(
     range_stash = FetchStash()
 
     class WptHandler(BaseHTTPRequestHandler):
+        def _serve_remote_context_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            if path not in REMOTE_CONTEXT_RESOURCE_PATHS:
+                return False
+            # These handlers only read the upload for dispatcher POSTs that
+            # do not request show-headers. Do not wait for any other upload.
+            self.close_connection = True
+            request_headers: dict[str, list[str]] = {}
+            for name, value in self.headers.raw_items():
+                request_headers.setdefault(name.lower(), []).append(value)
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            try:
+                if path == DISPATCHER_PATH:
+                    origin = ", ".join(request_headers.get("origin", [])) or "*"
+                    headers = [
+                        ("Access-Control-Allow-Credentials", "true"),
+                        ("Access-Control-Allow-Methods", "OPTIONS, GET, POST"),
+                        ("Access-Control-Allow-Headers", "Content-Type"),
+                        ("Access-Control-Allow-Origin", origin),
+                        ("Cache-Control", "max-age=31536000" if "cacheable" in params
+                         else "no-cache, no-store, must-revalidate"),
+                    ]
+                    if self.command == "OPTIONS":
+                        body = b""
+                    else:
+                        # Upstream takes the queue (and validates the UUID)
+                        # before reading request.body, so bad keys fail promptly.
+                        key = str(uuid.UUID(params["uuid"][0]))
+                        if "show-headers" in params:
+                            message = json.dumps({
+                                name: ", ".join(values) for name, values in request_headers.items()
+                            }).encode("utf-8")
+                            fetch_stash.exchange_queue(key, message, path="/common/dispatcher")
+                            body = b""
+                        elif self.command == "POST":
+                            message = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                            if message is None:
+                                return True
+                            fetch_stash.exchange_queue(key, message, path="/common/dispatcher")
+                            body = b"done"
+                        else:
+                            message = fetch_stash.exchange_queue(key, path="/common/dispatcher")
+                            body = b"not ready" if message is None else message
+                    status = 200
+                else:
+                    # Request.GET keeps blank values; urllib.parse.parse_qs in
+                    # executor-window.py separately drops them and decodes UTF-8.
+                    status = int(params["status"][0]) if "status" in params else 200
+                    query = parse_qs(parsed.query)
+                    executor_uuid = query["uuid"][0]
+                    start_on = query.get("startOn")
+                    start_on_js = f"'{start_on[0]}'" if start_on else "null"
+                    scripts = "\n".join(
+                        f"<script src='{html.escape(script)}'></script>"
+                        for script in query.get("script", [])
+                    )
+                    initialize_headers = ""
+                    for name, values in request_headers.items():
+                        js_name = json.dumps(name.encode("latin-1").decode("utf-8"))
+                        for value in values:
+                            js_value = json.dumps(value.encode("latin-1").decode("utf-8"))
+                            initialize_headers += f"window.__requestHeaders.append({js_name}, {js_value});\n"
+                    request_url = self.path
+                    if not request_url.startswith("http://"):
+                        authority = self.headers.get("Host")
+                        if authority is None:
+                            authority = _url_host_literal(str(self.server.server_address[0]))
+                        if urlsplit("//" + authority).port is None:
+                            authority += ":" + str(self.server.server_address[1])
+                        request_url = f"http://{authority}{self.path}"
+                    body = f"""
+<!DOCTYPE HTML>
+<base href="{html.escape(request_url)}">
+<script src="/common/dispatcher/dispatcher.js"></script>
+<script src="./executor-common.js"></script>
+<script src="./executor-window.js"></script>
+
+{scripts}
+<body>
+<script>
+window.__requestHeaders = new Headers();
+{initialize_headers}
+requestExecutor("{executor_uuid}", {start_on_js});
+</script>
+""".encode("utf-8")
+                    headers = [("Content-Type", "text/html")]
+            except (KeyError, ValueError, TypeError, AttributeError):
+                self.send_error(500)
+                return True
+            self._send_python_handler_response(
+                path, parsed.query, body, headers=headers, status_code=status,
+            )
+            return True
+
+        def _send_python_handler_response(
+            self, path: str, query: str, body: bytes | None,
+            *, headers: list[tuple[str, str]] | None = None,
+            status_code: int = 200,
+        ) -> None:
+            # FunctionHandler only applies pipes when main() returns a value.
+            # In particular, an empty stash (None) differs from stored b"".
+            headers = list(headers or [])
+            status, delay, auto_content_length = status_code, 0.0, body is not None
+            try:
+                for name, args in parse_pipe_commands(query) if body is not None else ():
+                    if name == "header":
+                        header_name, value = args[:2]
+                        value = value.replace("\r", " ").replace("\n", " ")
+                        if _valid_static_response_header(header_name, value):
+                            headers = _apply_header_operations(headers, [(
+                                header_name, value,
+                                len(args) == 3 and args[2].lower() in {"true", "1"},
+                            )])
+                    elif name == "status":
+                        status = int(args[0])
+                    elif name == "sub":
+                        body = self._substitute_response_template(
+                            body, path, query,
+                            escape_type=args[0] if args else "html",
+                        )
+                    elif name == "trickle":
+                        auto_content_length = False
+                        if not any(_headers_include(headers, name)
+                                   for name in ("Cache-Control", "Pragma", "Expires")):
+                            headers.extend([
+                                ("Cache-Control", "no-cache, no-store, must-revalidate"),
+                                ("Pragma", "no-cache"),
+                                ("Expires", "0"),
+                            ])
+                        match = _TRICKLE_DELAY_RE.fullmatch(args[0])
+                        if match is not None:
+                            delay = max(delay, float(match.group(1)))
+            except WptPipeError:
+                self.send_error(500)
+                return
+            if delay:
+                time.sleep(min(delay, _MAX_TRICKLE_DELAY_SECONDS))
+            self._send_bytes(
+                None, body if body is not None else b"", emit_body=self.command != "HEAD",
+                extra_headers=[*headers, ("Connection", "close")],
+                status_code=status, cache_control=None,
+                auto_content_length=auto_content_length,
+            )
+
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_websocket()
@@ -1717,6 +1883,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_remote_context_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1753,6 +1921,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_remote_context_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1810,6 +1980,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_remote_context_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1845,6 +2017,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_remote_context_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2060,6 +2234,8 @@ def _make_handler(
             return True
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_remote_context_resource():
+                return
             try:
                 self._serve_response(emit_body=emit_body)
             except WptPipeError:
@@ -2604,6 +2780,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in REMOTE_CONTEXT_RESOURCE_PATHS:
+                return self._serve_remote_context_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
@@ -2618,8 +2796,8 @@ def _make_handler(
                 return self._serve_fetch_resource_method
             raise AttributeError(name)
 
-        def _read_content_length_request_body(self) -> bytes | None:
-            if self.headers.get("Transfer-Encoding") is not None:
+        def _read_content_length_request_body(self, *, ignore_transfer_encoding: bool = False) -> bytes | None:
+            if not ignore_transfer_encoding and self.headers.get("Transfer-Encoding") is not None:
                 self._reject_request_body(400)
                 return None
             length_str = self.headers.get("Content-Length")
