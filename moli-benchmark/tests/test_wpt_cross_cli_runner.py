@@ -192,7 +192,8 @@ class WptCrossCliRunnerTests(WptCrossTestCase):
                 return None
 
         class FakeServer:
-            def __init__(self, wpt_root: Path) -> None:
+            def __init__(self, wpt_root: Path, *, primary_hostname: str) -> None:
+                assert primary_hostname == "web-platform.localhost"
                 self.wpt_root = Path(wpt_root)
                 self.results = FakeResults()
                 self.external_host = None
