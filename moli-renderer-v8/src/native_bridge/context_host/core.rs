@@ -232,7 +232,7 @@ impl JsContextHost {
             parser_defined_autonomous_custom_elements: VecDeque::new(),
             parser_custom_element_handoff_replacements: HashMap::new(),
             scoped_custom_element_registry_wrappers: HashMap::new(),
-            custom_element_registry_associations: IndexMap::new(),
+            custom_element_registry_associations: LinkedHashMap::new(),
             next_scoped_custom_elements_registry_id: 1,
             observers: ObserverStore::default(),
             text_codecs: TextCodecStore::default(),
@@ -1753,17 +1753,8 @@ impl JsContextHost {
         handle: DomHandle,
         association: CustomElementRegistryAssociation,
     ) {
-        match self
-            .custom_element_registry_associations
-            .get(&handle)
-            .copied()
-        {
-            Some(current) if current == association => return,
-            Some(_) => {
-                self.custom_element_registry_associations
-                    .shift_remove(&handle);
-            }
-            None => {}
+        if self.custom_element_registry_associations.get(&handle) == Some(&association) {
+            return;
         }
         self.custom_element_registry_associations
             .insert(handle, association);
@@ -1773,27 +1764,12 @@ impl JsContextHost {
         &mut self,
         retargets: &[RegistryAssociationRetarget],
     ) {
-        if retargets.is_empty() {
-            return;
-        }
-
         // Re-association is observable even when the registry itself does not
         // change: adopting a scoped-registry tree into another document moves
-        // that document to the end of the registry's association order. Build
-        // the final touched-handle order once so a large adopted subtree does
-        // not repeatedly shift the IndexMap.
-        let mut touched = HashSet::with_capacity(retargets.len());
-        let mut ordered_retargets = Vec::with_capacity(retargets.len());
-        for retarget in retargets.iter().rev() {
-            if touched.insert(retarget.handle) {
-                ordered_retargets.push(*retarget);
-            }
-        }
-        ordered_retargets.reverse();
-
-        self.custom_element_registry_associations
-            .retain(|handle, _| !touched.contains(handle));
-        for retarget in ordered_retargets {
+        // that document to the end of the registry's association order.
+        // LinkedHashMap::insert moves existing entries to the back in O(1),
+        // preserving last-retarget order without scanning unrelated entries.
+        for retarget in retargets {
             self.custom_element_registry_associations
                 .insert(retarget.handle, retarget.association);
         }
@@ -1850,8 +1826,7 @@ impl JsContextHost {
             })
             .collect::<Vec<_>>();
         for handle in stale_handles {
-            self.custom_element_registry_associations
-                .shift_remove(&handle);
+            self.custom_element_registry_associations.remove(&handle);
         }
     }
 
@@ -1870,8 +1845,7 @@ impl JsContextHost {
             })
             .collect::<Vec<_>>();
         for handle in stale_handles {
-            self.custom_element_registry_associations
-                .shift_remove(&handle);
+            self.custom_element_registry_associations.remove(&handle);
         }
     }
 

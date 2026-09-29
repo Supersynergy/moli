@@ -3083,6 +3083,7 @@ dependencies = [
  "fastrand",
  "flate2",
  "futures-util",
+ "hashlink",
  "html-escape",
  "html5ever",
  "http",

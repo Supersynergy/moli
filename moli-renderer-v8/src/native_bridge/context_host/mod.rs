@@ -57,6 +57,7 @@ use crate::{
     },
     types::{PendingSubresourceContinueEvent, PendingSubresourceFetchInfo},
 };
+use hashlink::LinkedHashMap;
 use indexmap::IndexMap;
 use moli_shared_worker::SharedWorkerClientOwnerId;
 use std::{
@@ -837,7 +838,8 @@ pub(crate) struct JsContextHost {
     // that result before the next script observes the DOM.
     parser_custom_element_handoff_replacements: HashMap<DomHandle, DomHandle>,
     scoped_custom_element_registry_wrappers: HashMap<u64, v8::Weak<v8::Object>>,
-    custom_element_registry_associations: IndexMap<DomHandle, CustomElementRegistryAssociation>,
+    custom_element_registry_associations:
+        LinkedHashMap<DomHandle, CustomElementRegistryAssociation>,
     next_scoped_custom_elements_registry_id: u64,
     observers: ObserverStore,
     text_codecs: TextCodecStore,
