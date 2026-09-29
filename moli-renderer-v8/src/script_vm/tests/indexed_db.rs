@@ -5773,3 +5773,40 @@ fn indexed_db_put_rejects_non_serializable_platform_objects() {
 
     assert_eq!(result, "DataCloneError|DataCloneError|DataCloneError");
 }
+
+#[test]
+fn indexed_db_key_path_reads_iterator_once() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://key-path-iterator.test/");
+    vm.eval(
+        r#"
+      globalThis.keyPathResult = 'pending';
+      const open = indexedDB.open('key-path-iterator', 1);
+      open.onupgradeneeded = () => {
+        try {
+          let reads = 0;
+          const keyPath = {
+            get [Symbol.iterator]() {
+              if (++reads > 1) throw new Error('iterator read twice');
+              return function* () { yield 'id'; };
+            }
+          };
+          const store = open.result.createObjectStore('values', {keyPath});
+          if (reads !== 1 || String(store.keyPath) !== 'id') throw new Error('store key path');
+          reads = 0;
+          const index = store.createIndex('by-id', keyPath);
+          if (reads !== 1 || String(index.keyPath) !== 'id') throw new Error('index key path');
+          const sentinel = {};
+          const throwing = {get [Symbol.iterator]() { throw sentinel; }};
+          try { store.createIndex('throws', throwing); throw new Error('missing exception'); }
+          catch (error) { if (error !== sentinel) throw error; }
+          globalThis.keyPathResult = 'pass';
+        } catch (error) { globalThis.keyPathResult = String(error); }
+      };
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval_after_selected_page_tasks("keyPathResult").unwrap(),
+        "pass"
+    );
+}
