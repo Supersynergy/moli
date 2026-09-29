@@ -500,7 +500,6 @@ css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -657,6 +656,7 @@ css/css-grid/alignment/grid-justify-baseline-002.html
 css/css-grid/alignment/grid-justify-baseline-003.html
 css/css-grid/alignment/grid-justify-baseline-004.html
 css/css-grid/alignment/grid-justify-baseline-005.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-002.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-003.html
@@ -1944,7 +1944,6 @@ css/css-syntax/serialize-consecutive-tokens.html
 css/css-syntax/unclosed-constructs.html
 css/css-text-decor/animations/discrete-no-interpolation.html
 css/css-text-decor/animations/text-decoration-thickness-interpolation.html
-css/css-text-decor/animations/text-underline-offset-interpolation.html
 css/css-typed-om/CSSMatrixComponent-DOMMatrix-mutable.html
 css/css-typed-om/declared-styleMap-accepts-inherit.html
 css/css-typed-om/factory-absolute-length.html
@@ -2607,7 +2606,6 @@ editing/plaintext-only/insertParagraph.html?white-space=pre
 editing/plaintext-only/insertParagraph.html?white-space=pre-line
 editing/plaintext-only/insertParagraph.html?white-space=pre-wrap
 editing/run/backcolor.html
-editing/run/bold.html?1-1000
 editing/run/bold.html?1001-2000
 editing/run/bold.html?2001-3000
 editing/run/bold.html?3001-last
@@ -2633,7 +2631,6 @@ editing/run/insertlinebreak.html?1-1000
 editing/run/insertlinebreak.html?1001-last
 editing/run/insertorderedlist.html?1-1000
 editing/run/insertorderedlist.html?1001-last
-editing/run/inserttext.html?1001-2000
 editing/run/inserttext.html?2001-last
 editing/run/insertunorderedlist.html?1-1000
 editing/run/insertunorderedlist.html?1001-2000
@@ -2641,13 +2638,13 @@ editing/run/insertunorderedlist.html?2001-last
 editing/run/italic.html?1-1000
 editing/run/italic.html?1001-2000
 editing/run/italic.html?2001-last
-editing/run/justifycenter.html?2001-3000
 editing/run/justifyfull.html?1001-2000
+editing/run/justifyfull.html?3001-4000
 editing/run/justifyleft.html?1-1000
 editing/run/justifyleft.html?1001-2000
 editing/run/justifyleft.html?2001-last
-editing/run/justifyright.html?1001-2000
 editing/run/justifyright.html?2001-3000
+editing/run/justifyright.html?3001-4000
 editing/run/misc.html
 editing/run/outdent.html?1-1000
 editing/run/outdent.html?1001-2000
@@ -2824,7 +2821,6 @@ html/browsers/windows/nested-browsing-contexts/window-top-null.html
 html/browsers/windows/noreferrer-window-name.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
-html/cross-origin-opener-policy/coop-navigate-same-origin-csp-sandbox.html
 html/dom/aria-element-reflection-disconnected.html
 html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
@@ -2905,7 +2901,6 @@ html/infrastructure/safe-passing-of-structured-data/shared-array-buffers/window-
 html/infrastructure/safe-passing-of-structured-data/transfer-audiodata.html
 html/infrastructure/safe-passing-of-structured-data/transfer-mediasourcehandle.html
 html/infrastructure/safe-passing-of-structured-data/transfer-videoframe.html
-html/interaction/focus/document-level-focus-apis/document-has-system-focus.html
 html/interaction/focus/focus-management/focus-events.html
 html/interaction/focus/focus-selection.html
 html/interaction/focus/processing-model/focus-fixup-rule-one-no-dialogs.html
@@ -2984,6 +2979,7 @@ html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-picture.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-with-quick-attach.html
+html/semantics/embedded-content/the-img-element/disconnected-image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/image-base-url.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url-2.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url.html
@@ -3064,6 +3060,7 @@ html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
 html/semantics/interactive-elements/the-dialog-element/toggle-events.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
+html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3167,7 +3164,9 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
 html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-moretests.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/setHTMLUnsafe-xml.html
 html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
@@ -3240,8 +3239,8 @@ magnetometer/Magnetometer-supported-by-permissions-policy.html
 mediacapture-insertable-streams/legacy/MediaStreamTrackGenerator-in-service-worker.https.html
 navigation-api/navigate-event/dangling-navigate-event-after-bfcache-restore.html
 navigation-api/navigate-event/defer/tentative/defer-same-document.html
-navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
+navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigation-history-entry/entries-after-bfcache-in-iframe.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
@@ -3249,6 +3248,7 @@ navigation-api/navigation-methods/return-value/back-204-205-download.html
 navigation-api/navigation-methods/sandboxing-back-parent.html
 navigation-api/navigation-methods/sandboxing-back-sibling.html
 navigation-api/navigation-methods/traverseTo-detach-between-navigate-and-navigatesuccess.html
+navigation-api/per-entry-events/dispose-after-bfcache.html
 navigation-api/precommit-handler/precommitHandler-push.html
 navigation-api/precommit-handler/precommitHandler-replace.html
 navigation-api/scroll-behavior/after-transition-reload-no-scroll-anchoring.html
@@ -3261,6 +3261,7 @@ navigation-timing/dom-interactive-media-document.html
 navigation-timing/nav2-test-attributes-values.html
 navigation-timing/nav2-test-navigation-type-reload.html
 navigation-timing/navigation-type-post-backforward.html
+navigation-timing/nested-unload-timing.html
 navigation-timing/test-document-onload.html
 navigation-timing/test-timing-attributes-order.html
 old-tests/submission/Microsoft/foreigncontent/foreign_content_015.html
@@ -3299,7 +3300,6 @@ requestidlecallback/deadline-max-rAF.html
 requestidlecallback/deadline-max-timeout-dynamic.html
 resource-timing/cached-image-gets-single-entry.html
 resource-timing/iframe-sequence-of-events.html
-resource-timing/initiator-type/embed.html
 resource-timing/initiator-type/input.html
 resource-timing/initiator-type/link.html
 resource-timing/initiator-type/picture.html
@@ -3412,6 +3412,7 @@ service-workers/service-worker/skip-waiting.https.html
 service-workers/service-worker/srcdoc-iframe.https.html
 service-workers/service-worker/static-router-cross-origin-navigation.https.html
 service-workers/service-worker/static-router-fetch-event.https.html
+service-workers/service-worker/static-router-invalid-rules.https.html
 service-workers/service-worker/static-router-main-resource.https.html
 service-workers/service-worker/static-router-no-fetch-handler.https.html
 service-workers/service-worker/static-router-request-destination.https.html
@@ -3635,9 +3636,7 @@ webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
 workers/SharedWorker-extendedLifetime-blob.html
-workers/SharedWorker-extendedLifetime-data.html
 workers/SharedWorker-extendedLifetime-named-module.html
-workers/SharedWorker-extendedLifetime.html
 workers/WorkerNavigator_platform.htm
 workers/interfaces/SharedWorkerGlobalScope/onconnect.html
 workers/semantics/structured-clone/dedicated.html
@@ -3679,9 +3678,9 @@ xhr/setrequestheader-allow-whitespace-in-value.htm
 xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
-xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/status-async.htm
 xhr/status-basic.htm
+xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expiring value after load fires
 xml/xml-prolog-accepted-versions.html
