@@ -815,6 +815,19 @@ def _empty_location_handler_reference_patterns(directory: str) -> tuple[re.Patte
     return tuple(patterns)
 
 
+@lru_cache(maxsize=None)
+def _fetch_content_type_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = "fetch/content-type/resources/content-type.py"
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
+
+
 def _supported_wptserve_handler_references(
     rel: str | None,
 ) -> tuple[re.Pattern[str], ...]:
@@ -823,6 +836,7 @@ def _supported_wptserve_handler_references(
         supported += _empty_location_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None:
         supported += _common_echo_handler_reference_patterns(posixpath.dirname(rel) or ".")
+        supported += _fetch_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _navigation_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
