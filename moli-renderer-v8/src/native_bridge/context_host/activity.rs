@@ -2,6 +2,18 @@ use super::workers::WorkerExecutionState;
 use super::*;
 
 impl JsContextHost {
+    pub(crate) fn document_has_browsing_context(&self, document: DomHandle) -> bool {
+        // A detached iframe compatibility window can be a document's defaultView
+        // without registering a browsing context. Check the native association.
+        self.dom_host().document_handle() == document
+            || self
+                .child_browsing_context_host_for_document_handle(document)
+                .is_some()
+            || self
+                .lightweight_popup_id_for_document_handle(document)
+                .is_some()
+    }
+
     pub(crate) fn document_activity(&self) -> moli_page_types::DocumentActivity {
         self.document_activity
     }

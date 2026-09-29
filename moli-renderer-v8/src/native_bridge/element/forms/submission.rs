@@ -573,15 +573,14 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     };
     // A parsed/detached Document has no browsing context to navigate. Resolve
     // that from the native document, independently of the form's wrapper kind.
-    if source_document.is_none_or(|document| {
-        let runtime = unsafe { &*runtime_ptr };
-        document != runtime.document_handle()
-            && runtime
-                .child_browsing_context_handle_by_document_handle(scope, document)
-                .is_none()
-    }) {
+    if source_document
+        .is_none_or(|document| !unsafe { &*runtime_ptr }.document_has_browsing_context(document))
+    {
         return false;
     }
+    let source_popup = source_document.and_then(|document| {
+        unsafe { &*runtime_ptr }.lightweight_popup_id_for_document_handle(document)
+    });
     let Some(request) =
         build_form_submission_request(scope, runtime_ptr, form_handle, submitter, action)
     else {
@@ -591,6 +590,29 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     let special_target = target_name
         .as_deref()
         .and_then(SpecialBrowsingContextTarget::parse);
+    // A popup is its own top-level context: _parent and _top also refer to it,
+    // even when the submit method was borrowed from its opener's realm.
+    if let Some(popup_id) = source_popup
+        && (target_name.is_none()
+            || matches!(
+                special_target,
+                Some(
+                    SpecialBrowsingContextTarget::Current
+                        | SpecialBrowsingContextTarget::Parent
+                        | SpecialBrowsingContextTarget::Top
+                )
+            ))
+    {
+        return submit_form_to_popup_browsing_context(
+            scope,
+            runtime_ptr,
+            form_handle,
+            submitter,
+            popup_id,
+            request,
+            user_initiated,
+        );
+    }
     match target_name.as_deref() {
         Some(target_name) if special_target.is_none() => {
             let target_handle = named_iframe_target_handle_for_navigation(
@@ -772,6 +794,87 @@ enum FormSubmissionMethod {
         content_type: String,
         form_data_entries: Vec<(String, v8::Global<v8::Value>)>,
     },
+}
+
+fn submit_form_to_popup_browsing_context(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    form_handle: DomHandle,
+    submitter: Option<DomHandle>,
+    popup_id: u64,
+    submission: FormSubmissionMethod,
+    user_initiated: bool,
+) -> bool {
+    let source_document = unsafe { &*runtime_ptr }
+        .dom_host()
+        .owner_document_handle(form_handle);
+    if source_document.is_none_or(|document| {
+        unsafe { &*runtime_ptr }.lightweight_popup_id_for_document_handle(document)
+            != Some(popup_id)
+    }) {
+        return false;
+    }
+    let Some(window) = unsafe { &*runtime_ptr }.lightweight_popup_window(scope, popup_id) else {
+        return false;
+    };
+    let (request, form_data) = match submission {
+        FormSubmissionMethod::Get { resolved_url } => {
+            let Ok(url) = Url::parse(&resolved_url) else {
+                return false;
+            };
+            (moli_fetch::Request::get_with_url(url), None)
+        }
+        FormSubmissionMethod::Post {
+            resolved_url,
+            body,
+            content_type,
+            form_data_entries,
+        } => {
+            let Some(form_data) = form_data_object_from_entries(scope, &form_data_entries) else {
+                return false;
+            };
+            let Ok(request) = moli_fetch::Request::new_bytes(
+                "POST",
+                resolved_url.as_str(),
+                Some(body),
+                vec![("Content-Type".to_owned(), content_type)],
+            ) else {
+                return false;
+            };
+            (request, Some(form_data))
+        }
+    };
+    let source_element = wrap_handle_object(scope, runtime_ptr, submitter.unwrap_or(form_handle));
+    let navigation_type = if user_initiated { "push" } else { "replace" };
+    if !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
+        scope,
+        window,
+        request.url.as_str(),
+        navigation_type,
+        source_element,
+        user_initiated,
+        None,
+        form_data,
+    ) {
+        return true;
+    }
+    let runtime = unsafe { &mut *runtime_ptr };
+    // A navigate handler can close the popup or replace its document.
+    if source_document.is_none_or(|document| {
+        runtime.lightweight_popup_id_for_document_handle(document) != Some(popup_id)
+    }) {
+        return false;
+    }
+    runtime.navigate_lightweight_popup_window_with_request(
+        scope,
+        popup_id,
+        request,
+        if user_initiated {
+            crate::context_bootstrap::LocationNavigationKind::Assign
+        } else {
+            crate::context_bootstrap::LocationNavigationKind::Replace
+        },
+    )
 }
 
 fn dispatch_named_iframe_form_navigation_event(
