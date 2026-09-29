@@ -586,3 +586,28 @@ async fn clipboard_storage_survives_page_teardown_and_keeps_browser_contexts_sep
 "#,
     );
 }
+
+#[test]
+fn popup_storage_aliases_reuse_window_getters_and_native_identity() {
+    let mut vm = new_storage_test_vm("https://popup-storage.test/");
+    assert_eq!(vm.eval(r#"(() => {
+      const check = (value, label) => { if (!value) throw new Error(label); };
+      const popup = open();
+      try {
+        for (const name of ['localStorage', 'sessionStorage']) {
+          const descriptor = Object.getOwnPropertyDescriptor(popup, name);
+          check(typeof descriptor.get === 'function' && descriptor.set === undefined &&
+            descriptor.enumerable && descriptor.configurable && !('value' in descriptor), name + ' descriptor');
+          const storage = popup[name];
+          check(storage === popup[name] && descriptor.get.call(popup) === storage, name + ' identity');
+          const globalGetter = Object.getOwnPropertyDescriptor(self, name).get;
+          check(globalGetter.call(popup) === storage, name + ' borrowed getter');
+          check(descriptor.get.call(self) === self[name], name + ' borrowed receiver');
+          let error;
+          try { descriptor.get.call({}); } catch (caught) { error = caught; }
+          check(error instanceof TypeError, name + ' receiver validation');
+        }
+        return true;
+      } finally { popup.close(); }
+    })()"#).expect("popup Storage getter fixture should evaluate"), "true");
+}
