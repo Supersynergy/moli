@@ -643,3 +643,52 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 ("POST", 200, b"00 09 7f 80 ff", "text/plain"),
             ],
         )
+
+    def test_fixture_server_models_fetch_nosniff_javascript_handler(self) -> None:
+        self.assertEqual(
+            _nosniff_javascript_response(""),
+            (
+                None,
+                b"// nothing to see here\nlog('FAIL: Content-Type missing')",
+            ),
+        )
+        self.assertEqual(
+            _nosniff_javascript_response("type=text%2Fjavascript&outcome=p"),
+            ("text/javascript", b"// nothing to see here\np()"),
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                base_url = f"{server.base_url}/fetch/nosniff/resources/js.py"
+                responses = []
+                for query in (
+                    "",
+                    "?type=",
+                    "?type=text%2Fjavascript&outcome=p",
+                ):
+                    with urlopen(base_url + query, timeout=2) as response:
+                        responses.append(
+                            (
+                                response.headers.get("Content-Type"),
+                                response.headers["X-Content-Type-Options"],
+                                response.read(),
+                            )
+                        )
+
+        self.assertEqual(
+            responses,
+            [
+                (
+                    None,
+                    "nosniff",
+                    b"// nothing to see here\nlog('FAIL: Content-Type missing')",
+                ),
+                ("", "nosniff", b"// nothing to see here\nlog('FAIL: ')"),
+                ("text/javascript", "nosniff", b"// nothing to see here\np()"),
+            ],
+        )
