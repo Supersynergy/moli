@@ -98,6 +98,12 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
 }
+DOCUMENT_CHARSET_FIXTURES = {
+    "/html/syntax/charset/resources/bogus-charset-http.py": b"\xa2\n",
+    "/html/syntax/charset/resources/bogus-charset-http-valid-meta.py":
+        b"<meta charset=windows-1251>\xa2\n",
+}
+
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
@@ -1707,6 +1713,18 @@ def _make_handler(
     range_stash = FetchStash()
 
     class WptHandler(BaseHTTPRequestHandler):
+        def _serve_document_charset_resource(self) -> bool:
+            path = unquote(urlsplit(self.path).path)
+            if path not in DOCUMENT_CHARSET_FIXTURES:
+                return False
+            # These upstream handlers assign response.content and return None,
+            # so wptserve does not apply the query's response pipes.
+            self._send_bytes(
+                "text/html;charset=this-is-not-a-charset", DOCUMENT_CHARSET_FIXTURES[path],
+                emit_body=self.command != "HEAD", cache_control=None,
+            )
+            return True
+
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_websocket()
@@ -1717,6 +1735,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_document_charset_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1753,6 +1773,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_document_charset_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1810,6 +1832,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_document_charset_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1845,6 +1869,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_document_charset_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2060,6 +2086,8 @@ def _make_handler(
             return True
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_document_charset_resource():
+                return
             try:
                 self._serve_response(emit_body=emit_body)
             except WptPipeError:
@@ -2604,6 +2632,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) in DOCUMENT_CHARSET_FIXTURES:
+                return self._serve_document_charset_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
