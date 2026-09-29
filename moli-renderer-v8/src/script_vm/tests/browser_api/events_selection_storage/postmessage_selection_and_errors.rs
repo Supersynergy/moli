@@ -1902,3 +1902,54 @@ fn selection_range_membership_uses_native_document_relationships() {
         ""
     );
 }
+
+#[test]
+fn document_domain_setter_respects_the_original_hosts_public_suffix() {
+    for (host, domain, allowed) in [
+        ("www1.localhost", "localhost", false),
+        ("localhost", "localhost", true),
+        (
+            "www1.web-platform.localhost",
+            "web-platform.localhost",
+            true,
+        ),
+        ("www.example.compute.amazonaws.com", "amazonaws.com", false),
+        (
+            "www.example.compute.amazonaws.com",
+            "example.compute.amazonaws.com",
+            false,
+        ),
+        ("test.amazonaws.com", "amazonaws.com", true),
+        ("www.city.kawasaki.jp", "city.kawasaki.jp", true),
+    ] {
+        let mut vm = new_storage_test_vm(&format!("https://{host}/path"));
+        let result = vm
+            .eval(&format!(
+                r#"((value) => {{
+                const before = document.domain;
+                let outcome;
+                try {{ document.domain = value; outcome = "accepted"; }}
+                catch (error) {{
+                    outcome = `${{error.name}}:${{error instanceof DOMException}}:${{error.code}}`;
+                }}
+                return JSON.stringify([before, outcome, document.domain]);
+            }})({})"#,
+                serde_json::to_string(domain).unwrap(),
+            ))
+            .expect("document.domain boundary probe should evaluate");
+        assert_eq!(
+            result,
+            serde_json::json!([
+                host,
+                if allowed {
+                    "accepted"
+                } else {
+                    "SecurityError:true:18"
+                },
+                if allowed { domain } else { host },
+            ])
+            .to_string(),
+            "{host} -> {domain}"
+        );
+    }
+}
