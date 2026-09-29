@@ -59,7 +59,7 @@ impl StaticHttpServer {
         .await
     }
 
-    async fn spawn_with_responder(
+    pub(super) async fn spawn_with_responder(
         expected_requests: usize,
         response_headers: &'static str,
         response_body: impl Fn(usize, &CapturedHttpRequest) -> String + Send + 'static,

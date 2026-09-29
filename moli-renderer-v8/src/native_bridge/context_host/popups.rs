@@ -1496,11 +1496,13 @@ impl JsContextHost {
         let current_url = lightweight_popup_location_href(scope, window)
             .or_else(|| self.lightweight_popup_location_url(popup_id));
         let target_url = request.url.clone();
-        if request.method == "GET"
+        let allows_fragment_navigation = request.method == "GET"
+            && target_url.fragment().is_some()
             && !matches!(
                 kind,
                 crate::context_bootstrap::LocationNavigationKind::Reload
-            )
+            );
+        if allows_fragment_navigation
             && urls_refer_to_same_document_except_fragment(current_url.as_ref(), &target_url)
         {
             let previous_url = current_url.clone();
@@ -1530,11 +1532,7 @@ impl JsContextHost {
             }
             return true;
         }
-        if request.method == "GET"
-            && !matches!(
-                kind,
-                crate::context_bootstrap::LocationNavigationKind::Reload
-            )
+        if allows_fragment_navigation
             && let Some(previous_url) =
                 self.pending_lightweight_popup_same_document_previous_url(popup_id, &target_url)
         {
