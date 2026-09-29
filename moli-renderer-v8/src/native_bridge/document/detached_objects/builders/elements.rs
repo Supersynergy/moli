@@ -462,6 +462,8 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         && html_element_constructor_name(&local_name).is_some();
     let svg_interface_like = namespace_uri.as_deref() == Some(SVG_NS)
         && svg_element_constructor_name(&local_name).is_some();
+    let mathml_interface_like =
+        namespace_uri.as_deref() == Some(crate::native_bridge::document::MATHML_NS);
     let node_name = if html_like {
         qualified.to_ascii_uppercase()
     } else {
@@ -471,6 +473,8 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         Some(html_element_to_string_tag(&local_name))
     } else if namespace_uri.as_deref() == Some(SVG_NS) {
         Some(svg_element_to_string_tag(&local_name))
+    } else if mathml_interface_like {
+        Some("MathMLElement")
     } else {
         Some("Element")
     };
@@ -481,6 +485,8 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         html_element_constructor_name(&local_name)
     } else if svg_interface_like {
         svg_element_constructor_name(&local_name)
+    } else if mathml_interface_like {
+        Some("MathMLElement")
     } else {
         None
     };

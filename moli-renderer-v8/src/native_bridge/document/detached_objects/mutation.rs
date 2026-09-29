@@ -510,10 +510,12 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 native_handle.is_some_and(|(runtime_ptr, handle)| {
                     crate::custom_elements::preserves_custom_element_identity(runtime_ptr, handle)
                 });
-            let preserve_xhtml_element_interface =
-                native_snapshot.is_some() && raw_namespace_uri.as_deref() == Some(XHTML_NS);
+            // Native wrappers already carry the interface selected from their
+            // namespace and local name. An XML owner Document does not turn
+            // SVG, MathML or XHTML elements into generic Elements.
+            let preserve_native_element_interface = native_snapshot.is_some();
             if document_kind != "html"
-                && !preserve_xhtml_element_interface
+                && !preserve_native_element_interface
                 && !preserve_custom_element_identity
             {
                 crate::detached_dom_surface::set_object_prototype(scope, node, "Element");
