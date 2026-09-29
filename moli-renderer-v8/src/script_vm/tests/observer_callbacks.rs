@@ -21,6 +21,16 @@ fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
 }
 
 #[test]
+fn windowless_fragment_insertions_preserve_native_mutation_records() {
+    let mut vm = observer_callback_test_vm("https://windowless-fragments.test/");
+    assert_eq!(
+        vm.eval(include_str!("windowless_fragment_mutations.js"))
+            .expect("fragment insertion should preserve native mutation records"),
+        "true"
+    );
+}
+
+#[test]
 fn observer_callbacks_use_webidl_callback_function_realm_receiver_and_proxy_semantics() {
     let mut vm = observer_callback_test_vm("https://observer-callback-function-semantics.test/");
 

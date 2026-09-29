@@ -329,6 +329,14 @@ impl DomHost {
             reference_child,
         );
         if let Some(candidate_changes) = candidate_changes {
+            if inserted_fragment_children.is_empty()
+                && self.node(child).is_some_and(Node::is_document_fragment)
+            {
+                // The insertion was valid, but an empty fragment has no
+                // mutation payloads or tree invalidations. Keep the success
+                // flag used by appendChild/insertBefore callers.
+                return DomMutationEffects::changed();
+            }
             if let Some(shadow_root) = previous_shadow_root {
                 self.invalidate_shadow_slot_name_index(shadow_root);
             }
