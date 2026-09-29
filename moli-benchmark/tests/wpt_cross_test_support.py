@@ -110,9 +110,6 @@ from moli_benchmark.wpt_cross.scheduler import (
     build_run_schedule,
 )
 from moli_benchmark.wpt_cross.server import (
-    _nosniff_javascript_response,
-    _workers_url_encoding_response,
-    _fetch_status_response,
     BENCH_REPORT_BRIDGE,
     BENCH_TESTDRIVER_VENDOR_BRIDGE,
     BENCH_TIMEOUT_MULTIPLIER_QUERY,
@@ -126,8 +123,10 @@ from moli_benchmark.wpt_cross.server import (
     _inject_bench_report_bridge_config,
     _host_header_hostname,
     _headers_include,
-    _normalize_harness_case_key,
     _inspect_headers_response_headers,
+    _fetch_status_response,
+    _normalize_harness_case_key,
+    _nosniff_javascript_response,
     _needs_wpt_template_substitution,
     _legacy_wpt_resource_alias,
     _pipe_response_header_operations,
@@ -142,6 +141,7 @@ from moli_benchmark.wpt_cross.server import (
     _substitute_wpt_template_variables,
     _window_js_window_wrapper,
     _wasm_webapi_status_code,
+    _workers_url_encoding_response,
     _wpt_delay_seconds,
     _wpt_dedicated_worker_js_wrapper_html,
     _wpt_any_dedicated_worker_wrapper_html,
@@ -154,8 +154,6 @@ from moli_benchmark.wpt_cross.server import (
 # WPT fixture tests use loopback servers; inherited shell proxies can intercept
 # urllib requests to those servers, so normalize the script process once.
 clear_current_proxy_env()
-
-
 
 
 class WptCrossTestCase(unittest.TestCase):

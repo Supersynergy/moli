@@ -40,6 +40,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             reports[0]["metadata"]["content_type"],
             "application/csp-report",
         )
+
     def test_fixture_server_accepts_standard_websocket_echo_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -80,6 +81,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                     while len(echoed) < 6:
                         echoed += connection.recv(6 - len(echoed))
                     self.assertEqual(echoed, b"\x81\x04ping")
+
     def test_fixture_server_serves_raw_asis_header_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -101,6 +103,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                     header = response.headers["X-Custom-Header-Bytes"]
 
         self.assertEqual(header.encode("latin-1"), b"\xe2\x80\xa6")
+
     def test_fixture_server_serves_raw_sidecar_header_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -122,6 +125,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                     header = response.headers["Content-Type"]
 
         self.assertEqual(header.encode("latin-1"), b"\xc3\x97\xc2\xba invalid")
+
     def test_fixture_server_uses_explicit_content_type_header_as_override(self) -> None:
         self.assertEqual(
             _static_response_header_block(
@@ -134,6 +138,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             _static_response_header_block("application/javascript", [("X-Test", "ok")]),
             [("Content-Type", "application/javascript"), ("X-Test", "ok")],
         )
+
     def test_fixture_server_detects_explicit_content_length_header(self) -> None:
         header_block = _static_response_header_block(
             "text/html",
@@ -141,6 +146,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
         )
 
         self.assertTrue(_headers_include(header_block, "content-length"))
+
     def test_fixture_server_preserves_explicit_content_length_body_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -172,12 +178,14 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
 
         self.assertEqual(served, body)
         self.assertNotIn(BENCH_TIMEOUT_MULTIPLIER_QUERY.encode("ascii"), served)
+
     def test_fixture_server_maps_legacy_webidl_parser_resource(self) -> None:
         self.assertEqual(
             _legacy_wpt_resource_alias("/resources/WebIDLParser.js"),
             "resources/webidl2/lib/webidl2.js",
         )
         self.assertIsNone(_legacy_wpt_resource_alias("/resources/testharness.js"))
+
     def test_fixture_server_builds_any_js_window_wrapper(self) -> None:
         body = _any_js_window_wrapper(
             "/WebCryptoAPI/sign_verify/hmac.https.any.html",
@@ -197,6 +205,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
         self.assertIn(b'<script src="hmac_vectors.js"></script>', body)
         self.assertIn(b'<div id="log"></div>', body)
         self.assertIn(b'<script src="hmac.https.any.js"></script>', body)
+
     def test_fixture_server_builds_window_js_wrapper_without_any_global(self) -> None:
         body = _window_js_window_wrapper(
             "/WebCryptoAPI/algorithm-discards-context.https.window.html",
@@ -211,6 +220,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
         self.assertIn(b'<script src="helper.js"></script>', body)
         self.assertIn(b'<script src="algorithm-discards-context.https.window.js"></script>', body)
         self.assertNotIn(b"self.GLOBAL", body)
+
     def test_fixture_server_builds_wpt_any_js_query_wrapper(self) -> None:
         html = _wpt_any_window_wrapper_html(
             "wasm/jsapi/feature.any.js",
@@ -227,6 +237,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             html,
         )
         self.assertNotIn("moli-wpt-any", html)
+
     def test_fixture_server_builds_any_js_dedicated_worker_wrapper(self) -> None:
         html = _wpt_any_dedicated_worker_wrapper_html(
             "wasm/jsapi/feature.any.js",
@@ -240,6 +251,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             html,
         )
         self.assertNotIn("moli-wpt-any", html)
+
     def test_fixture_server_builds_any_js_dedicated_worker_script(self) -> None:
         js = _wpt_any_dedicated_worker_wrapper_js(
             "wasm/jsapi/feature.any.js",
@@ -255,6 +267,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
         self.assertIn('importScripts("/wasm/jsapi/feature.any.js?variant=1");', js)
         self.assertTrue(js.rstrip().endswith("done();"))
         self.assertNotIn("moli-wpt-any", js)
+
     def test_fixture_server_builds_window_js_wrapper(self) -> None:
         html = _wpt_window_js_wrapper_html(
             "wasm/serialization/transfer.window.js",
@@ -271,6 +284,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             html,
         )
         self.assertNotIn("moli-wpt-script", html)
+
     def test_fixture_server_builds_worker_js_wrapper(self) -> None:
         html = _wpt_dedicated_worker_js_wrapper_html(
             "wasm/create_multiple_memory.worker.js",
@@ -284,6 +298,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             html,
         )
         self.assertNotIn("moli-wpt-script", html)
+
     def test_any_js_worker_script_path_round_trips_to_source_path(self) -> None:
         worker_path = any_js_worker_script_path(
             "wasm/jsapi/feature.any.js?variant=1"
@@ -297,6 +312,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             any_js_source_script_path(worker_path),
             "wasm/jsapi/feature.any.js?variant=1",
         )
+
     def test_any_js_case_path_for_global_replaces_existing_wrapper_query(self) -> None:
         self.assertEqual(
             any_js_case_path_for_global(
@@ -305,6 +321,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             ),
             "wasm/jsapi/feature.any.js?variant=1&moli-wpt-any=dedicatedworker",
         )
+
     def test_fixture_server_resolves_any_js_meta_scripts_within_wpt_root(self) -> None:
         self.assertEqual(
             _resolve_wpt_static_script_url(
@@ -326,6 +343,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                 "../../../escape.js",
             )
         )
+
     def test_fixture_server_substitutes_core_sub_template_variables(self) -> None:
         body = (
             b"http://{{domains[www2]}}:{{ports[http][0]}}/"
@@ -372,6 +390,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b" ws-url=ws://example.test:12345/socket"
             b" wss-url=ws://example.test:12345/socket",
         )
+
     def test_fixture_server_substitutes_idna_domain_aliases(self) -> None:
         cases = [
             ("{{domains[天気の良い日]}}", b"xn--n8j6ds53lwwkrqhv28a.localhost"),
@@ -455,6 +474,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                 "",
             )
         )
+
     def test_fixture_server_maps_external_ipv6_domain_location_port_to_remote_port(
         self,
     ) -> None:
@@ -480,6 +500,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b" http://[2001:db8::1]:34567/d"
             b" http://[2001:db8::1]:23456/e",
         )
+
     def test_fixture_server_substitutes_get_query_template_variables(self) -> None:
         body = (
             b"var expected_logs = {{GET[logs]}};"
@@ -497,6 +518,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b' var timeout = "2";'
             b' var missing = "";',
         )
+
     def test_fixture_server_substitutes_template_variables_in_sidecar_headers(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             fixture = Path(root) / "frame-ancestors.sub.html"
@@ -521,6 +543,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                     )
                 ],
             )
+
     def test_fixture_server_substitution_preserves_non_utf8_bytes(self) -> None:
         body = b"\xff{{host}}\xfe{{ports[http][0]}}"
 
@@ -528,6 +551,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             _substitute_wpt_template_variables(body, port=12345),
             b"\xfflocalhost\xfe12345",
         )
+
     def test_fixture_server_distinguishes_primary_host_from_request_hostname(
         self,
     ) -> None:
@@ -547,10 +571,12 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b"host=localhost domain=localhost location=www1.localhost "
             b"HTTP_ORIGIN: 'http://' + ORIGINAL_HOST + HTTP_PORT_ELIDED,",
         )
+
     def test_host_header_hostname_preserves_ipv6_brackets(self) -> None:
         self.assertEqual(_host_header_hostname("[2001:db8::1]:1234"), "[2001:db8::1]")
         self.assertEqual(_host_header_hostname("localhost:1234"), "localhost")
         self.assertEqual(_host_header_hostname("example.test"), "example.test")
+
     def test_fixture_server_substitutes_ipv6_websocket_template_urls(self) -> None:
         body = (
             b"ws=ws://{{host}}:{{ports[ws][0]}}/echo"
@@ -566,6 +592,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b"ws=ws://[2001:db8::1]:12345/echo"
             b" wss=ws://[2001:db8::1]:12345/echo",
         )
+
     def test_fixture_server_wasm_status_handler_normalizes_status_codes(self) -> None:
         self.assertEqual(_wasm_webapi_status_code("status=404"), 404)
         self.assertEqual(_wasm_webapi_status_code("status=300"), 300)
@@ -573,6 +600,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
         self.assertEqual(_wasm_webapi_status_code("status=700"), 599)
         self.assertEqual(_wasm_webapi_status_code("status=not-a-number"), 400)
         self.assertEqual(_wasm_webapi_status_code(""), 200)
+
     def test_fixture_server_redirect_handler_models_wasm_origin_probe(self) -> None:
         self.assertEqual(
             _redirect_fixture_response(
@@ -589,17 +617,20 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             _redirect_fixture_response("status=307&location=/target"),
             (307, "/target"),
         )
+
     def test_fixture_server_models_csp_resource_py(self) -> None:
         body, headers = _content_security_policy_resource_response()
 
         self.assertIn(b"success", body)
         self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
+
     def test_fixture_server_models_workers_modules_export_on_load_script_py(self) -> None:
         body, headers = _workers_modules_export_on_load_script_response()
 
         self.assertIn(b"export const importedModules", body)
         self.assertIn(("Content-Type", "text/javascript"), headers)
         self.assertIn(("Access-Control-Allow-Origin", "*"), headers)
+
     def test_fixture_server_preserves_raw_sidecar_header_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -614,6 +645,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
         self.assertEqual(headers, [("Content-Type", "\xc3\x97\xc2\xba invalid")])
         for _name, value in headers:
             value.encode("latin-1")
+
     def test_fixture_server_substitutes_get_host_info_remote_host_for_loopback(self) -> None:
         body = (
             b"var REMOTE_HOST = (ORIGINAL_HOST === 'localhost') ? "
@@ -724,4 +756,21 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                         ],
                     )
 
+    def test_fixture_server_substitutes_request_header_or_default(self) -> None:
+        body = (
+            b"present={{header_or_default(Referer, missing)}}"
+            b" absent={{header_or_default(X-Absent, <missing>)}}"
+            b" empty={{header_or_default(X-Empty, )}}"
+        )
 
+        self.assertEqual(
+            _substitute_wpt_template_variables(
+                body,
+                port=12345,
+                request_headers={
+                    "referer": "https://example.test/path?a=1&b=2",
+                },
+            ),
+            b"present=https://example.test/path?a=1&amp;b=2"
+            b" absent=&lt;missing&gt; empty=",
+        )

@@ -31,8 +31,6 @@ import math
 import mimetypes
 import os
 import random
-from datetime import datetime
-
 import re
 import socket
 import struct
@@ -42,17 +40,15 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
-from html import escape as html_escape
+from datetime import datetime
 from email import policy
 from email.parser import BytesParser
-
+from html import escape as html_escape
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import product
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlsplit, urlunsplit
-
-from .pipes import WptPipeError, parse_pipe_commands
 
 from .any_js import (
     ANY_JS_DEDICATED_WORKER_GLOBAL,
@@ -75,17 +71,32 @@ from .case_set import (
     WINDOW_JS_WINDOW_QUERY_VALUE,
     parse_any_js_meta,
 )
+from .pipes import WptPipeError, parse_pipe_commands
 
 
 # Match wptserve's bounded header count for both requests and responses.
 http.client._MAXHEADERS = 512
 
 
-PRELOAD_COUNT_PATH = "/preload/resources/preload-count.py"
-PRELOAD_COUNT_KEY = "a8697ae7-c8cb-4dbd-a8ef-27111dc7042f"
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
+COMMON_REDIRECT_PATH = "/common/redirect.py"
+FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
+COMMON_ECHO_PATH = "/common/echo.py"
+IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
+DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
+REMOTE_CONTEXT_EXECUTOR_PATH = (
+    "/html/browsers/browsing-the-web/remote-context-helper/resources/executor-window.py"
+)
+REMOTE_CONTEXT_RESOURCE_PATHS = {DISPATCHER_PATH, REMOTE_CONTEXT_EXECUTOR_PATH}
+PRELOAD_COUNT_PATH = "/preload/resources/preload-count.py"
+PRELOAD_COUNT_KEY = "a8697ae7-c8cb-4dbd-a8ef-27111dc7042f"
+DOCUMENT_CHARSET_FIXTURES = {
+    "/html/syntax/charset/resources/bogus-charset-http.py": b"\xa2\n",
+    "/html/syntax/charset/resources/bogus-charset-http-valid-meta.py":
+        b"<meta charset=windows-1251>\xa2\n",
+}
 XHR_DOCUMENT_FIXTURES = {
     "/xhr/resources/win-1252-xml.py": ("application/xml;charset=windows-1252", b"<\xff/>"),
     # The upstream handler returns a Unicode string, encoded by wptserve as UTF-8.
@@ -95,48 +106,22 @@ XHR_DOCUMENT_FIXTURES = {
     "/xhr/resources/img-utf8-html.py": ("text/html;charset=utf-8", b"<img>foo"),
     "/xhr/resources/empty-div-utf8-html.py": ("text/html;charset=utf-8", b"<!DOCTYPE html><div></div>"),
 }
-XHR_BODY_RESOURCE_PATHS = {
-    "/xhr/resources/content.py",
-    "/xhr/resources/echo-content-type.py",
-    *XHR_DOCUMENT_FIXTURES,
-}
-XHR_RESPONSE_RESOURCE_PATHS = {
-    *XHR_BODY_RESOURCE_PATHS,
-    "/xhr/resources/headers.py",
-    "/xhr/resources/inspect-headers.py",
-    "/xhr/resources/echo-headers.py",
-    "/xhr/resources/access-control-basic-put-allow.py",
-    "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
-    "/xhr/resources/corsenabled.py",
-
-    "/xhr/resources/bad-chunk-encoding.py",
-    "/xhr/resources/infinite-redirects.py",
-    "/xhr/resources/status.py",
-    "/xhr/resources/last-modified.py",
-}
-DISPATCHER_PATH = "/common/dispatcher/dispatcher.py"
-
-REMOTE_CONTEXT_EXECUTOR_PATH = (
-    "/html/browsers/browsing-the-web/remote-context-helper/resources/executor-window.py"
-)
-
-REMOTE_CONTEXT_RESOURCE_PATHS = {DISPATCHER_PATH, REMOTE_CONTEXT_EXECUTOR_PATH}
-FETCH_CONTENT_TYPE_PATH = "/fetch/content-type/resources/content-type.py"
-DOCUMENT_CHARSET_FIXTURES = {
-    "/html/syntax/charset/resources/bogus-charset-http.py": b"\xa2\n",
-    "/html/syntax/charset/resources/bogus-charset-http-valid-meta.py":
-        b"<meta charset=windows-1251>\xa2\n",
-}
-IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
-
-COMMON_ECHO_PATH = "/common/echo.py"
-COMMON_REDIRECT_PATH = "/common/redirect.py"
-FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
-FETCH_REDIRECT_RESOURCE_PATH = "/fetch/api/resources/redirect.py"
-FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
-XHR_URL_RESOURCE_PATHS = {
+XHR_RESOURCE_PATHS = {
     "/xhr/resources/requri.py",
     "/xhr/resources/redirect.py",
+    "/xhr/resources/inspect-headers.py",
+    "/xhr/resources/headers.py",
+    "/xhr/resources/echo-headers.py",
+    "/xhr/resources/content.py",
+    "/xhr/resources/corsenabled.py",
+    "/xhr/resources/access-control-basic-put-allow.py",
+    "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
+    "/xhr/resources/echo-content-type.py",
+    "/xhr/resources/status.py",
+    "/xhr/resources/last-modified.py",
+    "/xhr/resources/bad-chunk-encoding.py",
+    "/xhr/resources/infinite-redirects.py",
+    *XHR_DOCUMENT_FIXTURES,
 }
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
@@ -147,18 +132,16 @@ FETCH_RANGE_RESOURCE_PATHS = {
     "/fetch/range/resources/long-wav.py",
     "/fetch/range/resources/stash-take.py",
 }
-LINK_STYLESHEET_COUNTER_PATH = (
-    "/html/semantics/document-metadata/the-link-element/stylesheet.py"
-)
-JSON_THEN_JS_PATH = "/html/semantics/scripting-1/the-script-element/serve-json-then-js.py"
-JSON_LOAD_ERROR_PATH = (
-    "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
-)
-
-NAVIGATION_SECOND_VISIT_PATH = (
-    "/navigation-api/navigation-methods/return-value/resources/"
-    "204-205-download-on-second-visit.py"
-)
+FETCH_PREFLIGHT_RESOURCE_PATHS = {
+    "/fetch/api/resources/preflight.py",
+    "/fetch/api/resources/clean-stash.py",
+}
+FETCH_REDIRECT_RESOURCE_PATHS = {
+    "/fetch/api/resources/redirect.py",
+    "/fetch/api/resources/redirect-empty-location.py",
+}
+FETCH_INSPECT_HEADERS_PATH = "/fetch/api/resources/inspect-headers.py"
+FETCH_CONTENT_TYPE_PATH = "/fetch/content-type/resources/content-type.py"
 SERVICE_WORKER_SCRIPT_RESOURCE_PATHS = {
     "/service-workers/service-worker/resources/mime-type-worker.py",
     "/service-workers/service-worker/resources/import-mime-type-worker.py",
@@ -188,17 +171,22 @@ SERVICE_WORKER_MALFORMED_SCRIPTS = {
     "instantiation-error-and-top-level-await":
         'import nonexistent from "./imported-module-script.js"; await Promise.resolve(1);',
 }
-FETCH_PREFLIGHT_RESOURCE_PATHS = {
-    "/fetch/api/resources/preflight.py",
-    "/fetch/api/resources/clean-stash.py",
-}
-
+LINK_STYLESHEET_COUNTER_PATH = (
+    "/html/semantics/document-metadata/the-link-element/stylesheet.py"
+)
+JSON_THEN_JS_PATH = "/html/semantics/scripting-1/the-script-element/serve-json-then-js.py"
+JSON_LOAD_ERROR_PATH = (
+    "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
+)
+NAVIGATION_SECOND_VISIT_PATH = (
+    "/navigation-api/navigation-methods/return-value/resources/"
+    "204-205-download-on-second-visit.py"
+)
+BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 FORM_SUBMISSION_PATH = (
     "/html/semantics/forms/form-submission-0/resources/form-submission.py"
 )
-
-BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
     rb"/resources/testharnessreport\.js(?P=quote)",
@@ -1157,6 +1145,17 @@ def _response_content_type_and_extra_headers(
     return merged_content_type, merged_extra_headers
 
 
+def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
+    """Model the identical Fetch/XHR status.py handlers without decoding payloads."""
+    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+    return (
+        int(params.get("code", ["200"])[0]),
+        params.get("text", ["OMG"])[0],
+        params.get("type", [""])[0],
+        params.get("content", [""])[0].encode("latin-1"),
+    )
+
+
 def _wasm_webapi_status_code(query: str) -> int | None:
     """Return the status for WPT's wasm/webapi/status.py fixture.
 
@@ -1222,6 +1221,23 @@ def _xhr_inspect_headers_fixture_response(
         ])
     headers.append(("content-type", "text/plain"))
     return headers, b"".join(parts)
+
+
+def _workers_url_encoding_response(query: str) -> bytes:
+    """Model workers/semantics/encodings/003-1.py's UTF-8 query check."""
+    value = next(
+        (
+            value
+            for name, value in parse_qsl(query, keep_blank_values=True)
+            if name == "x"
+        ),
+        None,
+    )
+    return b"PASS" if value == "å" else b"FAIL"
+
+
+def _form_echo_response(body: bytes) -> bytes:
+    return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
 
 
 def _form_submission_response(
@@ -1423,6 +1439,24 @@ def _inspect_headers_response_headers(
     return response_headers
 
 
+def _nosniff_javascript_response(query: str) -> tuple[str | None, bytes]:
+    """Model fetch/nosniff/resources/js.py's MIME-controlled script body."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    outcome = next(
+        (value for name, value in params if name == "outcome"),
+        "f",
+    )
+    content_type = next(
+        (value for name, value in params if name == "type"),
+        None,
+    )
+    type_label = content_type if content_type is not None else "Content-Type missing"
+    result_call = "log('FAIL: " + type_label + "')" if outcome == "f" else "p()"
+    body = ("// nothing to see here\n" + result_call).encode()
+    return content_type, body
+
+
 def _url_host_literal(hostname: str) -> str:
     if hostname.startswith("[") and hostname.endswith("]"):
         return hostname
@@ -1515,6 +1549,8 @@ def _substitute_wpt_template_variables(
         alternate_port = port
     if remote_port is None:
         remote_port = alternate_port
+    # Named hosts belong to the configured server, not the requesting subdomain.
+    # External IPv6 endpoints retain the existing loopback alias fallback.
     template_primary_hostname = primary_hostname or "localhost"
     if ":" in template_primary_hostname:
         template_primary_hostname = "localhost"
@@ -1608,6 +1644,7 @@ def _substitute_wpt_template_variables(
             b"ws://" + primary_url_host_bytes + b":" + str(alternate_port).encode("ascii")
         ),
         b"{{host}}": primary_hostname_bytes,
+        b"{{domains[]}}": primary_hostname_bytes,
         b"{{location[scheme]}}": b"http",
         b"{{location[server]}}": current_origin,
         b"{{location[host]}}": request_host_bytes,
@@ -1824,6 +1861,56 @@ class _Ipv6ThreadingHTTPServer(_FixtureThreadingHTTPServer):
     address_family = socket.AF_INET6
 
 
+class FetchStash:
+    """Write-once, read-once stash with independent resource-path namespaces.
+
+    Every origin of one fixture server shares these namespaces. UUID
+    normalization matches wptserve, including equivalent key spellings.
+    Counter and queue updates compose take/put while holding the same lock.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._values: dict[tuple[str, uuid.UUID], object] = {}
+
+    def put(
+        self, key: str, value: object, *, overwrite: bool = False,
+        path: str = "/fetch/api/resources/",
+    ) -> None:
+        parsed_key = (path, uuid.UUID(key))
+        if value is None:
+            raise ValueError("Shared stash values cannot be None")
+        with self._lock:
+            if not overwrite and parsed_key in self._values:
+                raise ValueError("Tried to overwrite existing shared stash value")
+            self._values[parsed_key] = value
+
+    def take(self, key: str, *, path: str = "/fetch/api/resources/") -> object:
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            return self._values.pop(parsed_key, None)
+
+    def increment(self, key: str, *, path: str) -> int:
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            value = int(self._values.get(parsed_key, 0)) + 1
+            self._values[parsed_key] = value
+            return value
+
+    def exchange_queue(self, key: str, value: bytes | None = None, *, path: str) -> bytes | None:
+        """Atomically append a message or take the oldest message in a stash queue."""
+        parsed_key = (path, uuid.UUID(key))
+        with self._lock:
+            queue = self._values.pop(parsed_key, None) or []
+            if value is not None:
+                queue.append(value)
+                result = None
+            else:
+                result = queue.pop(0) if queue else None
+            self._values[parsed_key] = queue
+            return result
+
+
 class CspReportStore:
     """Thread-safe subset of WPT reporting stash used by CSP report checks."""
 
@@ -1831,6 +1918,7 @@ class CspReportStore:
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
         self._reports: dict[str, list[dict]] = {}
+        self._counts: dict[str, int] = {}
 
     def append_reports(self, report_id: str, reports: list[dict]) -> None:
         with self._cv:
@@ -1873,67 +1961,6 @@ class CspReportStore:
             self._cv.notify_all()
 
 
-def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
-    """Model fetch/api/resources/status.py without decoding its byte payload."""
-    params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
-    return (
-        int(params.get("code", ["200"])[0]),
-        params.get("text", ["OMG"])[0],
-        params.get("type", [""])[0],
-        params.get("content", [""])[0].encode("latin-1"),
-    )
-
-
-class FetchStash:
-    """Write-once, read-once stash with independent resource-path namespaces.
-
-    Every origin of one fixture server shares these namespaces. UUID
-    normalization matches wptserve, including equivalent key spellings.
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._values: dict[tuple[str, uuid.UUID], object] = {}
-
-    def put(
-        self, key: str, value: object, *, overwrite: bool = False,
-        path: str = "/fetch/api/resources/",
-    ) -> None:
-        parsed_key = (path, uuid.UUID(key))
-        if value is None:
-            raise ValueError("Shared stash values cannot be None")
-        with self._lock:
-            if not overwrite and parsed_key in self._values:
-                raise ValueError("Tried to overwrite existing shared stash value")
-            self._values[parsed_key] = value
-
-    def increment(self, key: str, *, path: str) -> int:
-        parsed_key = (path, uuid.UUID(key))
-        with self._lock:
-            value = int(self._values.get(parsed_key, 0)) + 1
-            self._values[parsed_key] = value
-            return value
-
-
-    def take(self, key: str, *, path: str = "/fetch/api/resources/") -> object:
-        parsed_key = (path, uuid.UUID(key))
-        with self._lock:
-            return self._values.pop(parsed_key, None)
-
-    def exchange_queue(self, key: str, value: bytes | None = None, *, path: str) -> bytes | None:
-        """Atomically append a message or take the oldest message in a stash queue."""
-        parsed_key = (path, uuid.UUID(key))
-        with self._lock:
-            queue = self._values.pop(parsed_key, None) or []
-            if value is not None:
-                queue.append(value)
-                result = None
-            else:
-                result = queue.pop(0) if queue else None
-            self._values[parsed_key] = queue
-            return result
-
-
 def _directory_listing_body(directory: Path, path: str) -> bytes:
     items = [] if path == "/" else ['<li><a href="../">..</a></li>']
     for entry in sorted(directory.iterdir(), key=lambda entry: entry.name):
@@ -1947,41 +1974,6 @@ def _directory_listing_body(directory: Path, path: str) -> bytes:
     ).encode("utf-8")
 
 
-def _workers_url_encoding_response(query: str) -> bytes:
-    """Model workers/semantics/encodings/003-1.py's UTF-8 query check."""
-    value = next(
-        (
-            value
-            for name, value in parse_qsl(query, keep_blank_values=True)
-            if name == "x"
-        ),
-        None,
-    )
-    return b"PASS" if value == "å" else b"FAIL"
-
-
-def _form_echo_response(body: bytes) -> bytes:
-    return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
-
-
-def _nosniff_javascript_response(query: str) -> tuple[str | None, bytes]:
-    """Model fetch/nosniff/resources/js.py's MIME-controlled script body."""
-
-    params = parse_qsl(query, keep_blank_values=True)
-    outcome = next(
-        (value for name, value in params if name == "outcome"),
-        "f",
-    )
-    content_type = next(
-        (value for name, value in params if name == "type"),
-        None,
-    )
-    type_label = content_type if content_type is not None else "Content-Type missing"
-    result_call = "log('FAIL: " + type_label + "')" if outcome == "f" else "p()"
-    body = ("// nothing to see here\n" + result_call).encode()
-    return content_type, body
-
-
 def _make_handler(
     wpt_root: Path,
     results_store: "ResultsStore",
@@ -1989,9 +1981,6 @@ def _make_handler(
     fetch_stash: FetchStash,
     stopping: threading.Event,
 ) -> type[BaseHTTPRequestHandler]:
-    link_stylesheet_stash = FetchStash()
-    range_stash = FetchStash()
-
     class WptHandler(BaseHTTPRequestHandler):
         def _serve_remote_context_resource(self) -> bool:
             parsed = urlsplit(self.path)
@@ -2056,17 +2045,9 @@ def _make_handler(
                         for value in values:
                             js_value = json.dumps(value.encode("latin-1").decode("utf-8"))
                             initialize_headers += f"window.__requestHeaders.append({js_name}, {js_value});\n"
-                    request_url = self.path
-                    if not request_url.startswith("http://"):
-                        authority = self.headers.get("Host")
-                        if authority is None:
-                            authority = _url_host_literal(str(self.server.server_address[0]))
-                        if urlsplit("//" + authority).port is None:
-                            authority += ":" + str(self.server.server_address[1])
-                        request_url = f"http://{authority}{self.path}"
                     body = f"""
 <!DOCTYPE HTML>
-<base href="{html.escape(request_url)}">
+<base href="{html.escape(self._xhr_request_url())}">
 <script src="/common/dispatcher/dispatcher.js"></script>
 <script src="./executor-common.js"></script>
 <script src="./executor-window.js"></script>
@@ -2115,7 +2096,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return True
             self._send_python_handler_response(IFRAME_STASH_PATH, parsed.query, body)
             return True
-
 
         def _send_python_handler_response(
             self, path: str, query: str, body: bytes | None,
@@ -2204,10 +2184,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
             return True
 
-
-        def _serve_xhr_url_method(self) -> None:
-            self._serve_xhr_url_resource(emit_body=self.command != "HEAD")
-
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_websocket()
@@ -2218,21 +2194,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
-            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
-                self._serve_fetch_inspect_headers(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
-                self._serve_fetch_redirect_resource(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if self._serve_remote_context_resource():
+            if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
                 return
-            if self._serve_document_charset_resource():
+            if self._serve_remote_context_resource():
                 return
             if self._serve_iframe_stash_resource():
                 return
@@ -2244,27 +2210,19 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
-                self._serve_service_worker_script_resource()
-                return
-            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
-                parsed = urlsplit(self.path)
-                self._serve_fetch_preflight_resource(
-                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
-                )
-                return
-            if (
-                self._serve_xhr_response_resource()
-                or self._serve_xhr_url_resource(emit_body=True)
-            ):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
                 return
-            if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+            if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
+            if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
+                FETCH_INSPECT_HEADERS_PATH, *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2286,26 +2244,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
-            if unquote(urlsplit(self.path).path) == FORM_ECHO_PATH:
-                raw = self._read_content_length_request_body()
-                if raw is not None:
-                    self._send_bytes("text/plain", _form_echo_response(raw), emit_body=True)
-                return
-            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
-                self._serve_fetch_inspect_headers(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
-                self._serve_fetch_redirect_resource(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if self._serve_remote_context_resource():
+            if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
                 return
-            if self._serve_document_charset_resource():
+            if self._serve_remote_context_resource():
                 return
             if self._serve_iframe_stash_resource():
                 return
@@ -2317,27 +2260,19 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
-                self._serve_service_worker_script_resource()
-                return
-            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
-                parsed = urlsplit(self.path)
-                self._serve_fetch_preflight_resource(
-                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
-                )
-                return
-            if (
-                self._serve_xhr_response_resource()
-                or self._serve_xhr_url_resource(emit_body=True)
-            ):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
                 return
-            if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+            if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
+            if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
+                FETCH_INSPECT_HEADERS_PATH, *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2349,6 +2284,15 @@ requestExecutor("{executor_uuid}", {start_on_js});
                         _form_submission_response(
                             parsed.query, self.headers.get("Content-Type"), raw
                         ),
+                        emit_body=True,
+                    )
+                return
+            if path == FORM_ECHO_PATH:
+                raw = self._read_content_length_request_body()
+                if raw is not None:
+                    self._send_bytes(
+                        "text/plain",
+                        _form_echo_response(raw),
                         emit_body=True,
                     )
                 return
@@ -2391,21 +2335,11 @@ requestExecutor("{executor_uuid}", {start_on_js});
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
-            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
-                self._serve_fetch_inspect_headers(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
-                self._serve_fetch_redirect_resource(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if self._serve_remote_context_resource():
+            if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
                 return
-            if self._serve_document_charset_resource():
+            if self._serve_remote_context_resource():
                 return
             if self._serve_iframe_stash_resource():
                 return
@@ -2417,20 +2351,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
-                self._serve_service_worker_script_resource()
-                return
-            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
-                parsed = urlsplit(self.path)
-                self._serve_fetch_preflight_resource(
-                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
-                )
-                return
-            if (
-                self._serve_xhr_response_resource()
-                or self._serve_xhr_url_resource(emit_body=True)
-            ):
-                return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path == NAVIGATION_SECOND_VISIT_PATH:
@@ -2438,6 +2358,22 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if path in FETCH_RANGE_RESOURCE_PATHS:
                 self._serve_fetch_range_resource(path, parsed.query, emit_body=self.command != "HEAD")
+                return
+            if self._serve_xhr_resource(emit_body=True):
+                return
+            if unquote(parsed.path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
+            if unquote(parsed.path) in FETCH_REDIRECT_RESOURCE_PATHS:
+                self._serve_fetch_redirect_resource(parsed.query, emit_body=self.command != "HEAD")
+                return
+            if unquote(parsed.path) == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(parsed.query, emit_body=self.command != "HEAD")
+                return
+            if unquote(parsed.path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                self._serve_fetch_preflight_resource(
+                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD"
+                )
                 return
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS:
                 self._serve_fetch_abort_resource(
@@ -2454,25 +2390,17 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self._serve_fetch_status(parsed.query, emit_body=True)
 
         do_PUT = _serve_fetch_resource_method
+
         do_PATCH = _serve_fetch_resource_method
+
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
-            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
-                self._serve_fetch_inspect_headers(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
-                self._serve_fetch_redirect_resource(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if self._serve_remote_context_resource():
+            if self._serve_document_charset_resource():
                 return
             if self._serve_content_type_resource():
                 return
-            if self._serve_document_charset_resource():
+            if self._serve_remote_context_resource():
                 return
             if self._serve_iframe_stash_resource():
                 return
@@ -2484,30 +2412,18 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
-            if unquote(urlparse(self.path).path) in {
-                "/xhr/resources/inspect-headers.py", "/xhr/resources/echo-headers.py",
-                "/xhr/resources/access-control-basic-put-allow.py",
-                "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
-            } | XHR_BODY_RESOURCE_PATHS:
-                self._serve_xhr_response_resource()
-                return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
-                self._serve_service_worker_script_resource()
-                return
-            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
-                parsed = urlsplit(self.path)
-                self._serve_fetch_preflight_resource(
-                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
-                )
-                return
-            if self._serve_xhr_url_resource(emit_body=True):
+            if self._serve_xhr_resource(emit_body=True):
                 return
             parsed = urlparse(self.path)
             if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
                 self._serve_navigation_second_visit()
                 return
-            if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
-                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
+            if unquote(parsed.path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
+            if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | FETCH_PREFLIGHT_RESOURCE_PATHS | {
+                "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py",
+                FETCH_INSPECT_HEADERS_PATH, *FETCH_REDIRECT_RESOURCE_PATHS
             }:
                 self._serve_fetch_resource_method()
                 return
@@ -2701,13 +2617,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
             return True
 
         def _serve(self, *, emit_body: bool) -> None:
-            if self._serve_remote_context_resource():
-                return
-            if self._serve_content_type_resource():
-                return
             if self._serve_document_charset_resource():
                 return
-            if self._serve_iframe_stash_resource():
+            if self._serve_content_type_resource():
                 return
             try:
                 self._serve_response(emit_body=emit_body)
@@ -2715,28 +2627,9 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
-            if unquote(urlsplit(self.path).path) == "/fetch/nosniff/resources/js.py":
-                self._serve_nosniff_javascript(urlsplit(self.path).query, emit_body=emit_body)
+            if self._serve_remote_context_resource():
                 return
-            if unquote(urlsplit(self.path).path) == FORM_ECHO_PATH:
-                self._send_bytes("text/plain", _form_echo_response(b""), emit_body=emit_body)
-                return
-            if unquote(urlsplit(self.path).path) == "/workers/semantics/encodings/003-1.py":
-                self._send_bytes(
-                    "text/plain; charset=utf-8",
-                    _workers_url_encoding_response(urlsplit(self.path).query),
-                    emit_body=emit_body,
-                )
-                return
-            if unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
-                self._serve_fetch_inspect_headers(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
-                return
-            if unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
-                self._serve_fetch_redirect_resource(
-                    urlsplit(self.path).query, emit_body=self.command != "HEAD",
-                )
+            if self._serve_iframe_stash_resource():
                 return
             if self._serve_common_echo_resource():
                 return
@@ -2746,19 +2639,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 return
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
-            if unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
-                self._serve_service_worker_script_resource()
-                return
-            if unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
-                parsed = urlsplit(self.path)
-                self._serve_fetch_preflight_resource(
-                    unquote(parsed.path), parsed.query, emit_body=self.command != "HEAD",
-                )
-                return
-            if (
-                self._serve_xhr_response_resource(emit_body=emit_body)
-                or self._serve_xhr_url_resource(emit_body=emit_body)
-            ):
+            if self._serve_xhr_resource(emit_body=emit_body):
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
@@ -2768,14 +2649,23 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if path in FETCH_RANGE_RESOURCE_PATHS:
                 self._serve_fetch_range_resource(path, parsed.query, emit_body=emit_body)
                 return
+            if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                self._serve_service_worker_script_resource()
+                return
+            if path == LINK_STYLESHEET_COUNTER_PATH:
+                self._serve_link_stylesheet_counter(parsed.query, emit_body=emit_body)
+                return
+            if path in FETCH_REDIRECT_RESOURCE_PATHS:
+                self._serve_fetch_redirect_resource(parsed.query, emit_body=emit_body)
+                return
+            if path in FETCH_PREFLIGHT_RESOURCE_PATHS:
+                self._serve_fetch_preflight_resource(path, parsed.query, emit_body=emit_body)
+                return
             if path == (
                 "/html/semantics/scripting-1/the-script-element/"
                 "serve-with-content-type.py"
             ):
                 self._serve_script_with_content_type(parsed.query, emit_body=emit_body)
-                return
-            if path == LINK_STYLESHEET_COUNTER_PATH:
-                self._serve_link_stylesheet_counter(parsed.query, emit_body=emit_body)
                 return
             if path == "/fetch/api/resources/status.py":
                 self._serve_fetch_status(parsed.query, emit_body=emit_body)
@@ -2803,13 +2693,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if path == "/resources/testdriver-vendor.js":
                 self._send_bytes("application/javascript; charset=utf-8", BENCH_TESTDRIVER_VENDOR_BRIDGE, emit_body=emit_body)
                 return
-            if path == JSON_LOAD_ERROR_PATH:
-                self._serve_script_load_error_events(
-                    parsed.query, emit_body=emit_body, json_module=True,
-                )
-                return
-            if path == JSON_THEN_JS_PATH:
-                self._serve_json_then_js(parsed.query, emit_body=emit_body)
+            if path == FORM_ECHO_PATH:
+                self._send_bytes("text/plain", b"", emit_body=emit_body)
                 return
             if path == FORM_SUBMISSION_PATH:
                 self._send_bytes(
@@ -2823,6 +2708,28 @@ requestExecutor("{executor_uuid}", {start_on_js});
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
                 return
+            if path == "/workers/semantics/encodings/003-1.py":
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    _workers_url_encoding_response(parsed.query),
+                    emit_body=emit_body,
+                )
+                return
+            if path == "/fetch/api/resources/status.py":
+                self._serve_fetch_status(parsed.query, emit_body=emit_body)
+                return
+            if path == "/fetch/api/resources/trickle.py":
+                self._serve_fetch_trickle(parsed.query, emit_body=emit_body)
+                return
+            if path in FETCH_ABORT_RESOURCE_PATHS:
+                self._serve_fetch_abort_resource(path, parsed.query, emit_body=emit_body)
+                return
+            if path == FETCH_INSPECT_HEADERS_PATH:
+                self._serve_fetch_inspect_headers(parsed.query, emit_body=emit_body)
+                return
+            if path == "/fetch/nosniff/resources/js.py":
+                self._serve_nosniff_javascript(parsed.query, emit_body=emit_body)
+                return
             if path == (
                 "/html/semantics/scripting-1/the-script-element/module/"
                 "resources/delayed-modulescript.py"
@@ -2834,6 +2741,14 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 "resources/load-error-events.py"
             ):
                 self._serve_script_load_error_events(parsed.query, emit_body=emit_body)
+                return
+            if path == JSON_LOAD_ERROR_PATH:
+                self._serve_script_load_error_events(
+                    parsed.query, emit_body=emit_body, json_module=True,
+                )
+                return
+            if path == JSON_THEN_JS_PATH:
+                self._serve_json_then_js(parsed.query, emit_body=emit_body)
                 return
             if path in {"/wasm/webapi/status.py", "/wasm/webapi/webapi/status.py"}:
                 status_code = _wasm_webapi_status_code(parsed.query)
@@ -2848,9 +2763,30 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 )
                 return
 
-            if path in {
-                "/common/redirect-opt-in.py",
-            }:
+            if path == (
+                "/html/semantics/scripting-1/the-script-element/module/"
+                "dynamic-import/beta/redirect.py"
+            ):
+                params = parse_qs(parsed.query, keep_blank_values=True)
+                try:
+                    status_code = int(params.get("status", ["302"])[0])
+                except ValueError:
+                    status_code = 302
+                location = params.get("location", [""])[0]
+                if not 100 <= status_code <= 599 or any(
+                    character in location for character in "\r\n"
+                ):
+                    self.send_error(400)
+                    return
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    b"",
+                    emit_body=emit_body,
+                    extra_headers=[("Location", location)],
+                    status_code=status_code,
+                )
+                return
+            if path == "/common/redirect-opt-in.py":
                 redirect = _redirect_fixture_response(parsed.query)
                 if redirect is None:
                     self.send_error(400)
@@ -2860,11 +2796,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     ("Cache-Control", "no-cache"),
                     ("Pragma", "no-cache"),
                     ("Location", location),
+                    ("Timing-Allow-Origin", "*"),
                 ]
-                if path == "/common/redirect-opt-in.py":
-                    redirect_headers.append(("Timing-Allow-Origin", "*"))
-                else:
-                    redirect_headers.append(("Access-Control-Allow-Origin", "*"))
                 self._send_bytes(
                     "text/plain; charset=utf-8",
                     b"",
@@ -3232,7 +3165,7 @@ requestExecutor("{executor_uuid}", {start_on_js});
         def _serve_link_stylesheet_counter(self, query: str, *, emit_body: bool) -> None:
             params = parse_qs(query, keep_blank_values=True)
             try:
-                count = int(link_stylesheet_stash.take(params["id"][0]))
+                count = int(fetch_stash.take(params["id"][0], path=LINK_STYLESHEET_COUNTER_PATH))
             except (KeyError, TypeError, ValueError):
                 count = 0
             if "count" in params:
@@ -3242,8 +3175,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 )
                 return
             try:
-                link_stylesheet_stash.put(
-                    params["id"][0], str(count + 1),
+                fetch_stash.put(
+                    params["id"][0], str(count + 1), path=LINK_STYLESHEET_COUNTER_PATH,
                 )
             except (KeyError, ValueError):
                 self.send_error(500)
@@ -3274,7 +3207,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     self.wfile.flush()
             except OSError:
                 return
-
 
         def _serve_service_worker_script_resource(self) -> None:
             parsed = urlsplit(self.path)
@@ -3413,7 +3345,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 extra_headers=headers, status_code=status, cache_control=None,
             )
 
-
         def _serve_fetch_preflight_resource(
             self, path: str, query: str, *, emit_body: bool
         ) -> None:
@@ -3495,53 +3426,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
             except (KeyError, ValueError, TypeError):
                 self.send_error(500)
 
-
-        def _serve_xhr_url_resource(self, *, emit_body: bool) -> bool:
-            parsed = urlsplit(self.path)
-            path = unquote(parsed.path)
-            if path not in XHR_URL_RESOURCE_PATHS:
-                return False
-            try:
-                if path == "/xhr/resources/requri.py":
-                    params = parse_qs(parsed.query, keep_blank_values=True)
-                    uri = self.path
-                    if "full" in params and not uri.startswith("http://"):
-                        authority = self.headers.get("Host")
-                        if authority is None:
-                            authority = _url_host_literal(
-                                str(self.server.server_address[0])
-                            )
-                        if urlsplit("//" + authority).port is None:
-                            authority += ":" + str(self.server.server_address[1])
-                        uri = f"http://{authority}{uri}"
-                    status, reason, headers, body = 200, None, [], uri.encode("utf-8")
-                else:
-                    status, reason, headers, body, delay = _xhr_redirect_fixture_response(
-                        parsed.path, parsed.query
-                    )
-                    if delay is not None:
-                        time.sleep(delay)
-            except (ValueError, KeyError, OverflowError):
-                self.send_error(500)
-                return True
-            # These handlers reply without reading uploads. Close connections
-            # with unread bodies so a redirect can arrive before upload finishes.
-            if (
-                self.headers.get("Transfer-Encoding") is not None
-                or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
-            ):
-                self.close_connection = True
-                headers.append(("Connection", "close"))
-            self._send_bytes(
-                None,
-                body,
-                emit_body=emit_body,
-                extra_headers=headers,
-                status_code=status,
-                status_text=reason,
-            )
-            return True
-
         def _serve_fetch_redirect_resource(self, query: str, *, emit_body: bool) -> None:
             connection_headers = []
             if (self.headers.get("Transfer-Encoding") is not None
@@ -3622,7 +3506,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
             except (KeyError, ValueError, TypeError, OverflowError):
                 self.send_error(500)
 
-
         def _serve_fetch_inspect_headers(self, query: str, *, emit_body: bool) -> None:
             try:
                 status_code = _pipe_response_status(query) or 200
@@ -3641,7 +3524,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 status_code=status_code,
             )
 
-
         def _serve_nosniff_javascript(self, query: str, *, emit_body: bool) -> None:
             content_type, body = _nosniff_javascript_response(query)
             self.send_response(200)
@@ -3655,7 +3537,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                     self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     return
-
 
         def _serve_xhr_delay(self, query: str, *, emit_body: bool) -> None:
             delay_seconds = _wpt_delay_seconds(query)
@@ -3686,7 +3567,8 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.send_error(400, "Not enough parameters or file not found")
                 return
             self._send_bytes(
-                content_type, body, emit_body=emit_body,
+                None, body, emit_body=emit_body,
+                extra_headers=[("Content-Type", content_type)],
             )
 
         def _serve_delayed_module_script(self, query: str, *, emit_body: bool) -> None:
@@ -3701,40 +3583,35 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 emit_body=emit_body,
             )
 
-        def __getattr__(self, name: str):
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_INSPECT_HEADERS_PATH:
-                return self._serve_fetch_resource_method
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) == PRELOAD_COUNT_PATH:
-                return self._serve_preload_count_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_REDIRECT_RESOURCE_PATH:
-                return self._serve_fetch_resource_method
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) in REMOTE_CONTEXT_RESOURCE_PATHS:
-                return self._serve_remote_context_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) == FETCH_CONTENT_TYPE_PATH:
-                return self._serve_content_type_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) in DOCUMENT_CHARSET_FIXTURES:
-                return self._serve_document_charset_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) == IFRAME_STASH_PATH:
-                return self._serve_iframe_stash_resource
-
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) in XHR_URL_RESOURCE_PATHS:
-                return self._serve_xhr_url_method
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
-                return self._serve_common_echo_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
-                return self._serve_common_redirect_resource
-            if name.startswith("do_") and unquote(urlparse(self.path).path) == NAVIGATION_SECOND_VISIT_PATH:
-                return self._serve_navigation_second_visit
-            if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
-                return self._serve_empty_location_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
-                return self._serve_service_worker_script_resource
-            if name.startswith("do_") and unquote(urlsplit(self.path).path) in FETCH_PREFLIGHT_RESOURCE_PATHS:
-                return self._serve_fetch_resource_method
-            if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
-                return self._serve_xhr_response_resource
-            if name.startswith("do_") and unquote(urlparse(self.path).path) in FETCH_RANGE_RESOURCE_PATHS:
-                return self._serve_fetch_resource_method
+        def __getattr__(self, name: str) -> Callable[[], None]:
+            if name.startswith("do_"):
+                path = unquote(urlsplit(getattr(self, "path", "")).path)
+                if path == COMMON_ECHO_PATH:
+                    return self._serve_common_echo_resource
+                if path == COMMON_REDIRECT_PATH:
+                    return self._serve_common_redirect_resource
+                if path == IFRAME_STASH_PATH:
+                    return self._serve_iframe_stash_resource
+                if path in REMOTE_CONTEXT_RESOURCE_PATHS:
+                    return self._serve_remote_context_resource
+                if path == PRELOAD_COUNT_PATH:
+                    return self._serve_preload_count_resource
+                if path == FETCH_EMPTY_LOCATION_PATH:
+                    return self._serve_empty_location_resource
+                if path == FETCH_CONTENT_TYPE_PATH:
+                    return self._serve_content_type_resource
+                if path in DOCUMENT_CHARSET_FIXTURES:
+                    return self._serve_document_charset_resource
+                if path == NAVIGATION_SECOND_VISIT_PATH:
+                    return self._serve_navigation_second_visit
+                if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
+                    return self._serve_service_worker_script_resource
+                if path in XHR_RESOURCE_PATHS:
+                    return self._serve_xhr_method
+                if path in FETCH_PREFLIGHT_RESOURCE_PATHS | FETCH_REDIRECT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
+                    FETCH_INSPECT_HEADERS_PATH
+                }:
+                    return self._serve_fetch_resource_method
             raise AttributeError(name)
 
         def _read_content_length_request_body(self, *, ignore_transfer_encoding: bool = False) -> bytes | None:
@@ -3764,39 +3641,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 self.close_connection = True
                 return None
             return raw
-
-        def _serve_xhr_cors_echo(self, parsed, *, emit_body: bool) -> None:
-            try:
-                params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
-                if "delay" in params:
-                    time.sleep(int(params["delay"][0]))
-                request_body = self._read_content_length_request_body()
-                if request_body is None:
-                    return
-                status, reason, body = 200, None, b"Test"
-                headers = [
-                    ("Access-Control-Allow-Origin", "*"),
-                    ("Access-Control-Allow-Credentials", "true"),
-                    ("Access-Control-Allow-Methods", "GET, POST, PUT, FOO"),
-                    ("Access-Control-Allow-Headers", "x-test, x-foo"),
-                    ("Access-Control-Expose-Headers",
-                     "x-request-method, x-request-content-type, x-request-query, "
-                     "x-request-content-length, x-request-data"),
-                ]
-                if "safelist_content_type" in params:
-                    headers.append(("Access-Control-Allow-Headers", "content-type"))
-                headers.extend([
-                    ("X-Request-Method", self.command),
-                    ("X-Request-Query", parsed.query or "NO"),
-                    ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
-                    ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
-                    ("X-Request-Data", request_body.decode("latin-1")),
-                ])
-            except (ValueError, OSError, OverflowError):
-                self.send_error(500)
-                return
-            self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
-                             status_code=status, status_text=reason)
 
         def _serve_common_redirect_resource(self) -> bool:
             parsed = urlsplit(self.path)
@@ -3840,53 +3684,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
             )
             return True
 
-        def _serve_xhr_body_resource(self, parsed, *, emit_body: bool) -> None:
-            path = unquote(parsed.path)
-            upload_consumed = False
-            try:
-                if path == "/xhr/resources/content.py":
-                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
-                    if "content" in params:
-                        body = params["content"][0].encode("latin-1")
-                    else:
-                        body = self._read_content_length_request_body()
-                        if body is None:
-                            return
-                        upload_consumed = True
-                    content_type = "text/plain"
-                    if "response_charset_label" in params:
-                        content_type += ";charset=" + params["response_charset_label"][0]
-                    headers = [
-                        ("Content-Type", content_type),
-                        ("X-Request-Method", self.command),
-                        ("X-Request-Query", parsed.query or "NO"),
-                        ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
-                        ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
-                    ]
-                elif path == "/xhr/resources/echo-content-type.py":
-                    headers = [("Content-Type", "text/plain")]
-                    body = self.headers.get("Content-Type", "").encode("latin-1")
-                else:
-                    content_type, body = XHR_DOCUMENT_FIXTURES[path]
-                    headers = [("Content-Type", content_type)]
-            except (ValueError, KeyError, OverflowError, OSError):
-                self.send_error(500)
-                return
-            # Unused uploads must not delay an early response or be parsed as
-            # another request. Consumed uploads can finish normally.
-            if path == "/xhr/resources/echo-content-type.py" or not upload_consumed and (
-                self.headers.get("Transfer-Encoding") is not None
-                or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
-            ):
-                self.close_connection = True
-                headers.append(("Connection", "close"))
-            self._send_bytes(
-                None, body, emit_body=emit_body, extra_headers=headers, cache_control=None,
-                auto_content_length=(
-                    path != "/xhr/resources/echo-content-type.py" or "Content-Type" in self.headers
-                ),
-            )
-
         def _xhr_request_url(self) -> str:
             if self.path.startswith("http://"):
                 return self.path
@@ -3925,151 +3722,16 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 # Clients may abort once they receive a partial response.
                 return
 
-        def _serve_xhr_infinite_redirects(self, parsed, *, emit_body: bool) -> None:
-            try:
-                params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
-                page = "default" if params.get("page", [None])[0] == "alternate" else "alternate"
-                redirect_type = 301 if params.get("type", [None])[0] == "301" else 302
-                mix = int(params.get("mix", [None])[0] == "1")
-                if mix:
-                    redirect_type = 302 if redirect_type == 301 else 301
-                request_url = urlsplit(self._xhr_request_url())
-                location = urlunsplit((
-                    request_url.scheme, request_url.netloc, request_url.path,
-                    f"page={page}&type={redirect_type}&mix={mix}", "",
-                ))
-                # Upstream returns 301 regardless of the next URL's `type`.
-                status, reason = 301, None
-                headers = [("Pragma", "no-cache"), ("Location", location)]
-                cache_control = "no-cache"
-                body = ("Hello guest. You have been redirected to " + location).encode("utf-8")
-            except (ValueError, OSError, OverflowError):
-                self.send_error(500)
-                return
-            self.close_connection = True
-            headers.append(("Connection", "close"))
-            self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
-                             status_code=status, status_text=reason, cache_control=cache_control)
-
-        def _serve_xhr_preflight_fixture(self, parsed, *, emit_body: bool) -> None:
-            status, headers, body = 200, [], b""
-            try:
-                if unquote(parsed.path) == "/xhr/resources/access-control-basic-put-allow.py":
-                    headers = [("Content-Type", "text/plain")]
-                    if self.command in {"OPTIONS", "PUT"}:
-                        origin = self.headers.get("Origin")
-                        if origin is None:
-                            raise ValueError("upstream handler requires Origin")
-                        headers.extend([
-                            ("Access-Control-Allow-Credentials", "true"),
-                            ("Access-Control-Allow-Origin", origin),
-                        ])
-                        if self.command == "OPTIONS":
-                            headers.append(("Access-Control-Allow-Methods", "PUT"))
-                        else:
-                            request_body = self._read_content_length_request_body()
-                            if request_body is None:
-                                return
-                            body = b"PASS: Cross-domain access allowed.\n" + request_body
-                    else:
-                        body = b"Wrong method: " + self.command.encode("latin-1")
-                elif self.command == "OPTIONS":
-                    headers = [
-                        ("Access-Control-Allow-Origin", "*"),
-                        ("Access-Control-Allow-Headers", "*"),
-                    ]
-                elif self.command == "GET":
-                    headers = [("Access-Control-Allow-Origin", "*")]
-                    if self.headers.get("X-Test"):
-                        headers.append(("Content-Type", "text/plain"))
-                        body = b"PASS"
-                    else:
-                        status = 400
-            except ValueError:
-                self.send_error(500)
-                return
-            self.close_connection = True
-            headers.append(("Connection", "close"))
-            self._send_bytes(None, body, emit_body=emit_body, extra_headers=headers,
-                             status_code=status, cache_control=None)
-
-        def _serve_xhr_response_resource(self, *, emit_body: bool = True) -> bool:
-            parsed = urlparse(self.path)
-            path = unquote(parsed.path)
-            if path not in XHR_RESPONSE_RESOURCE_PATHS:
-                return False
-            if path in XHR_BODY_RESOURCE_PATHS:
-                self._serve_xhr_body_resource(parsed, emit_body=emit_body)
-                return True
-            if path in {
-                "/xhr/resources/access-control-basic-put-allow.py",
-                "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py",
-            }:
-                self._serve_xhr_preflight_fixture(parsed, emit_body=emit_body)
-                return True
-            if path == "/xhr/resources/corsenabled.py":
-                self._serve_xhr_cors_echo(parsed, emit_body=emit_body)
-                return True
-            if path == "/xhr/resources/bad-chunk-encoding.py":
-                self._serve_xhr_bad_chunk_encoding()
-                return True
-            if path == "/xhr/resources/infinite-redirects.py":
-                self._serve_xhr_infinite_redirects(parsed, emit_body=emit_body)
-                return True
-            try:
-                if path == "/xhr/resources/inspect-headers.py":
-                    status, reason, content_type = 200, None, None
-                    headers, body = _xhr_inspect_headers_fixture_response(
-                        parsed.query, list(self.headers.raw_items()),
-                    )
-                elif path == "/xhr/resources/headers.py":
-                    status, reason, content_type, body = 200, None, "text/plain", b"TEST"
-                    headers = [
-                        ("X-Custom-Header", "test"),
-                        ("Set-Cookie", "test"),
-                        ("Set-Cookie2", "test"),
-                        ("X-Custom-Header-Empty", ""),
-                        ("X-Custom-Header-Comma", "1"),
-                        ("X-Custom-Header-Comma", "2"),
-                        # send_header encodes strings as Latin-1; preserve the
-                        # UTF-8 ellipsis bytes written by the upstream fixture.
-                        ("X-Custom-Header-Bytes", "\u00e2\u0080\u00a6"),
-                    ]
-                elif path == "/xhr/resources/echo-headers.py":
-                    status, reason, content_type = 200, None, "text/plain"
-                    headers = []
-                    body = str(self.headers).encode("utf-8")
-                elif path == "/xhr/resources/status.py":
-                    status, reason, content_type, body = _fetch_status_response(parsed.query)
-                    headers = [("X-Request-Method", self.command)]
-                else:
-                    source = wpt_root / "xhr/resources/well-formed.xml"
-                    modified = formatdate(source.stat().st_mtime, usegmt=True)
-                    body = source.read_text(encoding="utf-8").encode("utf-8")
-                    status, reason, content_type = 200, None, "application/xml"
-                    headers = [("Last-Modified", modified)]
-            except (ValueError, OSError, OverflowError):
-                self.send_error(500)
-                return True
-            # These upstream handlers can respond without consuming the upload.
-            # Close the connection so unread bytes cannot become another request.
-            self.close_connection = True
-            headers.append(("Connection", "close"))
-            self._send_bytes(
-                content_type, body, emit_body=emit_body, extra_headers=headers,
-                status_code=status, status_text=reason,
-            )
-            return True
-
         def _serve_fetch_range_resource(
             self, path: str, query: str, *, emit_body: bool
         ) -> None:
             if not self._consume_request_body():
                 return
             params = parse_qs(query, keep_blank_values=True, encoding="latin-1")
+            stash_path = "/fetch/range/"
             try:
                 if path.endswith("/stash-take.py"):
-                    body = json.dumps(range_stash.take(params["key"][0])).encode("ascii")
+                    body = json.dumps(fetch_stash.take(params["key"][0], path=stash_path)).encode("ascii")
                     self._send_bytes("application/json", body, emit_body=emit_body, cache_control=None)
                     return
                 if self.command == "OPTIONS":
@@ -4081,10 +3743,10 @@ requestExecutor("{executor_uuid}", {start_on_js});
                 range_key = params.get("range-received-key", [""])[0]
                 encoding_key = params.get("accept-encoding-key", [""])[0]
                 if range_key and range_header:
-                    range_stash.put(range_key, "range-header-received", overwrite=True)
+                    fetch_stash.put(range_key, "range-header-received", path=stash_path, overwrite=True)
                 if encoding_key:
-                    range_stash.put(encoding_key, ", ".join(self.headers.get_all("Accept-Encoding", [])),
-                                    overwrite=True)
+                    fetch_stash.put(encoding_key, ", ".join(self.headers.get_all("Accept-Encoding", [])),
+                                    path=stash_path, overwrite=True)
 
                 # Match long-wav.py's 8 kHz, 8-bit mono, five-minute response,
                 # including its header-inclusive Content-Length convention.
@@ -4138,7 +3800,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
                         break
             except OSError:
                 pass  # Upstream ends its stream when a write reports disconnect.
-
 
         def _serve_navigation_second_visit(self) -> None:
             if not self._consume_request_body():
@@ -4303,7 +3964,6 @@ requestExecutor("{executor_uuid}", {start_on_js});
             else:
                 content_type, body = "application/javascript", b"export default 'hello';"
             self._send_bytes(content_type, body, emit_body=emit_body, cache_control=None)
-
 
         def _serve_script_load_error_events(
             self, query: str, *, emit_body: bool, json_module: bool = False,
@@ -4498,6 +4158,208 @@ requestExecutor("{executor_uuid}", {start_on_js});
             return _valid_timeout_multiplier(
                 getattr(self.server, "wpt_harness_timeout_multiplier", 1.0)
             )
+
+        def _serve_xhr_method(self) -> None:
+            self._serve_xhr_resource(emit_body=self.command != "HEAD")
+
+        def _serve_xhr_resource(self, *, emit_body: bool) -> bool:
+            parsed = urlsplit(self.path)
+            path = unquote(parsed.path)
+            if path not in XHR_RESOURCE_PATHS:
+                return False
+            if path == "/xhr/resources/bad-chunk-encoding.py":
+                self._serve_xhr_bad_chunk_encoding()
+                return True
+            upload_consumed = False
+            cache_control = "no-store"
+            try:
+                if path == "/xhr/resources/requri.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True)
+                    uri = self._xhr_request_url() if "full" in params else self.path
+                    status, reason, headers, body = 200, None, [], uri.encode("utf-8")
+                elif path == "/xhr/resources/infinite-redirects.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    page = "default" if params.get("page", [None])[0] == "alternate" else "alternate"
+                    redirect_type = 301 if params.get("type", [None])[0] == "301" else 302
+                    mix = int(params.get("mix", [None])[0] == "1")
+                    if mix:
+                        redirect_type = 302 if redirect_type == 301 else 301
+                    request_url = urlsplit(self._xhr_request_url())
+                    location = urlunsplit((
+                        request_url.scheme, request_url.netloc, request_url.path,
+                        f"page={page}&type={redirect_type}&mix={mix}", "",
+                    ))
+                    # Upstream returns 301 regardless of the next URL's `type`.
+                    status, reason = 301, None
+                    headers = [("Pragma", "no-cache"), ("Location", location)]
+                    cache_control = "no-cache"
+                    body = ("Hello guest. You have been redirected to " + location).encode("utf-8")
+                elif path == "/xhr/resources/headers.py":
+                    status, reason, body = 200, None, b"TEST"
+                    headers = [
+                        ("Content-Type", "text/plain"),
+                        ("X-Custom-Header", "test"),
+                        ("Set-Cookie", "test"),
+                        ("Set-Cookie2", "test"),
+                        ("X-Custom-Header-Empty", ""),
+                        ("X-Custom-Header-Comma", "1"),
+                        ("X-Custom-Header-Comma", "2"),
+                        # Upstream writes the UTF-8 bytes for an ellipsis.
+                        # send_header encodes its string argument as Latin-1.
+                        ("X-Custom-Header-Bytes", "\u00e2\u0080\u00a6"),
+                    ]
+                elif path == "/xhr/resources/inspect-headers.py":
+                    status, reason = 200, None
+                    headers, body = _xhr_inspect_headers_fixture_response(
+                        parsed.query, list(self.headers.raw_items())
+                    )
+                elif path == "/xhr/resources/echo-headers.py":
+                    status, reason = 200, None
+                    headers = [("Content-Type", "text/plain")]
+                    # wptserve exposes the same HTTPMessage as raw_headers.
+                    body = str(self.headers).encode("utf-8")
+                elif path == "/xhr/resources/corsenabled.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    if "delay" in params:
+                        time.sleep(int(params["delay"][0]))
+                    request_body = self._read_content_length_request_body()
+                    if request_body is None:
+                        return True
+                    upload_consumed = True
+                    status, reason, body = 200, None, b"Test"
+                    headers = [
+                        ("Access-Control-Allow-Origin", "*"),
+                        ("Access-Control-Allow-Credentials", "true"),
+                        ("Access-Control-Allow-Methods", "GET, POST, PUT, FOO"),
+                        ("Access-Control-Allow-Headers", "x-test, x-foo"),
+                        ("Access-Control-Expose-Headers",
+                         "x-request-method, x-request-content-type, x-request-query, "
+                         "x-request-content-length, x-request-data"),
+                    ]
+                    if "safelist_content_type" in params:
+                        headers.append(("Access-Control-Allow-Headers", "content-type"))
+                    headers.extend([
+                        ("X-Request-Method", self.command),
+                        ("X-Request-Query", parsed.query or "NO"),
+                        ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
+                        ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
+                        ("X-Request-Data", request_body.decode("latin-1")),
+                    ])
+                elif path == "/xhr/resources/access-control-basic-put-allow.py":
+                    status, reason, body = 200, None, b""
+                    headers = [("Content-Type", "text/plain")]
+                    cache_control = None
+                    if self.command in {"OPTIONS", "PUT"}:
+                        origin = self.headers.get("Origin")
+                        if origin is None:
+                            raise ValueError("upstream handler requires Origin")
+                        headers.extend([
+                            ("Access-Control-Allow-Credentials", "true"),
+                            ("Access-Control-Allow-Origin", origin),
+                        ])
+                        if self.command == "OPTIONS":
+                            headers.append(("Access-Control-Allow-Methods", "PUT"))
+                        else:
+                            request_body = self._read_content_length_request_body()
+                            if request_body is None:
+                                return True
+                            upload_consumed = True
+                            body = b"PASS: Cross-domain access allowed.\n" + request_body
+                    else:
+                        body = b"Wrong method: " + self.command.encode("latin-1")
+                elif path == "/xhr/resources/access-control-preflight-request-allow-headers-returns-star.py":
+                    status, reason, headers, body = 200, None, [], b""
+                    cache_control = None
+                    if self.command == "OPTIONS":
+                        headers = [
+                            ("Access-Control-Allow-Origin", "*"),
+                            ("Access-Control-Allow-Headers", "*"),
+                        ]
+                    elif self.command == "GET":
+                        headers = [("Access-Control-Allow-Origin", "*")]
+                        if self.headers.get("X-Test"):
+                            headers.append(("Content-Type", "text/plain"))
+                            body = b"PASS"
+                        else:
+                            status = 400
+                elif path == "/xhr/resources/content.py":
+                    cache_control = None
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    if "content" in params:
+                        body = params["content"][0].encode("latin-1")
+                    else:
+                        body = self._read_content_length_request_body()
+                        if body is None:
+                            return True
+                        upload_consumed = True
+                    content_type = "text/plain"
+                    if "response_charset_label" in params:
+                        content_type += ";charset=" + params["response_charset_label"][0]
+                    status, reason = 200, None
+                    headers = [
+                        ("Content-Type", content_type),
+                        ("X-Request-Method", self.command),
+                        ("X-Request-Query", parsed.query or "NO"),
+                        ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
+                        ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
+                    ]
+                elif path == "/xhr/resources/echo-content-type.py":
+                    cache_control = None
+                    status, reason = 200, None
+                    headers = [("Content-Type", "text/plain")]
+                    body = self.headers.get("Content-Type", "").encode("latin-1")
+                elif path == "/xhr/resources/status.py":
+                    status, reason, content_type, body = _fetch_status_response(parsed.query)
+                    headers = [
+                        ("Content-Type", content_type),
+                        ("X-Request-Method", self.command),
+                    ]
+                elif path == "/xhr/resources/last-modified.py":
+                    source = wpt_root / "xhr/resources/well-formed.xml"
+                    modified = formatdate(source.stat().st_mtime, usegmt=True)
+                    body = source.read_text(encoding="utf-8").encode("utf-8")
+                    status, reason = 200, None
+                    headers = [
+                        ("Content-Type", "application/xml"),
+                        ("Last-Modified", modified),
+                    ]
+                elif path in XHR_DOCUMENT_FIXTURES:
+                    cache_control = None
+                    content_type, body = XHR_DOCUMENT_FIXTURES[path]
+                    status, reason = 200, None
+                    headers = [("Content-Type", content_type)]
+                else:
+                    status, reason, headers, body, delay = _xhr_redirect_fixture_response(
+                        parsed.path, parsed.query
+                    )
+                    if delay is not None:
+                        time.sleep(delay)
+            except (ValueError, KeyError, OverflowError, OSError):
+                self.send_error(500)
+                return True
+            # Close connections with unread uploads so early responses and
+            # redirects do not wait for the request body to finish.
+            if path in {
+                "/xhr/resources/echo-content-type.py", "/xhr/resources/echo-headers.py"
+            } or not upload_consumed and (
+                self.headers.get("Transfer-Encoding") is not None
+                or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
+            ):
+                self.close_connection = True
+                headers.append(("Connection", "close"))
+            self._send_bytes(
+                None,
+                body,
+                emit_body=emit_body,
+                extra_headers=headers,
+                status_code=status,
+                status_text=reason,
+                cache_control=cache_control,
+                auto_content_length=(
+                    path != "/xhr/resources/echo-content-type.py" or "Content-Type" in self.headers
+                ),
+            )
+            return True
 
     return WptHandler
 

@@ -13,6 +13,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
         )
         self.assertEqual(_pipe_trickle_delay_seconds("pipe=trickle(d999)"), 10.0)
         self.assertEqual(_pipe_trickle_delay_seconds("notpipe=trickle(d1)"), 0.0)
+
     def test_fixture_server_parses_delay_handler_duration(self) -> None:
         self.assertEqual(_wpt_delay_seconds("ms=3000"), 3.0)
         self.assertEqual(_wpt_delay_seconds("ms=2.5"), 0.0025)
@@ -21,6 +22,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
         self.assertIsNone(_wpt_delay_seconds("ms=invalid"))
         self.assertIsNone(_wpt_delay_seconds("ms=-1"))
         self.assertIsNone(_wpt_delay_seconds("ms=nan"))
+
     def test_fixture_server_models_xhr_delay_py_methods(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -66,6 +68,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 ("YO", 200, b"TEST_DELAY", "text/plain", "*", "YO"),
             ],
         )
+
     def test_fixture_server_models_delayed_module_script_handler(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -111,6 +114,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 ("HEAD", 200, b"", "text/javascript"),
             ],
         )
+
     def test_fixture_server_models_common_redirect_opt_in_handler(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -129,6 +133,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 self.assertEqual(response.headers.get("Location"), "/target")
                 self.assertEqual(response.headers.get("Timing-Allow-Origin"), "*")
                 connection.close()
+
     def test_fixture_server_drains_xhr_delay_yo_body_before_next_request(
         self,
     ) -> None:
@@ -163,6 +168,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                     self.assertIs(connection.sock, first_socket)
                 finally:
                     connection.close()
+
     def test_fixture_server_drains_chunked_xhr_delay_body_before_next_request(
         self,
     ) -> None:
@@ -202,6 +208,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                     self.assertIs(connection.sock, first_socket)
                 finally:
                     connection.close()
+
     def test_fixture_server_parses_wpt_header_pipe(self) -> None:
         def applied_pipe_headers(query: str) -> list[tuple[str, str]]:
             return _apply_header_operations(
@@ -237,6 +244,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
             [("X-Test", "bad  Injected: x")],
         )
         self.assertEqual(applied_pipe_headers("notpipe=header(X,Y)"), [])
+
     def test_fixture_server_parses_wpt_status_pipe(self) -> None:
         self.assertEqual(_pipe_response_status("pipe=status(204)&cachebust=1"), 204)
         self.assertEqual(
@@ -250,6 +258,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
         self.assertIsNone(_pipe_response_status("pipe=status(099)"))
         self.assertIsNone(_pipe_response_status("pipe=status(600)"))
         self.assertIsNone(_pipe_response_status("notpipe=status(204)"))
+
     def test_fixture_server_parses_wpt_headers_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             fixture = Path(root) / "case.html"
@@ -265,6 +274,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 _sidecar_response_headers(fixture),
                 [("Referrer-Policy", "no-referrer"), ("X-Test", "ok")],
             )
+
     def test_fixture_server_parses_sub_headers_sidecar_for_sub_files(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             fixture = Path(root) / "worker.sub.js"
@@ -278,6 +288,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 _sidecar_response_headers(fixture),
                 [("Content-Security-Policy", "connect-src 'none'")],
             )
+
     def test_fixture_server_combines_immediate_directory_and_file_headers(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -306,6 +317,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                     ("X-File", "exact"),
                 ],
             )
+
     def test_fixture_server_prefers_file_sub_headers_when_both_exist(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             fixture = Path(root) / "case.sub.html"
@@ -323,6 +335,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 _sidecar_response_headers(fixture),
                 [("X-Source", "substituted")],
             )
+
     def test_fixture_server_prefers_directory_sub_headers_when_both_exist(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -341,6 +354,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 _sidecar_response_headers(fixture),
                 [("X-Source", "substituted")],
             )
+
     def test_fixture_server_content_type_sidecar_overrides_static_guess(self) -> None:
         content_type, headers = _response_content_type_and_extra_headers(
             "application/octet-stream",
@@ -352,6 +366,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
 
         self.assertEqual(content_type, "text/javascript; charset=utf-8")
         self.assertEqual(headers, [("X-Test", "ok")])
+
     def test_fixture_server_combines_sidecar_and_pipe_headers_for_static_responses(
         self,
     ) -> None:
@@ -390,6 +405,7 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                     ),
                 ],
             )
+
     def test_fixture_server_reads_sub_headers_for_plain_static_resource(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             fixture = Path(root) / "policy.html"
@@ -692,3 +708,44 @@ class WptCrossFixtureResponsesTests(WptCrossTestCase):
                 ("text/javascript", "nosniff", b"// nothing to see here\np()"),
             ],
         )
+
+    def test_fixture_server_models_dynamic_import_redirect_without_cors(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                for method in ("GET", "HEAD"):
+                    for query, status, location in (
+                        ("location=%2Ftarget", 302, "/target"),
+                        (
+                            "status=307&location=https%3A%2F%2Fexample.test%2Fx",
+                            307,
+                            "https://example.test/x",
+                        ),
+                        ("status=invalid&location=%2Ftarget", 302, "/target"),
+                        (
+                            "status=302&status=307&location=%2Fa&location=%2Fb",
+                            302,
+                            "/a",
+                        ),
+                    ):
+                        with self.subTest(method=method, query=query):
+                            connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                            try:
+                                connection.request(
+                                    method,
+                                    "/html/semantics/scripting-1/the-script-element/module/"
+                                    f"dynamic-import/beta/redirect.py?{query}",
+                                )
+                                response = connection.getresponse()
+                                self.assertEqual(response.status, status)
+                                self.assertEqual(response.headers.get("Location"), location)
+                                self.assertIsNone(
+                                    response.headers.get("Access-Control-Allow-Origin")
+                                )
+                                self.assertEqual(response.read(), b"")
+                            finally:
+                                connection.close()

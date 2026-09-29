@@ -119,6 +119,29 @@ class WptPipeFixtureTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(headers.get_all("X-Test"), expected)
 
+    def test_explicit_cache_control_is_not_overridden_by_the_fixture_default(self) -> None:
+        for method in ("GET", "HEAD"):
+            with self.subTest(method=method, source="default"):
+                status, headers, _ = self.request("", method=method)
+                self.assertEqual(status, 200)
+                self.assertEqual(headers.get_all("Cache-Control"), ["no-store"])
+        (self.root / "module.json.headers").write_text("cAcHe-CoNtRoL: max-age=600\n")
+        for pipe, expected in (
+            ("", ["max-age=600"]),
+            ("header(Cache-Control,max-age=30)", ["max-age=30"]),
+            ("header(cache-control,public,true)", ["max-age=600", "public"]),
+            ("header(Cache-Control,)", [""]),
+        ):
+            for method in ("GET", "HEAD"):
+                with self.subTest(method=method, pipe=pipe):
+                    status, headers, body = self.request(urlencode({"pipe": pipe}), method=method)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(headers.get_all("Cache-Control"), expected)
+                    self.assertEqual(body, b"" if method == "HEAD" else b'{"value": 1}')
+        (self.root / "module.json.headers").unlink()
+        _, headers, _ = self.request(urlencode({"pipe": "header(Cache-Control,max-age=60)"}))
+        self.assertEqual(headers.get_all("Cache-Control"), ["max-age=60"])
+
     def test_only_last_nonempty_pipe_parameter_is_applied(self) -> None:
         cases = (
             (["unknown", "header(X-Test,last)"], 200, "last"),
@@ -156,6 +179,22 @@ class WptPipeFixtureTests(unittest.TestCase):
                 self.assertEqual(headers["X-Test"], "before  Injected: value")
                 self.assertIsNone(headers["Injected"])
 
+    def test_status_conversion_and_errors_also_work_for_inspection_methods(self) -> None:
+        for method in ("GET", "HEAD", "POST", "OPTIONS", "CUSTOM"):
+            for command, expected_status in (
+                ("status(00201)", 201),
+                ("status( +201 )", 201),
+                ("status(invalid)", 500),
+                ("status(201)|unknown", 500),
+            ):
+                with self.subTest(method=method, command=command):
+                    status, _, body = self.request(
+                        urlencode({"pipe": command}), method=method,
+                        path="/fetch/api/resources/inspect-headers.py",
+                    )
+                    self.assertEqual(status, expected_status)
+                    if method == "HEAD":
+                        self.assertEqual(body, b"")
 
 
 if __name__ == "__main__":
