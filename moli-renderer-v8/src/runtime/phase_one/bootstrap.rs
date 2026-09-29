@@ -140,11 +140,16 @@ impl ConcurrentParseTimeRuntime {
         runtime_hooks: PageVmRuntimeHooks,
         final_url: Url,
         document_content_type: String,
+        document_character_set: &str,
         stage: PageVmInitStage,
         source: String,
         started: Instant,
     ) -> Result<ParseTimePageVmCreationOutcome> {
         let mut state = ParseTimeDriverState::new_xml(final_url.clone());
+        state.document_character_set = document_character_set.to_owned();
+        state
+            .buffered_document_preloads
+            .set_document_character_set(document_character_set);
         state
             .parser_session
             .set_xml_document_content_type(document_content_type);

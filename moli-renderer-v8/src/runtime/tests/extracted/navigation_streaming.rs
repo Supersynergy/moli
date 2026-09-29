@@ -1,6 +1,103 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn external_raw_xml_document_decodes_response_bytes() {
+    const SOURCE: &str = "<feed xmlns='http://www.w3.org/2005/Atom'><title>café</title></feed>";
+    let legacy_body = b"<feed xmlns='http://www.w3.org/2005/Atom'><title>caf\xe9</title></feed>";
+    let cases = [
+        (
+            "application/atom+xml; charset=windows-1252",
+            legacy_body.to_vec(),
+            "windows-1252",
+        ),
+        (
+            "application/atom+xml",
+            [
+                b"<?xml version='1.0' encoding='windows-1252'?>".as_slice(),
+                legacy_body,
+            ]
+            .concat(),
+            "windows-1252",
+        ),
+        (
+            "application/atom+xml; charset=windows-1252",
+            [
+                vec![0xff, 0xfe],
+                SOURCE.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            ]
+            .concat(),
+            "UTF-16LE",
+        ),
+        (
+            "application/atom+xml",
+            [
+                vec![0xfe, 0xff],
+                SOURCE.encode_utf16().flat_map(u16::to_be_bytes).collect(),
+            ]
+            .concat(),
+            "UTF-16BE",
+        ),
+    ];
+    let runtime = JsRuntime::initialize();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    for (content_type, body, encoding) in cases {
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let (body_tx, raw_body) = ExternalRawDocumentBodyStream::channel(completion_rx);
+        let producer = tokio::spawn(async move {
+            for byte in body {
+                body_tx
+                    .send(vec![byte])
+                    .await
+                    .expect("body byte should send");
+            }
+            completion_tx.send(Ok(())).expect("body should complete");
+        });
+        let prepared = prepare_test_external_raw_document_with_content_type(
+            &runtime,
+            &loader,
+            url::Url::parse("https://example.test/feed").unwrap(),
+            content_type,
+            raw_body,
+        )
+        .await;
+        let permit = prepared.issue_commit_permit();
+        let (mut page, _, _, _, pending_download) =
+            prepared.commit(permit).await.expect("XML should commit");
+        assert!(pending_download.is_none());
+        producer.await.expect("body producer should finish");
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::EvaluateExpression {
+                expression: concat!(
+                    "JSON.stringify((() => { const root=document.getElementsByTagNameNS(",
+                    "'http://www.w3.org/2005/Atom','feed')[0]; ",
+                    "return [root.localName,root.namespaceURI,root.textContent,",
+                    "document.contentType,document.characterSet]; })())",
+                )
+                .to_owned(),
+                await_promise: false,
+            })
+            .await
+            .expect("XML response metadata and text should evaluate");
+        assert_eq!(
+            renderer_json_value(reply),
+            Some(serde_json::Value::String(
+                serde_json::json!([
+                    "feed",
+                    "http://www.w3.org/2005/Atom",
+                    "café",
+                    "application/atom+xml",
+                    encoding
+                ])
+                .to_string()
+            )),
+            "{content_type}: {encoding}"
+        );
+        page.close_async().await.expect("XML page should close");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_xml_document_executes_parser_blocking_xhtml_script() {
     let runtime = JsRuntime::initialize();
     let loader =

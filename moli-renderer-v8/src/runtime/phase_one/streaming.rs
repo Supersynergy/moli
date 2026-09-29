@@ -3,7 +3,7 @@ use super::super::script_preloads::{ServiceWorkerScriptPreloadContext, admit_pen
 use super::parser_blocking_pending::main_parser_blocking_classic_script_item;
 use super::scaffold::continue_phase_one_until_streaming_boundary_on_execution_context;
 use super::*;
-use crate::document_response_decoder::new_document_response_decoder;
+use crate::document_response_decoder::{decode_document_response, new_document_response_decoder};
 use moli_encoding::HtmlDocumentStreamingDecoder;
 use moli_web_mime::response_headers_indicate_attachment_download;
 use tokio::sync::{mpsc, oneshot};
@@ -301,9 +301,15 @@ impl ConcurrentParseTimeRuntime {
         let mut body_source = RawDocumentBodySource::External(raw_body);
         if response_headers_indicate_xml_document(&response_headers) {
             let body = collect_streaming_raw_body(&mut body_source).await?;
-            let source = String::from_utf8_lossy(&body).into_owned();
             let content_type = moli_web_mime::response_document_content_type(&response_headers)
                 .unwrap_or_else(|| "application/xml".to_owned());
+            let (source, character_set) = decode_document_response(
+                &body,
+                &response_headers,
+                Some(&content_type),
+                &final_url,
+                None,
+            );
             let outcome = Self::finish_creation_from_xml_bootstrap(
                 page_id,
                 local_executor,
@@ -312,6 +318,7 @@ impl ConcurrentParseTimeRuntime {
                 runtime_hooks,
                 final_url,
                 content_type,
+                character_set,
                 stage,
                 source,
                 started,
