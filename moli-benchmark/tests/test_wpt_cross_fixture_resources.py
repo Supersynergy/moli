@@ -532,7 +532,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
         self,
     ) -> None:
         body = (
-            b"host={{host}} "
+            b"host={{host}} domain={{domains[]}} "
             b"location={{location[hostname]}} "
             b"HTTP_ORIGIN: 'http://' + ORIGINAL_HOST + HTTP_PORT_ELIDED,"
         )
@@ -544,7 +544,7 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
                 request_hostname="www1.localhost",
                 primary_hostname="localhost",
             ),
-            b"host=localhost location=www1.localhost "
+            b"host=localhost domain=localhost location=www1.localhost "
             b"HTTP_ORIGIN: 'http://' + ORIGINAL_HOST + HTTP_PORT_ELIDED,",
         )
     def test_host_header_hostname_preserves_ipv6_brackets(self) -> None:
@@ -653,3 +653,75 @@ class WptCrossFixtureResourcesTests(WptCrossTestCase):
             b"('http://foo:bar@' + REMOTE_HOST + ':34567') : "
             b"('http://foo:bar@' + REMOTE_HOST + HTTP_PORT2_ELIDED),",
         )
+
+    def test_fixture_server_uses_configured_primary_hostname_for_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text("", encoding="utf-8")
+            (root_path / "hosts.sub.txt").write_text(
+                "{{host}}|{{domains[]}}|{{hosts[][]}}|{{domains[www1]}}|"
+                "{{hosts[][élève]}}|{{hosts[alt][www2]}}|{{location[hostname]}}",
+                encoding="utf-8",
+            )
+            (root_path / "hosts.sub.txt.sub.headers").write_text(
+                "Access-Control-Allow-Origin: http://{{hosts[][]}}:{{ports[http][0]}}\n",
+                encoding="utf-8",
+            )
+            with WptFixtureServer(root_path, primary_hostname="web-platform.localhost") as server:
+                self.assertEqual(server.base_url, f"http://web-platform.localhost:{server.port}")
+                self.assertEqual(
+                    server.alternate_base_url,
+                    f"http://web-platform.localhost:{server.alternate_port}",
+                )
+                for hostname in ("web-platform.localhost", "www1.web-platform.localhost"):
+                    with self.subTest(hostname=hostname):
+                        connection = HTTPConnection("127.0.0.1", server.port, timeout=2)
+                        try:
+                            connection.request(
+                                "GET", "/hosts.sub.txt",
+                                headers={"Host": f"{hostname}:{server.port}"},
+                            )
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(
+                                response.read().decode(),
+                                "web-platform.localhost|web-platform.localhost|web-platform.localhost|"
+                                "www1.web-platform.localhost|xn--lve-6lad.web-platform.localhost|"
+                                f"www2.alt.localhost|{hostname}",
+                            )
+                            self.assertEqual(
+                                response.getheader("Access-Control-Allow-Origin"), server.base_url,
+                            )
+                        finally:
+                            connection.close()
+
+    def test_fixture_server_substitutes_primary_domain_in_cors_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            fixture = Path(root) / "style.css"
+            fixture.write_text("body {}", encoding="utf-8")
+            fixture.with_name("style.css.sub.headers").write_text(
+                "Access-Control-Allow-Origin: {{location[scheme]}}://{{domains[]}}{{GET[acao_port]}}\n"
+                "Access-Control-Allow-Credentials: true\n",
+                encoding="utf-8",
+            )
+
+            for port in (80, 12345):
+                with self.subTest(port=port):
+                    suffix = "" if port == 80 else f":{port}"
+                    query = "" if port == 80 else f"acao_port=%3A{port}"
+                    self.assertEqual(
+                        _static_response_headers(
+                            fixture,
+                            query,
+                            port=port,
+                            request_hostname="www.example.test",
+                            primary_hostname="example.test",
+                        ),
+                        [
+                            ("Access-Control-Allow-Origin", f"http://example.test{suffix}"),
+                            ("Access-Control-Allow-Credentials", "true"),
+                        ],
+                    )
+
+

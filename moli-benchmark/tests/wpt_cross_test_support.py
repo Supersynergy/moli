@@ -167,7 +167,8 @@ class WptCrossTestCase(unittest.TestCase):
             extra_args: list[str] | None = None,
         ) -> int:
             class FakeServer:
-                def __init__(self, wpt_root: Path) -> None:
+                def __init__(self, wpt_root: Path, *, primary_hostname: str) -> None:
+                    assert primary_hostname == "web-platform.localhost"
                     self.wpt_root = Path(wpt_root)
                     self.base_url = "http://127.0.0.1:8000"
                     self.alternate_base_url = "http://127.0.0.1:8001"

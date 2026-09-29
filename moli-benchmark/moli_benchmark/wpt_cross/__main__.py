@@ -691,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
     engine_results: dict[str, list[dict[str, Any]]] = {}
     engine_metadata: dict[str, dict[str, Any]] = {}
 
-    with WptFixtureServer(args.wpt_root) as server:
+    with WptFixtureServer(args.wpt_root, primary_hostname="web-platform.localhost") as server:
         meta_path = output_dir / "fixture-server.json"
         meta_path.write_text(
             json.dumps(

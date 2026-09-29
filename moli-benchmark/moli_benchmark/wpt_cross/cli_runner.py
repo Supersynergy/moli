@@ -305,7 +305,7 @@ def _run_cli_case_worker(job: _CliCaseWorkerInput) -> CaseResult:
         )
 
     binary = Path(job.binary)
-    with WptFixtureServer(Path(job.wpt_root)) as server:
+    with WptFixtureServer(Path(job.wpt_root), primary_hostname="web-platform.localhost") as server:
         server.set_harness_timeout_multipliers(
             {job.case_path: job.harness_timeout_multiplier},
             default_multiplier=job.harness_timeout_multiplier,
