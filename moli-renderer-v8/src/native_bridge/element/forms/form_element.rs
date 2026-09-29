@@ -265,7 +265,15 @@ pub(in crate::native_bridge) fn form_elements_getter_function<'s>(
         tag_name_html_document: None,
         resolution_cache: Default::default(),
     };
-    let collection = collections::build_live_collection_wrapper(scope, runtime_ptr, descriptor);
+    let Some(collection) = collections::build_live_collection_wrapper_for_receiver(
+        scope,
+        runtime_ptr,
+        args.this(),
+        descriptor,
+    ) else {
+        rv.set_null();
+        return;
+    };
     rv.set(collection.into());
 }
 
@@ -479,7 +487,15 @@ pub(in crate::native_bridge) fn fieldset_elements_getter_function<'s>(
         tag_name_html_document: None,
         resolution_cache: Default::default(),
     };
-    let collection = collections::build_live_collection_wrapper(scope, runtime_ptr, descriptor);
+    let Some(collection) = collections::build_live_collection_wrapper_for_receiver(
+        scope,
+        runtime_ptr,
+        args.this(),
+        descriptor,
+    ) else {
+        rv.set_null();
+        return;
+    };
     rv.set(collection.into());
 }
 
@@ -573,31 +589,23 @@ pub(in crate::native_bridge) fn form_target_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(in crate::native_bridge) fn form_named_getter<'s>(
+// Getter and descriptor reads share value construction and identity policy. Queries,
+// deletion, and definition keep their own property-operation rules below.
+fn form_named_property_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) -> v8::Intercepted {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
-    else {
-        return v8::Intercepted::kNo;
-    };
-    let Ok(key) = v8::Local::<v8::String>::try_from(key) else {
-        return v8::Intercepted::kNo;
-    };
-    if object_has_expando_named_property(scope, args.holder(), key.into()) {
-        return v8::Intercepted::kNo;
+) -> Option<v8::Local<'s, v8::Value>> {
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver).ok()?;
+    let key = v8::Local::<v8::String>::try_from(key).ok()?;
+    if object_has_expando_named_property(scope, receiver, key.into()) {
+        return None;
     }
     let key = key.to_rust_string_lossy(scope);
     if is_array_index_property_name(&key) {
-        return v8::Intercepted::kNo;
+        return None;
     }
-    let Some(context) = args.holder().get_creation_context(scope) else {
-        return v8::Intercepted::kNo;
-    };
-    let scope = &mut v8::ContextScope::new(scope, context);
     let runtime = unsafe { &mut *runtime_ptr };
     let (query_kind, matches) = form_named_item_matches(runtime, handle, &key);
     if matches.len() > 1 {
@@ -610,29 +618,33 @@ pub(in crate::native_bridge) fn form_named_getter<'s>(
             tag_name_html_document: None,
             resolution_cache: Default::default(),
         };
-        let list = collections::build_live_collection_wrapper(scope, runtime_ptr, descriptor);
-        rv.set(list.into());
-        return v8::Intercepted::kYes;
+        return collections::build_live_collection_wrapper_for_receiver(
+            scope,
+            runtime_ptr,
+            receiver,
+            descriptor,
+        )
+        .map(Into::into);
     }
-    let Some(match_handle) = matches.first().copied() else {
-        let Some(past_handle) = runtime.form_past_named_item(handle, &key) else {
-            return v8::Intercepted::kNo;
-        };
-        let Some(node) =
-            wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), past_handle)
-        else {
-            return v8::Intercepted::kNo;
-        };
-        rv.set(node);
-        return v8::Intercepted::kYes;
+    let match_handle = if let Some(match_handle) = matches.first().copied() {
+        runtime.remember_form_past_named_item(handle, key, match_handle);
+        match_handle
+    } else {
+        runtime.form_past_named_item(handle, &key)?
     };
-    runtime.remember_form_past_named_item(handle, key, match_handle);
-    let Some(node) =
-        wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), match_handle)
-    else {
+    wrapped_handle_value_for_receiver(scope, runtime_ptr, receiver, match_handle)
+}
+
+pub(in crate::native_bridge) fn form_named_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    key: v8::Local<'_, v8::Name>,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) -> v8::Intercepted {
+    let Some(value) = form_named_property_value(scope, args.holder(), key) else {
         return v8::Intercepted::kNo;
     };
-    rv.set(node);
+    rv.set(value);
     v8::Intercepted::kYes
 }
 
@@ -642,57 +654,8 @@ pub(in crate::native_bridge) fn form_named_descriptor<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
-    else {
+    let Some(value) = form_named_property_value(scope, args.holder(), key) else {
         return v8::Intercepted::kNo;
-    };
-    let Ok(key) = v8::Local::<v8::String>::try_from(key) else {
-        return v8::Intercepted::kNo;
-    };
-    if object_has_expando_named_property(scope, args.holder(), key.into()) {
-        return v8::Intercepted::kNo;
-    }
-    let key = key.to_rust_string_lossy(scope);
-    if is_array_index_property_name(&key) {
-        return v8::Intercepted::kNo;
-    }
-    let Some(context) = args.holder().get_creation_context(scope) else {
-        return v8::Intercepted::kNo;
-    };
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let runtime = unsafe { &mut *runtime_ptr };
-    let (query_kind, matches) = form_named_item_matches(runtime, handle, &key);
-    let value = if matches.len() > 1 {
-        let descriptor = LiveCollectionDescriptor {
-            collection_kind: CollectionKind::RadioNodeList,
-            query_kind,
-            root: handle,
-            query: Some(key),
-            include_root: false,
-            tag_name_html_document: None,
-            resolution_cache: Default::default(),
-        };
-        let list = collections::build_live_collection_wrapper(scope, runtime_ptr, descriptor);
-        list.into()
-    } else if let Some(match_handle) = matches.first().copied() {
-        runtime.remember_form_past_named_item(handle, key, match_handle);
-        let Some(node) =
-            wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), match_handle)
-        else {
-            return v8::Intercepted::kNo;
-        };
-        node
-    } else {
-        let Some(past_handle) = runtime.form_past_named_item(handle, &key) else {
-            return v8::Intercepted::kNo;
-        };
-        let Some(node) =
-            wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), past_handle)
-        else {
-            return v8::Intercepted::kNo;
-        };
-        node
     };
     let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(value, false, false).bind(scope)
     else {

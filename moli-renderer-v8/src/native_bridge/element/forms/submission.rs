@@ -169,19 +169,7 @@ fn wrap_handle_value<'s>(
     runtime_ptr: *mut JsContextHost,
     handle: Option<DomHandle>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let handle = handle?;
-    if let Some(detached) = crate::native_bridge::document::detached_native_object_for_handle(
-        scope,
-        runtime_ptr,
-        handle,
-    ) {
-        return Some(detached.into());
-    }
-    let runtime = unsafe { &mut *runtime_ptr };
-    let wrapped = runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, handle)?;
-    Some(wrapped.into())
+    crate::native_bridge::bridge::wrapped_handle_value(scope, runtime_ptr, handle?)
 }
 
 fn wrap_handle_object<'s>(
@@ -189,10 +177,8 @@ fn wrap_handle_object<'s>(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime
-        .native_bridge_mut()
-        .wrap_handle(scope, runtime_ptr, handle)
+    crate::native_bridge::bridge::wrapped_handle_value(scope, runtime_ptr, handle)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
 pub(crate) fn submit_form_with_submit_event(
@@ -347,8 +333,10 @@ pub(in crate::native_bridge) fn form_reset_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_args(scope, &args) else {
-        crate::native_bridge::document::detached_form_reset_callback(scope, args, rv);
+    let Ok((runtime_ptr, form_handle)) =
+        node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
+        rv.set_undefined();
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
@@ -362,7 +350,7 @@ pub(in crate::native_bridge) fn form_reset_callback<'s>(
         return;
     }
 
-    if dispatch_form_reset_event(scope, runtime_ptr, form_handle).allows_default() {
+    if dispatch_form_reset_event(scope, runtime_ptr, form_handle, args.this()).allows_default() {
         let _ = reset_form_default_action(
             scope,
             runtime_ptr,
@@ -377,20 +365,26 @@ fn dispatch_form_reset_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     form_handle: DomHandle,
+    receiver: v8::Local<'s, v8::Object>,
 ) -> NodePublicEventDispatchOutcome {
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return NodePublicEventDispatchOutcome {
+            default_prevented: true,
+            had_exception: false,
+        };
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(event) = construct_simple_event(scope, "reset", true, true, false) else {
         return NodePublicEventDispatchOutcome {
             default_prevented: true,
             had_exception: false,
         };
     };
-    if let Some(form_wrapper) = wrap_handle_object(scope, runtime_ptr, form_handle) {
-        align_event_constructor_function_realm_with_target(scope, event, form_wrapper);
-    }
+    align_event_constructor_function_realm_with_target(scope, event, receiver);
     dispatch_public_event(scope, runtime_ptr, form_handle, event)
 }
 
-pub(crate) fn align_event_constructor_function_realm_with_target<'s>(
+fn align_event_constructor_function_realm_with_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     target: v8::Local<'s, v8::Object>,
@@ -404,7 +398,7 @@ pub(crate) fn align_event_constructor_function_realm_with_target<'s>(
     align_event_constructor_function_realm_with_constructor(scope, event, target_constructor);
 }
 
-pub(crate) fn align_event_constructor_function_realm_with_constructor<'s>(
+fn align_event_constructor_function_realm_with_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     target_constructor: v8::Local<'s, v8::Object>,
@@ -455,8 +449,10 @@ pub(in crate::native_bridge) fn form_submit_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_args(scope, &args) else {
-        crate::native_bridge::document::detached_form_submit_callback(scope, args, rv);
+    let Ok((runtime_ptr, form_handle)) =
+        node_runtime_and_handle_from_args_or_detached(scope, &args)
+    else {
+        rv.set_undefined();
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
@@ -575,6 +571,17 @@ pub(in crate::native_bridge) fn submit_form_default_action(
             source_document,
         )
     };
+    // A parsed/detached Document has no browsing context to navigate. Resolve
+    // that from the native document, independently of the form's wrapper kind.
+    if source_document.is_none_or(|document| {
+        let runtime = unsafe { &*runtime_ptr };
+        document != runtime.document_handle()
+            && runtime
+                .child_browsing_context_handle_by_document_handle(scope, document)
+                .is_none()
+    }) {
+        return false;
+    }
     let Some(request) =
         build_form_submission_request(scope, runtime_ptr, form_handle, submitter, action)
     else {

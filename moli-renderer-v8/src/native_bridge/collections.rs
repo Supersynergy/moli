@@ -49,8 +49,8 @@ pub(in crate::native_bridge) use builders::{
 };
 pub(super) use builders::{
     build_collection_wrapper, build_live_child_node_list_for_node, build_live_collection_for_node,
-    build_live_collection_wrapper, build_live_html_children_collection_for_node,
-    build_node_list_from_handles,
+    build_live_collection_wrapper, build_live_collection_wrapper_for_receiver,
+    build_live_html_children_collection_for_node, build_node_list_from_handles,
 };
 pub(in crate::native_bridge) use shared::array_index_property_name;
 // Keep these re-exports visible only inside `collections`; sibling modules use `super::*`

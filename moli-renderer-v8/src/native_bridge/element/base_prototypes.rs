@@ -1,27 +1,6 @@
 use super::*;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::HTMLFormElement, enumerable)]
-struct HtmlFormElementTemplateMethodsDeclaration {
-    #[webapi(
-        intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
-        symbol = "iterator"
-    )]
-    iterator: (),
-
-    #[webapi(method = "requestSubmit", length = 1, callback = form_request_submit_callback)]
-    request_submit: (),
-    #[webapi(method, length = 0, callback = form_submit_callback)]
-    submit: (),
-    #[webapi(method, length = 0, callback = form_reset_callback)]
-    reset: (),
-    #[webapi(method = "checkValidity", length = 0, callback = form_check_validity_callback)]
-    check_validity: (),
-    #[webapi(method = "reportValidity", length = 0, callback = form_report_validity_callback)]
-    report_validity: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::HTMLSelectElement)]
 struct HtmlSelectElementIndexedPropertiesDeclaration {
     #[webapi(
@@ -29,14 +8,6 @@ struct HtmlSelectElementIndexedPropertiesDeclaration {
         symbol = "iterator"
     )]
     iterator: (),
-}
-
-pub(crate) fn install_html_form_element_prototype_bindings(
-    scope: &mut v8::PinScope<'_, '_, ()>,
-    template: v8::Local<'_, v8::FunctionTemplate>,
-) {
-    let proto = template.prototype_template(scope);
-    HtmlFormElementTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
 }
 
 pub(crate) fn install_html_select_element_prototype_bindings(

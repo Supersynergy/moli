@@ -1326,15 +1326,6 @@ pub(super) fn node_runtime_and_handle_from_args_or_detached(
 ) -> std::result::Result<(*mut JsContextHost, DomHandle), String> {
     let this = v8::Global::new(scope, args.this());
     let this = v8::Local::new(scope, this);
-    if let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
-        && let Some(handle) =
-            super::document::detached_native_handle_for_runtime(scope, runtime_ptr, this)
-    {
-        return Ok((runtime_ptr, handle));
-    }
-    if let Ok(node) = node_runtime_and_handle_from_object(scope, this) {
-        return Ok(node);
-    }
     node_runtime_and_handle_from_object_or_detached(scope, this)
 }
 

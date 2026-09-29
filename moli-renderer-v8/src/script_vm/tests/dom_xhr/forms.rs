@@ -3,6 +3,7 @@ use super::*;
 mod dialog;
 mod event_activation;
 mod named_lookup;
+mod wrappers;
 
 #[test]
 fn object_set_custom_validity_updates_validity_state() {

@@ -599,9 +599,6 @@ pub(super) fn install_constructor_template_bindings<'s>(
                 scope, proto,
             );
         }
-        "HTMLFormElement" => {
-            element::install_html_form_element_prototype_bindings(scope, template);
-        }
         "HTMLSelectElement" => {
             element::install_html_select_element_prototype_bindings(scope, template);
         }

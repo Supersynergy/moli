@@ -4,8 +4,8 @@ use crate::{
         install_detached_anchor_instance_properties,
         install_detached_form_associated_instance_properties,
         install_detached_form_control_instance_properties,
-        install_detached_form_instance_properties, install_detached_iframe_instance_properties,
-        install_detached_option_instance_properties, install_detached_select_instance_properties,
+        install_detached_iframe_instance_properties, install_detached_option_instance_properties,
+        install_detached_select_instance_properties,
         install_detached_text_replacement_instance_properties,
     },
     native_bridge::node::{remove_child_in_reaction_scope, remove_child_to_current_reaction_queue},
@@ -486,7 +486,14 @@ fn adopt_live_node_as_detached_with_parent<'s>(
             // custom-element constructors that later receive the proxy through
             // the construction stack can still read/write id, style, and the
             // other own detached element surface.
-            install_detached_element_instance_properties(scope, node);
+            let uses_native_form_bindings =
+                local_name == "form" && raw_namespace_uri.as_deref() == Some(XHTML_NS);
+            // Native form templates already keep interface members on prototypes.
+            // Rebinding must preserve the user's own properties on the existing object.
+            if !uses_native_form_bindings {
+                install_detached_element_instance_properties(scope, node);
+                remove_detached_element_instance_selector_matching_methods(scope, node);
+            }
             if document_kind == "html"
                 && raw_namespace_uri
                     .as_deref()
@@ -513,7 +520,6 @@ fn adopt_live_node_as_detached_with_parent<'s>(
                 set_string_tag(scope, node, "Element");
             }
             copy_detached_element_bridge_members(scope, node);
-            remove_detached_element_instance_selector_matching_methods(scope, node);
             if document_kind == "html" && matches!(local_name.as_str(), "a" | "area") {
                 install_detached_anchor_instance_properties(scope, node);
             }
@@ -525,9 +531,6 @@ fn adopt_live_node_as_detached_with_parent<'s>(
             }
             if document_kind == "html" && local_name == "iframe" {
                 install_detached_iframe_instance_properties(scope, node);
-            }
-            if document_kind == "html" && local_name == "form" {
-                install_detached_form_instance_properties(scope, node);
             }
             if document_kind == "html"
                 && matches!(

@@ -1,6 +1,13 @@
 use super::NativeDomBridge;
 
 impl NativeDomBridge {
+    pub(crate) fn node_wrapper_template(
+        &mut self,
+        interface: &'static str,
+    ) -> Option<&v8::ObjectTemplate> {
+        self.bindings.node_wrapper_template(interface)
+    }
+
     pub(crate) fn collection_wrapper_template(&mut self) -> &v8::ObjectTemplate {
         self.bindings.collection_wrapper_template()
     }

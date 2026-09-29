@@ -12,9 +12,9 @@ use crate::{
         install_detached_anchor_instance_properties,
         install_detached_form_associated_instance_properties,
         install_detached_form_control_instance_properties,
-        install_detached_form_instance_properties, install_detached_iframe_instance_properties,
-        install_detached_image_instance_properties, install_detached_label_instance_properties,
-        install_detached_option_instance_properties, install_detached_select_instance_properties,
+        install_detached_iframe_instance_properties, install_detached_image_instance_properties,
+        install_detached_label_instance_properties, install_detached_option_instance_properties,
+        install_detached_select_instance_properties,
         install_detached_text_replacement_instance_properties,
     },
 };
@@ -489,9 +489,13 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     {
         let declaration = DetachedElementObjectDeclaration::new(proto, to_string_tag);
         if html_interface_like && local_name == "form" {
-            let template = v8::ObjectTemplate::new(scope);
-            crate::native_bridge::element::install_form_property_handlers(template);
-            let object = template.new_instance(scope)?;
+            // Reuse the native interface template, including its property handlers.
+            // The detached identity is attached below; the reflector slot stays empty.
+            let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+            let object = unsafe { &mut *runtime_ptr }
+                .native_bridge_mut()
+                .node_wrapper_template("HTMLFormElement")?
+                .new_instance(scope)?;
             declaration.bind_into(scope, object).ok()?;
             object
         } else {
@@ -580,9 +584,11 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         define_detached_native_handle(scope, object, handle);
         native_handle = Some((runtime_ptr, handle));
     }
-    install_detached_element_instance_properties(scope, object);
+    if !(html_interface_like && local_name == "form") {
+        install_detached_element_instance_properties(scope, object);
+        remove_detached_element_instance_selector_matching_methods(scope, object);
+    }
     copy_detached_element_bridge_members(scope, object);
-    remove_detached_element_instance_selector_matching_methods(scope, object);
     if html_interface_like && matches!(local_name.as_str(), "a" | "area") {
         install_detached_anchor_instance_properties(scope, object);
     }
@@ -608,9 +614,6 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     }
     if html_like && local_name == "iframe" {
         install_detached_iframe_instance_properties(scope, object);
-    }
-    if html_like && local_name == "form" {
-        install_detached_form_instance_properties(scope, object);
     }
     if html_like
         && matches!(

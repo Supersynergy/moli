@@ -42,7 +42,6 @@ pub(crate) use self::state_tree::{
     read_detached_native_has_attribute,
     remove_detached_native_attribute_appending_to_current_reaction_queue,
     remove_detached_native_attribute_ns_appending_to_current_reaction_queue,
-    with_detached_native_element_reaction_scope,
     write_detached_native_attribute_appending_to_current_reaction_queue,
     write_detached_native_attribute_ns_appending_to_current_reaction_queue,
 };

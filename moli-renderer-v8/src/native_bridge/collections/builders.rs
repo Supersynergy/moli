@@ -356,6 +356,22 @@ fn build_static_handle_node_list_wrapper<'s>(
 }
 
 /// Build a live-resolving NodeList or HTMLCollection V8 object (queries DOM on each access).
+pub(in crate::native_bridge) fn build_live_collection_wrapper_for_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    receiver: v8::Local<'_, v8::Object>,
+    descriptor: LiveCollectionDescriptor,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context = receiver.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    Some(build_live_collection_wrapper(
+        scope,
+        runtime_ptr,
+        descriptor,
+    ))
+}
+
+/// Build a live collection in the current realm, preserving that realm's cache.
 pub(in crate::native_bridge) fn build_live_collection_wrapper<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,

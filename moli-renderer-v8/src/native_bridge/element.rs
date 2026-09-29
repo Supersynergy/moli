@@ -145,8 +145,7 @@ use self::table_elements::*;
 mod shadow_template;
 pub(in crate::native_bridge) use self::base_prototypes::BODY_LEGACY_PROTOTYPE_ACCESSORS;
 pub(crate) use self::base_prototypes::{
-    computed_style_property_for_handle, install_html_form_element_prototype_bindings,
-    install_html_select_element_prototype_bindings,
+    computed_style_property_for_handle, install_html_select_element_prototype_bindings,
 };
 use self::shadow_template::*;
 
@@ -292,14 +291,6 @@ pub(crate) use focus::{
 };
 use focus::{is_disabled_form_control, is_focusable};
 pub(super) use focus::{node_blur_callback, node_focus_callback};
-pub(in crate::native_bridge) use forms::{
-    FormAssociatedResetCallbackTiming, reset_form_default_action, resize_select_options,
-    select_add_insertion_point, select_options_resize_target,
-};
-pub(crate) use forms::{
-    align_event_constructor_function_realm_with_constructor,
-    align_event_constructor_function_realm_with_target,
-};
 pub(super) use forms::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
     button_disabled_getter_function, button_disabled_setter_function,
@@ -409,6 +400,9 @@ pub(crate) use forms::{
     queue_text_control_document_selection_change_event, replace_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
+};
+pub(in crate::native_bridge) use forms::{
+    resize_select_options, select_add_insertion_point, select_options_resize_target,
 };
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 
@@ -657,8 +651,7 @@ use stylesheets::{
     style_blocking_setter_function, style_disabled_getter_function, style_disabled_setter_function,
 };
 pub(super) use template_install::{
-    install_form_property_handlers, install_specialized_instance_properties,
-    install_specialized_template,
+    install_specialized_instance_properties, install_specialized_template,
 };
 pub(super) use tree_mutation::{
     node_insert_adjacent_element_callback, node_insert_adjacent_html_callback,
@@ -1578,12 +1571,7 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLObjectElement" => install!(HtmlObjectElementPrototypeDeclaration),
         "HTMLLabelElement" => install!(HtmlLabelElementPrototypeDeclaration),
         "HTMLFormElement" => {
-            install!(HtmlFormElementPrototypeAccessorsDeclaration);
-            install_html_rel_template_bindings(
-                scope,
-                prototype,
-                ElementReflectionInterface::HtmlFormElement,
-            );
+            install_html_form_element_prototype_bindings(scope, prototype);
         }
         "HTMLMediaElement" => install!(
             HtmlMediaElementPrototypeDeclaration,

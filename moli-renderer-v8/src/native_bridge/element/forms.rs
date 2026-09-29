@@ -17,8 +17,7 @@ use super::super::{
         append_child_in_reaction_scope, append_child_to_current_reaction_queue,
         current_or_live_delegate_node_arg_handle, insert_before_in_reaction_scope,
         insert_before_to_current_reaction_queue, node_is_element, node_or_foreign_arg_handle,
-        node_or_foreign_arg_handle_allow_detached, node_runtime_and_handle_from_args,
-        node_runtime_and_handle_from_args_or_detached,
+        node_or_foreign_arg_handle_allow_detached, node_runtime_and_handle_from_args_or_detached,
         node_runtime_and_handle_from_object_or_detached, remove_child_in_reaction_scope,
         remove_child_to_current_reaction_queue, set_text_content_in_reaction_scope,
         set_wrapped_node_or_null,
@@ -228,10 +227,6 @@ pub(in crate::native_bridge) use self::simple_controls::{
 pub(in crate::native_bridge) use self::submission::{
     FormAssociatedResetCallbackTiming, form_request_submit_callback, form_reset_callback,
     form_submit_callback, reset_form_default_action,
-};
-pub(crate) use self::submission::{
-    align_event_constructor_function_realm_with_constructor,
-    align_event_constructor_function_realm_with_target,
 };
 pub(crate) use self::submission::{
     perform_implicit_submission_from_control, submit_form_with_submit_event,
