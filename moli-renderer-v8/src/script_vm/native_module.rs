@@ -854,7 +854,26 @@ fn get_i64_reaction_data_slot<'s>(
     lossless.then_some(value)
 }
 
-fn synthetic_module_evaluation_steps<'s>(
+fn synthetic_text_module_evaluation_steps<'s>(
+    context: v8::Local<'s, v8::Context>,
+    module: v8::Local<'s, v8::Module>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    v8::callback_scope!(unsafe scope, context);
+    let Some(record) =
+        crate::module_runtime::SyntheticTextModuleSource::for_module(context, module)
+    else {
+        return throw_synthetic_module_error(scope, "synthetic module source is not available");
+    };
+    let source = record.source();
+    match record.key().kind() {
+        ModuleKind::Json => evaluate_json_synthetic_module(scope, module, source),
+        ModuleKind::Css => {
+            evaluate_css_synthetic_module(scope, module, record.key().url().as_str(), source)
+        }
+        _ => throw_synthetic_module_error(scope, "unexpected synthetic text module kind"),
+    }
+}
+fn wasm_synthetic_module_evaluation_steps<'s>(
     context: v8::Local<'s, v8::Context>,
     module: v8::Local<'s, v8::Module>,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -862,39 +881,15 @@ fn synthetic_module_evaluation_steps<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return throw_synthetic_module_error(scope, "synthetic module host is not available");
     };
-    let Some((key, source)) = (unsafe { &*host_ptr }).native_module_source_for(module) else {
-        return throw_synthetic_module_error(scope, "synthetic module source is not available");
-    };
-    match key.kind() {
-        ModuleKind::Json => {
-            let Some(source) = source.text_source() else {
-                return throw_synthetic_module_error(scope, "JSON module source is not text");
-            };
-            evaluate_json_synthetic_module(scope, module, source)
-        }
-        ModuleKind::Css => {
-            let Some(source) = source.text_source() else {
-                return throw_synthetic_module_error(scope, "CSS module source is not text");
-            };
-            evaluate_css_synthetic_module(scope, module, key.url().as_str(), source)
-        }
-        ModuleKind::WebAssembly => {
-            let Some(wasm_record) = (unsafe { &*host_ptr }).native_module_wasm_record_for(module)
-            else {
-                return throw_synthetic_module_error(
-                    scope,
-                    "WebAssembly synthetic module record is not available",
-                );
-            };
-            evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
-                wasm_import_value(scope, module, import)
-            })
-        }
-        ModuleKind::JavaScript | ModuleKind::ModulePreloadText => throw_synthetic_module_error(
+    let Some(wasm_record) = (unsafe { &*host_ptr }).native_module_wasm_record_for(module) else {
+        return throw_synthetic_module_error(
             scope,
-            "non-synthetic module reached synthetic module evaluation",
-        ),
-    }
+            "WebAssembly synthetic module record is not available",
+        );
+    };
+    evaluate_wasm_synthetic_module(scope, module, &wasm_record, |scope, import| {
+        wasm_import_value(scope, module, import)
+    })
 }
 
 fn evaluate_json_synthetic_module<'s>(
