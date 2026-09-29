@@ -98,6 +98,8 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
 }
+IFRAME_STASH_PATH = "/html/semantics/embedded-content/the-iframe-element/stash.py"
+
 COMMON_ECHO_PATH = "/common/echo.py"
 COMMON_REDIRECT_PATH = "/common/redirect.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
@@ -1707,6 +1709,83 @@ def _make_handler(
     range_stash = FetchStash()
 
     class WptHandler(BaseHTTPRequestHandler):
+        def _serve_iframe_stash_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != IFRAME_STASH_PATH:
+                return False
+            # Only POST reads the body. Other methods take the result without
+            # waiting for an unused upload, including HEAD and custom methods.
+            self.close_connection = True
+            # wptserve defaults the stash namespace to the request URL path.
+            stash_path = parsed.path
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            try:
+                key = params["id"][0]
+                if self.command == "POST":
+                    # wptserve's request.body is bounded by Content-Length,
+                    # even when the request also has Transfer-Encoding.
+                    value = self._read_content_length_request_body(ignore_transfer_encoding=True)
+                    if value is None:
+                        return True
+                    fetch_stash.put(key, value, path=stash_path)
+                    body = b""
+                else:
+                    body = fetch_stash.take(key, path=stash_path)
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return True
+            self._send_python_handler_response(IFRAME_STASH_PATH, parsed.query, body)
+            return True
+
+        def _send_python_handler_response(
+            self, path: str, query: str, body: bytes | None,
+            *, headers: list[tuple[str, str]] | None = None,
+        ) -> None:
+            # FunctionHandler only applies pipes when main() returns a value.
+            # In particular, an empty stash (None) differs from stored b"".
+            headers = list(headers or [])
+            status, delay, auto_content_length = 200, 0.0, body is not None
+            try:
+                for name, args in parse_pipe_commands(query) if body is not None else ():
+                    if name == "header":
+                        header_name, value = args[:2]
+                        value = value.replace("\r", " ").replace("\n", " ")
+                        if _valid_static_response_header(header_name, value):
+                            headers = _apply_header_operations(headers, [(
+                                header_name, value,
+                                len(args) == 3 and args[2].lower() in {"true", "1"},
+                            )])
+                    elif name == "status":
+                        status = int(args[0])
+                    elif name == "sub":
+                        body = self._substitute_response_template(
+                            body, path, query,
+                            escape_type=args[0] if args else "html",
+                        )
+                    elif name == "trickle":
+                        auto_content_length = False
+                        if not any(_headers_include(headers, name)
+                                   for name in ("Cache-Control", "Pragma", "Expires")):
+                            headers.extend([
+                                ("Cache-Control", "no-cache, no-store, must-revalidate"),
+                                ("Pragma", "no-cache"),
+                                ("Expires", "0"),
+                            ])
+                        match = _TRICKLE_DELAY_RE.fullmatch(args[0])
+                        if match is not None:
+                            delay = max(delay, float(match.group(1)))
+            except WptPipeError:
+                self.send_error(500)
+                return
+            if delay:
+                time.sleep(min(delay, _MAX_TRICKLE_DELAY_SECONDS))
+            self._send_bytes(
+                None, body if body is not None else b"", emit_body=self.command != "HEAD",
+                extra_headers=[*headers, ("Connection", "close")],
+                status_code=status, cache_control=None,
+                auto_content_length=auto_content_length,
+            )
+
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             if self.headers.get("Upgrade", "").lower() == "websocket":
                 self._serve_websocket()
@@ -1717,6 +1796,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1753,6 +1834,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1810,6 +1893,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -1845,6 +1930,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_iframe_stash_resource():
+                return
             if self._serve_common_echo_resource():
                 return
             if self._serve_common_redirect_resource():
@@ -2016,50 +2103,18 @@ def _make_handler(
                 # wptserve's Request.GET preserves percent-decoded bytes and
                 # MultiDict.first selects the first value, including an empty one.
                 body = params["content"][0].encode("latin-1")
-                headers = [("Content-Type", "text/html"), ("X-XSS-Protection", "0")]
-                status, delay, auto_content_length = 200, 0.0, True
-                for name, args in parse_pipe_commands(parsed.query):
-                    if name == "header":
-                        header_name, value = args[:2]
-                        value = value.replace("\r", " ").replace("\n", " ")
-                        if _valid_static_response_header(header_name, value):
-                            headers = _apply_header_operations(headers, [(
-                                header_name, value,
-                                len(args) == 3 and args[2].lower() in {"true", "1"},
-                            )])
-                    elif name == "status":
-                        status = int(args[0])
-                    elif name == "sub":
-                        body = self._substitute_response_template(
-                            body, COMMON_ECHO_PATH, parsed.query,
-                            escape_type=args[0] if args else "html",
-                        )
-                    elif name == "trickle":
-                        auto_content_length = False
-                        if not any(_headers_include(headers, name)
-                                   for name in ("Cache-Control", "Pragma", "Expires")):
-                            headers.extend([
-                                ("Cache-Control", "no-cache, no-store, must-revalidate"),
-                                ("Pragma", "no-cache"),
-                                ("Expires", "0"),
-                            ])
-                        match = _TRICKLE_DELAY_RE.fullmatch(args[0])
-                        if match is not None:
-                            delay = max(delay, float(match.group(1)))
-            except (KeyError, WptPipeError):
+            except KeyError:
                 self.send_error(500)
                 return True
-            if delay:
-                time.sleep(min(delay, _MAX_TRICKLE_DELAY_SECONDS))
-            self._send_bytes(
-                None, body, emit_body=self.command != "HEAD",
-                extra_headers=[*headers, ("Connection", "close")],
-                status_code=status, cache_control=None,
-                auto_content_length=auto_content_length,
+            self._send_python_handler_response(
+                COMMON_ECHO_PATH, parsed.query, body,
+                headers=[("Content-Type", "text/html"), ("X-XSS-Protection", "0")],
             )
             return True
 
         def _serve(self, *, emit_body: bool) -> None:
+            if self._serve_iframe_stash_resource():
+                return
             try:
                 self._serve_response(emit_body=emit_body)
             except WptPipeError:
@@ -2604,6 +2659,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == IFRAME_STASH_PATH:
+                return self._serve_iframe_stash_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
                 return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_REDIRECT_PATH:
@@ -2618,8 +2675,8 @@ def _make_handler(
                 return self._serve_fetch_resource_method
             raise AttributeError(name)
 
-        def _read_content_length_request_body(self) -> bytes | None:
-            if self.headers.get("Transfer-Encoding") is not None:
+        def _read_content_length_request_body(self, *, ignore_transfer_encoding: bool = False) -> bytes | None:
+            if not ignore_transfer_encoding and self.headers.get("Transfer-Encoding") is not None:
                 self._reject_request_body(400)
                 return None
             length_str = self.headers.get("Content-Length")
