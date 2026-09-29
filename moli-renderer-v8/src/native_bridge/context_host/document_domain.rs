@@ -240,16 +240,16 @@ fn normalize_document_domain_value(value: &str) -> Option<String> {
 }
 
 fn document_domain_is_allowed_for_host(current_host: &str, domain: &str) -> bool {
-    if host_is_ip_literal(current_host) {
-        return domain == current_host;
+    if domain == current_host {
+        return true;
     }
-    if !host_matches_document_domain(current_host, domain) {
+    if host_is_ip_literal(current_host) || !host_matches_document_domain(current_host, domain) {
         return false;
     }
-    if domain != current_host && moli_cookie_jar::host_is_public_suffix(domain) {
-        return false;
-    }
-    domain == current_host || domain == "localhost" || domain.contains('.')
+    // A parent must stay within the original host's registrable domain. Checking
+    // only the candidate's PSL entry misses implicit single-label suffixes and
+    // parents above a public suffix selected by a wildcard rule.
+    host_matches_document_domain(domain, moli_site::registrable_site_host(current_host))
 }
 
 fn host_is_ip_literal(host: &str) -> bool {
@@ -271,6 +271,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn document_domain_validation_respects_the_original_hosts_public_suffix() {
+        for (host, domain, allowed) in [
+            ("www1.localhost", "localhost", false),
+            ("localhost", "localhost", true),
+            (
+                "www1.web-platform.localhost",
+                "web-platform.localhost",
+                true,
+            ),
+            (
+                "example.compute.amazonaws.com",
+                "compute.amazonaws.com",
+                false,
+            ),
+            (
+                "www.example.compute.amazonaws.com",
+                "example.compute.amazonaws.com",
+                false,
+            ),
+            ("www.example.compute.amazonaws.com", "amazonaws.com", false),
+            ("test.amazonaws.com", "amazonaws.com", true),
+            (
+                "example.compute.amazonaws.com",
+                "example.compute.amazonaws.com",
+                true,
+            ),
+            ("www.city.kawasaki.jp", "city.kawasaki.jp", true),
+            ("www.foo.kawasaki.jp", "kawasaki.jp", false),
+        ] {
+            assert_eq!(
+                document_domain_is_allowed_for_host(host, domain),
+                allowed,
+                "{host} must {}relax to {domain}",
+                if allowed { "" } else { "not " }
+            );
+        }
+    }
+
+    #[test]
     fn document_domain_validation_allows_current_or_parent_domain() {
         assert_eq!(
             normalize_document_domain_value("::1").as_deref(),
@@ -288,7 +327,7 @@ mod tests {
             "example.test",
             "example.test"
         ));
-        assert!(document_domain_is_allowed_for_host(
+        assert!(!document_domain_is_allowed_for_host(
             "www1.localhost",
             "localhost"
         ));
