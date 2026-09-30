@@ -35,6 +35,10 @@ separate `urlFragment` field; Moli currently includes the fragment in `url`.
 Deferred Promise evaluation must allow its later resolver to run,
 ordinary pause must allow native queries and synchronous focus callback reentry,
 and instrumentation pause must leave Main work pending while IO remains live.
+`DOM.getNodeForLocation`, `DOM.getNodeStackTraces`,
+`DOM.setNodeStackTracesEnabled`, and `DOM.disable` must also complete through
+their frontend native wrappers before the client sends resume. Disabling must
+invalidate the original node bindings while the outer evaluation stays paused.
 All scenarios use local fixture documents, match the navigation's loader and
 `DOMContentLoaded` before setup, track the original response session
 and exactly one terminal per command, retain the full wire transcript, and use

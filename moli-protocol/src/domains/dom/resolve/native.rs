@@ -87,10 +87,7 @@ fn prepare(
         return files::prepare(conn, cmd).map(Operation::require_owner_turn);
     }
     if mutation::handles(action) {
-        // DOM edits/focus may invoke custom elements and user handlers through
-        // a new isolate scope. Their composed node lookup does not make that
-        // scope safe to enter from a suspended outer V8 call.
-        return mutation::prepare(conn, cmd, action).map(Operation::require_owner_turn);
+        return mutation::prepare(conn, cmd, action);
     }
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
