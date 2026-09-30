@@ -2656,6 +2656,57 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_text_module_compilation_shares_fetched_source_and_releases_map_reference() {
+        for (module_type, text) in [
+            ("json", r#"{"answer":42}"#),
+            ("css", "body { color: red; }"),
+        ] {
+            let mut vm = new_test_vm("https://app.example.test/page");
+            let source_url = url(&format!("https://app.example.test/source.{module_type}"));
+            let attributes =
+                ModuleAttributesKey::from_pairs(vec![("type".to_owned(), module_type.to_owned())]);
+            let key = ModuleMapKey::from_url_and_attributes(&source_url, &attributes).unwrap();
+            let text_source: std::sync::Arc<str> = text.into();
+            let weak_source = std::sync::Arc::downgrade(&text_source);
+            let source = ModuleSource::text(text_source);
+            let fetched = module_tree::FetchedModuleSource::new(
+                chromium_module_key(&key),
+                chromium_module_key(&key),
+                source_url.clone(),
+                source_url,
+                chromium_source(source.clone()),
+                module_tree::ModuleFetchMetadata::default(),
+            );
+            let snapshot = {
+                let mut host =
+                    RendererModuleScriptTreeHost::new(NativeModuleTreeDocumentOwner::new(&mut vm));
+                module_tree::ModuleScriptTreeHost::compile_module_source(
+                    &mut host,
+                    fetched.clone(),
+                    module_tree::ModuleImportPhase::Evaluation,
+                )
+                .expect("synthetic module should compile")
+            };
+            let entry = local_entry_id(snapshot.entry);
+            assert!(vm.document_runtime.native_compiled_module(entry).is_some());
+            assert!(
+                vm.document_runtime.native_module_source(entry).is_none(),
+                "{module_type}: compiled module map must release its fetched source",
+            );
+            drop(fetched);
+            drop(source);
+            assert_eq!(
+                weak_source.strong_count(),
+                1,
+                "{module_type}: only the compiled record should own the original text allocation",
+            );
+            assert_eq!(weak_source.upgrade().unwrap().as_ref(), text);
+            drop(vm);
+            assert!(weak_source.upgrade().is_none());
+        }
+    }
+
+    #[test]
     fn native_json_module_fetch_request_uses_json_destination_metadata() {
         let fetch_request = NativeModuleGraphFetchRequest::new_for_test(
             url("https://app.example.test/data.json"),

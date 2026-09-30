@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 
 use super::{ModuleIdentityHash, ModuleMapKey, module_identity_hash_from_v8_module};
 
@@ -11,7 +12,7 @@ use super::{ModuleIdentityHash, ModuleMapKey, module_identity_hash_from_v8_modul
 pub(crate) struct SyntheticTextModuleSource {
     module: v8::Global<v8::Module>,
     key: ModuleMapKey,
-    source: String,
+    source: Arc<str>,
 }
 
 #[derive(Default)]
@@ -24,7 +25,7 @@ impl SyntheticTextModuleSource {
         scope: &mut v8::PinScope<'_, '_>,
         module: v8::Local<'_, v8::Module>,
         key: ModuleMapKey,
-        source: &str,
+        source: Arc<str>,
     ) -> Rc<Self> {
         let context = scope.get_current_context();
         let sources = context
@@ -37,7 +38,7 @@ impl SyntheticTextModuleSource {
         let record = Rc::new(Self {
             module: v8::Global::new(scope, module),
             key,
-            source: source.to_owned(),
+            source,
         });
         let mut entries = sources.entries.borrow_mut();
         let candidates = entries
@@ -100,8 +101,9 @@ mod tests {
             Url::parse("https://example.test/shared.json").unwrap(),
             ModuleAttributesKey::empty(),
         );
-        let first_source = SyntheticTextModuleSource::register(scope, first, key.clone(), "1");
-        let second_source = SyntheticTextModuleSource::register(scope, second, key, "2");
+        let first_source =
+            SyntheticTextModuleSource::register(scope, first, key.clone(), "1".into());
+        let second_source = SyntheticTextModuleSource::register(scope, second, key, "2".into());
 
         // Inject a conflicting candidate deterministically instead of waiting
         // for a random V8 identity-hash collision.
@@ -134,12 +136,15 @@ mod tests {
             Url::parse("https://example.test/value.json").unwrap(),
             ModuleAttributesKey::empty(),
         );
-        let source = SyntheticTextModuleSource::register(scope, module, key.clone(), "42");
+        let text: Arc<str> = "42".into();
+        let weak_text = Arc::downgrade(&text);
+        let source = SyntheticTextModuleSource::register(scope, module, key.clone(), text);
         let weak = Rc::downgrade(&source);
         let record = ModuleRecordEntry::new(key, v8::Global::new(scope, module), Vec::new())
             .with_synthetic_text_module_source(source);
         let clone = record.clone();
         drop(record);
+        assert_eq!(weak_text.strong_count(), 1);
         assert_eq!(
             SyntheticTextModuleSource::for_module(context, module)
                 .unwrap()
@@ -148,6 +153,7 @@ mod tests {
         );
         drop(clone);
         assert!(weak.upgrade().is_none());
+        assert!(weak_text.upgrade().is_none());
         assert!(SyntheticTextModuleSource::for_module(context, module).is_none());
     }
 }

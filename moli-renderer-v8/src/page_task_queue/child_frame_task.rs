@@ -871,7 +871,7 @@ mod tests {
             task.kind(),
             crate::frame_owner_model::FrameDocumentParserModuleRootStartKind::LoadedSource(
                 crate::module_runtime::ModuleSource::Text(source)
-            ) if source == "export const value = 1;"
+            ) if source.as_ref() == "export const value = 1;"
         ));
         assert_eq!(task.child_handle(), child_handle);
         assert_eq!(task.owner(), owner);

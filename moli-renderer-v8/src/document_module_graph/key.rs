@@ -76,6 +76,18 @@ pub(crate) enum ModuleKind {
     WebAssembly,
 }
 
+impl ModuleKind {
+    /// Whether the module map still needs the fetched source after compilation.
+    pub(crate) fn retains_source_after_compilation(self) -> bool {
+        match self {
+            // V8 owns JavaScript source; synthetic text records own JSON/CSS source.
+            Self::JavaScript | Self::Json | Self::Css => false,
+            // Preserve the separate source semantics of Wasm and text preloads.
+            Self::WebAssembly | Self::ModulePreloadText => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ModuleMapKey {
     url: Url,

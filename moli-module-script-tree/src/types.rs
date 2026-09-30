@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use url::Url;
 
@@ -516,7 +517,8 @@ impl FetchedModuleSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleSource {
-    Text(String),
+    /// Share decoded text across fetch clients and the renderer's compiled record.
+    Text(Arc<str>),
     Binary(Vec<u8>),
 }
 
