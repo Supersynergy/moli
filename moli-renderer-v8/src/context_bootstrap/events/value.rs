@@ -14,6 +14,7 @@ const NAME_SLOT: &str = "__moliValueEventName";
 const ELAPSED_TIME_SLOT: &str = "__moliValueEventElapsedTime";
 const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
+const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
 
 #[derive(Clone, Copy)]
@@ -21,6 +22,7 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     Animation,
     Transition,
     Blob,
+    WebGlContext,
 }
 
 impl ValueEventKind {
@@ -29,6 +31,7 @@ impl ValueEventKind {
             Self::Animation => "AnimationEvent",
             Self::Transition => "TransitionEvent",
             Self::Blob => "BlobEvent",
+            Self::WebGlContext => "WebGLContextEvent",
         }
     }
 
@@ -69,6 +72,26 @@ struct BlobEventPrototypeDeclaration {
     data: (),
     #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, TIMECODE_SLOT))]
     timecode: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::WebGLContextEvent, enumerable, receiver)]
+struct WebGlContextEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, STATUS_MESSAGE_SLOT))]
+    status_message: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "WebGLContextEventInit")]
+struct WebGlContextEventInit<'s> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(with = string_member)]
+    status_message: v8::Local<'s, v8::String>,
 }
 
 // Inherited dictionary members precede derived members, whose declaration order
@@ -167,6 +190,9 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "TransitionEvent" => {
             TransitionEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "WebGLContextEvent" => {
+            WebGlContextEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         "BlobEvent" => {
             BlobEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
@@ -204,6 +230,7 @@ fn value_event_constructor<'s>(
         Some(0) => ValueEventKind::Animation,
         Some(1) => ValueEventKind::Transition,
         Some(2) => ValueEventKind::Blob,
+        Some(3) => ValueEventKind::WebGlContext,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -259,6 +286,17 @@ fn value_event_constructor<'s>(
                     state,
                     PSEUDO_ELEMENT_SLOT,
                     parsed.pseudo_element.into(),
+                );
+                (parsed.bubbles, parsed.cancelable, parsed.composed)
+            }
+            ValueEventKind::WebGlContext => {
+                let parsed =
+                    webidl::parse_dictionary_object::<WebGlContextEventInit>(scope, dictionary)?;
+                set_event_private_value(
+                    scope,
+                    state,
+                    STATUS_MESSAGE_SLOT,
+                    parsed.status_message.into(),
                 );
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
