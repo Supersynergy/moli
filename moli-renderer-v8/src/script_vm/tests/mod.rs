@@ -2149,6 +2149,7 @@ mod rendering_update;
 mod script_terminal_completion;
 mod streams;
 mod url_components;
+mod wake_lock_interfaces;
 mod webgl_interfaces;
 mod webidl_collections;
 mod webidl_fetch;
