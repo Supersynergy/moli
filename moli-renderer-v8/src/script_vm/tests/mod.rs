@@ -2124,6 +2124,7 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
 
 mod blob_response_headers;
 mod browser_api;
+mod cache_interfaces;
 mod canvas_arguments;
 mod canvas_paths;
 mod canvas_webgl;

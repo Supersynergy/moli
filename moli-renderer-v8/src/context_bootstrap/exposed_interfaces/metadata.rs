@@ -78,6 +78,8 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "URL",
     "URLSearchParams",
     "FormData",
+    "Cache",
+    "CacheStorage",
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
@@ -89,6 +91,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "IdleDetector",
     "Clipboard",
     "ClipboardItem",
+    "Cache",
+    "CacheStorage",
 ];
 const WORKER_ONLY_INTERFACE_NAMES: &[&str] = &["WorkerNavigator", "WorkerLocation"];
 const WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &[
