@@ -743,10 +743,20 @@ frame.contentWindow.eval(`
   const realParent = window.__expectedParent;
   const realTop = window.__expectedParent;
   const fake = {};
-  let parentReads = 0;
+  let publicParentReads = 0;
+  let internalParentReads = 0;
+  let internalTopReads = 0;
   Object.defineProperty(window, "parent", {
     configurable: true,
-    get() { ++parentReads; return fake; }
+    get() { ++publicParentReads; return fake; }
+  });
+  Object.defineProperty(window, "__moliWindowParent", {
+    configurable: true,
+    get() { ++internalParentReads; return fake; }
+  });
+  Object.defineProperty(window, "__moliWindowTop", {
+    configurable: true,
+    get() { ++internalTopReads; return fake; }
   });
   const selectedParent = open("", "_parent");
   const selectedTop = open("", "_top");
@@ -755,14 +765,16 @@ frame.contentWindow.eval(`
     selectedTop === realTop,
     selectedParent === fake,
     selectedTop === fake,
-    parentReads,
+    publicParentReads,
+    internalParentReads,
+    internalTopReads,
     location.href
   ]);
 `)
 "#,
         )
         .expect("child special-target selection should evaluate"),
-        r#"[true,true,false,false,0,"about:srcdoc"]"#
+        r#"[true,true,false,false,0,0,0,"about:srcdoc"]"#
     );
     assert!(vm.take_pending_location_navigation_with_seed().is_none());
 }

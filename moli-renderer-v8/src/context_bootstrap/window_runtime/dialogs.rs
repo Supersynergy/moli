@@ -8,8 +8,9 @@ use crate::{
     native_bridge::{
         InputNavigationPolicy, OwnerDispatchScope, child_window_handle_from_marker_data,
         element::{
-            SpecialBrowsingContextTarget, existing_browsing_context_target_from_window,
-            navigate_existing_browsing_context_target_from_window, navigate_named_iframe_target,
+            SpecialBrowsingContextTarget, existing_browsing_context_target_for_dispatch_scope,
+            navigate_existing_browsing_context_target_for_dispatch_scope,
+            navigate_named_iframe_target,
         },
         entered_child_window_handle, lightweight_popup_id_from_window,
     },
@@ -197,20 +198,18 @@ pub(crate) fn window_open_callback<'s>(
         let source_scope = window_open_receiver_dispatch_scope(scope, args.this())
             .unwrap_or_else(|| unsafe { &*host_ptr }.entered_owner_dispatch_scope(scope));
         let selected = if navigation_requested {
-            navigate_existing_browsing_context_target_from_window(
+            navigate_existing_browsing_context_target_for_dispatch_scope(
                 scope,
                 host_ptr,
                 source_scope,
-                args.this(),
                 target,
                 &url,
             )
         } else {
-            existing_browsing_context_target_from_window(
+            existing_browsing_context_target_for_dispatch_scope(
                 scope,
                 host_ptr,
                 source_scope,
-                args.this(),
                 target,
             )
         };

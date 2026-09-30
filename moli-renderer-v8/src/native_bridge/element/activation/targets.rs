@@ -344,26 +344,9 @@ fn browsing_context_target_window_for_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
-    source_window: Option<v8::Local<'s, v8::Object>>,
     target: Option<SpecialBrowsingContextTarget>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let global = scope.get_current_context().global(scope);
-    if matches!(
-        dispatch_scope,
-        crate::native_bridge::OwnerDispatchScope::Child(_)
-    ) && let Some(source_window) = source_window
-    {
-        let slot = match target {
-            Some(SpecialBrowsingContextTarget::Parent) => Some("__moliWindowParent"),
-            Some(SpecialBrowsingContextTarget::Top) => Some("__moliWindowTop"),
-            _ => None,
-        };
-        if let Some(window) = slot
-            .and_then(|slot| JsContextHost::child_window_object_slot(scope, source_window, slot))
-        {
-            return Some(window);
-        }
-    }
     match (dispatch_scope, target) {
         (_, Some(SpecialBrowsingContextTarget::Blank)) => None,
         (crate::native_bridge::OwnerDispatchScope::Top, _)
@@ -402,7 +385,6 @@ fn navigate_special_target_for_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
-    source_window: Option<v8::Local<'s, v8::Object>>,
     target: Option<SpecialBrowsingContextTarget>,
     resolved_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -411,7 +393,6 @@ fn navigate_special_target_for_dispatch_scope<'s>(
         scope,
         runtime_ptr,
         dispatch_scope,
-        source_window,
         target,
     )?;
     let navigated = if target_window.strict_equals(global.into()) {
@@ -438,17 +419,15 @@ fn navigate_existing_browsing_context_target<'s>(
         scope,
         runtime_ptr,
         dispatch_scope,
-        None,
         Some(target),
         resolved_url,
     )
 }
 
-pub(crate) fn navigate_existing_browsing_context_target_from_window<'s>(
+pub(crate) fn navigate_existing_browsing_context_target_for_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
-    source_window: v8::Local<'s, v8::Object>,
     target: SpecialBrowsingContextTarget,
     resolved_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -456,24 +435,21 @@ pub(crate) fn navigate_existing_browsing_context_target_from_window<'s>(
         scope,
         runtime_ptr,
         dispatch_scope,
-        Some(source_window),
         Some(target),
         resolved_url,
     )
 }
 
-pub(crate) fn existing_browsing_context_target_from_window<'s>(
+pub(crate) fn existing_browsing_context_target_for_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     dispatch_scope: crate::native_bridge::OwnerDispatchScope,
-    source_window: v8::Local<'s, v8::Object>,
     target: SpecialBrowsingContextTarget,
 ) -> Option<v8::Local<'s, v8::Object>> {
     browsing_context_target_window_for_dispatch_scope(
         scope,
         runtime_ptr,
         dispatch_scope,
-        Some(source_window),
         Some(target),
     )
 }
@@ -498,7 +474,6 @@ pub(super) fn navigate_hyperlink_source_browsing_context(
                 scope,
                 runtime_ptr,
                 crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id),
-                None,
                 Some(SpecialBrowsingContextTarget::Current),
                 resolved_url,
             )
@@ -537,7 +512,6 @@ pub(crate) fn navigate_target_browsing_context<'s>(
                     scope,
                     runtime_ptr,
                     dispatch_scope,
-                    None,
                     None,
                     resolved_url,
                 )
@@ -650,7 +624,6 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
         scope,
         runtime_ptr,
         dispatch_scope,
-        None,
         special_target,
         resolved_url,
     )
