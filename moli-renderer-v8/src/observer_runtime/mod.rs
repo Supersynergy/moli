@@ -411,8 +411,8 @@ struct MutationObserverConstructorArgs {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "IntersectionObserverInit")]
 struct IntersectionObserverInitMembers<'s> {
-    #[webidl(legacy_nullish, converter = "raw")]
-    root: Option<v8::Local<'s, v8::Value>>,
+    #[webidl(with = intersection_observer_root_member)]
+    root: Option<NativeNodeId>,
     #[webidl(default = "0px")]
     root_margin: String,
     #[webidl(default = "0px")]
@@ -1214,12 +1214,16 @@ pub(super) fn intersection_observer_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
-pub(super) fn intersection_observer_observe_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn intersection_observer_observe_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(target) = callback_value_dom_handle(scope, args.get(0)) else {
+    let Some(target) = crate::native_bridge::branded_node_handle(
+        scope,
+        args.get(0),
+        web_api_interfaces::Element::DESCRIPTOR,
+    ) else {
         throw_type_error(
             scope,
             "Failed to execute 'observe' on 'IntersectionObserver': parameter 1 is not of type 'Element'.",
@@ -1240,12 +1244,16 @@ pub(super) fn intersection_observer_observe_callback(
     rv.set_undefined();
 }
 
-pub(super) fn intersection_observer_unobserve_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn intersection_observer_unobserve_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(target) = callback_value_dom_handle(scope, args.get(0)) else {
+    let Some(target) = crate::native_bridge::branded_node_handle(
+        scope,
+        args.get(0),
+        web_api_interfaces::Element::DESCRIPTOR,
+    ) else {
         throw_type_error(
             scope,
             "Failed to execute 'unobserve' on 'IntersectionObserver': parameter 1 is not of type 'Element'.",
@@ -1584,6 +1592,40 @@ enum IntersectionObserverOptionsError {
     Range(&'static str),
 }
 
+fn intersection_observer_root_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    member: &'static str,
+) -> Result<Option<NativeNodeId>, webidl::WebIdlError> {
+    let Some(value) = webidl::legacy_optional_member::<v8::Local<'s, v8::Value>>(
+        scope,
+        object,
+        member,
+        webidl::Context::member("IntersectionObserverInit", member),
+    )?
+    else {
+        return Ok(None);
+    };
+    let root = crate::native_bridge::branded_node_handle(
+        scope,
+        value,
+        web_api_interfaces::Node::DESCRIPTOR,
+    )
+    .ok_or_else(|| {
+        webidl::WebIdlError::custom_message(
+            "Failed to construct 'IntersectionObserver': root is not a Node.",
+        )
+    })?;
+    let valid = context_host_ptr_from_global_bridge(scope)
+        .is_some_and(|host_ptr| dom_access::is_intersection_root(host_ptr, root));
+    if !valid {
+        return Err(webidl::WebIdlError::custom_message(
+            "Failed to construct 'IntersectionObserver': root must be an Element or Document.",
+        ));
+    }
+    Ok(Some(root))
+}
+
 fn parse_intersection_observer_options<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: Option<v8::Local<'s, v8::Value>>,
@@ -1603,12 +1645,7 @@ fn parse_intersection_observer_options<'s>(
     };
 
     let mut options = IntersectionObserverOptions::default();
-    if let Some(root_value) = init.root {
-        let Some(root) = callback_value_dom_handle(scope, root_value) else {
-            return Err(IntersectionObserverOptionsError::Type(
-                "Failed to construct 'IntersectionObserver': root is not a Node.".to_owned(),
-            ));
-        };
+    if let Some(root) = init.root {
         if !root_is_valid(root) {
             return Err(IntersectionObserverOptionsError::Type(
                 "Failed to construct 'IntersectionObserver': root must be an Element or Document."

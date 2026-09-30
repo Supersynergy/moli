@@ -3,7 +3,7 @@ use std::pin::pin;
 use moli_v8_test_util::ensure_v8;
 use moli_webapi_declare::{
     WebApiObject, implements_interface, initialize_web_api_object, register_web_api_interfaces,
-    web_api_object_type,
+    web_api_object_target, web_api_object_type,
 };
 
 #[derive(WebApiObject)]
@@ -77,6 +77,7 @@ fn declarations_brand_instances_and_preserve_derived_identity_across_realms() {
         "TestDerived"
     );
     assert!(implements_interface(scope, object, "TestBase"));
+    assert_eq!(web_api_object_target(scope, object), Some(object));
 }
 
 #[test]
@@ -97,6 +98,7 @@ fn identity_is_own_private_and_never_invokes_author_code() {
         eval(scope, "Reflect.ownKeys(real).length").uint32_value(scope),
         Some(0)
     );
+    assert_eq!(web_api_object_target(scope, real), Some(real));
     for source in [
         "({__moliWebApiType: 0})",
         "({[Symbol('__moliWebApiType')]: 0})",
@@ -107,11 +109,14 @@ fn identity_is_own_private_and_never_invokes_author_code() {
         let object = v8::Local::<v8::Object>::try_from(eval(scope, source)).unwrap();
         assert_eq!(web_api_object_type(scope, object), None, "{source}");
         assert!(!implements_interface(scope, object, "TestBase"), "{source}");
+        assert_eq!(web_api_object_target(scope, object), None, "{source}");
     }
     let plain = PlainObject::new(7).bind(scope).unwrap();
     let prototype = PrototypeMembers::new().bind(scope).unwrap();
     assert_eq!(web_api_object_type(scope, plain), None);
     assert_eq!(web_api_object_type(scope, prototype), None);
+    assert_eq!(web_api_object_target(scope, plain), None);
+    assert_eq!(web_api_object_target(scope, prototype), None);
 }
 
 #[test]
@@ -206,17 +211,22 @@ fn only_explicitly_registered_native_proxies_share_target_identity() {
     let native = v8::Proxy::new(scope, target, handler).unwrap();
     let native_object = v8::Local::<v8::Object>::from(native);
     assert_eq!(web_api_object_type(scope, native_object), None);
+    assert_eq!(web_api_object_target(scope, native_object), None);
     moli_webapi_declare::register_web_api_proxy(scope, native).unwrap();
     assert!(implements_interface(scope, native_object, "TestBase"));
+    assert_eq!(web_api_object_target(scope, native_object), Some(target));
     initialize_web_api_object(scope, native_object, "TestBase").unwrap();
     let impostor = v8::Proxy::new(scope, target, handler).unwrap();
     assert_eq!(web_api_object_type(scope, impostor.into()), None);
+    assert_eq!(web_api_object_target(scope, impostor.into()), None);
     let outer_handler = v8::Object::new(scope);
     let outer = v8::Proxy::new(scope, native_object, outer_handler).unwrap();
     assert_eq!(web_api_object_type(scope, outer.into()), None);
+    assert_eq!(web_api_object_target(scope, outer.into()), None);
     assert!(moli_webapi_declare::register_web_api_proxy(scope, outer).is_err());
     native.revoke();
     assert_eq!(web_api_object_type(scope, native_object), None);
+    assert_eq!(web_api_object_target(scope, native_object), None);
 }
 
 #[derive(moli_webapi_declare::WebApiFunctionTemplate)]
