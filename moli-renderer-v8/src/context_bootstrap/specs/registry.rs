@@ -1184,6 +1184,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::AudioContext,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::Worklet::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioWorklet::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioWorkletNode::DESCRIPTOR,
         kind: ConstructorKind::AudioWorkletNode,
     },

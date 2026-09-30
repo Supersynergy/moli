@@ -8,6 +8,7 @@ use super::materialize::{
 enum RealmDependentFinalizer {
     NodeMixinUnscopables,
     CryptoSecureContextSurface,
+    BaseAudioContextSecureContextSurface,
     XmlHttpRequestEventTargetState,
     NotificationPermission,
     PointerEventSecureContextSurface,
@@ -33,6 +34,10 @@ const REALM_DEPENDENT_FINALIZER_ALLOWLIST: &[(&str, RealmDependentFinalizer)] = 
     ),
     // These entries install private realm state, context-conditional surface,
     // or constructor data whose JavaScript identity must be realm-local.
+    (
+        "BaseAudioContext",
+        RealmDependentFinalizer::BaseAudioContextSecureContextSurface,
+    ),
     (
         "Crypto",
         RealmDependentFinalizer::CryptoSecureContextSurface,
@@ -79,6 +84,9 @@ pub(super) fn finalize_materialized_interface(
     match finalizer {
         RealmDependentFinalizer::NodeMixinUnscopables => {
             finalize_node_mixin_unscopables(scope, prototype);
+        }
+        RealmDependentFinalizer::BaseAudioContextSecureContextSurface => {
+            crate::context_bootstrap::web_audio_runtime::finalize_base_audio_context_realm_bindings(scope, prototype)?;
         }
         RealmDependentFinalizer::CryptoSecureContextSurface => {
             crate::context_bootstrap::crypto::finalize_crypto_realm_bindings(scope, prototype)?;
@@ -140,6 +148,7 @@ mod tests {
                 "Element",
                 "DocumentType",
                 "CharacterData",
+                "BaseAudioContext",
                 "Crypto",
                 "XMLHttpRequestEventTarget",
                 "Notification",

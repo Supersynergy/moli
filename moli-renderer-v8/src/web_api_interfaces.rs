@@ -35,7 +35,8 @@ interfaces! {
     AudioContext: BaseAudioContext;
     AudioDestinationNode;
     AudioParam;
-    AudioWorklet;
+    Worklet;
+    AudioWorklet: Worklet;
     AudioWorkletNode;
     BaseAudioContext: EventTarget;
     BatteryManager;

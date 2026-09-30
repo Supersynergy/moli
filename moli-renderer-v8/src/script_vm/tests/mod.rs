@@ -2156,6 +2156,7 @@ mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
 mod window_execution_context;
+mod worklet_interfaces;
 
 mod string_timers;
 
