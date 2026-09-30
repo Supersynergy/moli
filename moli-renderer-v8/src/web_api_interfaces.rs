@@ -128,6 +128,10 @@ interfaces! {
     DedicatedWorkerGlobalScope: WorkerGlobalScope;
     DeprecatedStorageInfo;
     DeprecatedStorageQuota;
+    DeviceMotionEvent: Event;
+    DeviceMotionEventAcceleration;
+    DeviceMotionEventRotationRate;
+    DeviceOrientationEvent: Event;
     Document: Node;
     DocumentFragment: Node;
     DocumentTimeline: AnimationTimeline;

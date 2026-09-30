@@ -18,6 +18,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     KeyboardEvent,
     InputEvent,
     WheelEvent,
+    DeviceMotionEvent,
+    DeviceOrientationEvent,
     PointerEvent,
     TouchEvent,
     MessageEvent,
