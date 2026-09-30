@@ -218,22 +218,23 @@ enum ChildSecurityOriginOwner {
 
 fn url_host_domain(url: &Url) -> Option<String> {
     match url.host()? {
-        Host::Domain(domain) => Some(domain.trim_end_matches('.').to_ascii_lowercase()),
+        Host::Domain(domain) => Some(domain.to_ascii_lowercase()),
         Host::Ipv4(ip) => Some(ip.to_string()),
         Host::Ipv6(ip) => Some(ip.to_string()),
     }
 }
 
 fn normalize_document_domain_value(value: &str) -> Option<String> {
-    let value = value.trim_end_matches('.');
     if value.is_empty() {
         return None;
     }
     if let Ok(ip) = value.parse::<IpAddr>() {
         return Some(ip.to_string());
     }
+    // Keep the parsed host's trailing dot: it is significant for origin-domain
+    // comparisons, including dots produced by percent-decoding or IDNA.
     match Host::parse(value).ok()? {
-        Host::Domain(domain) => Some(domain.trim_end_matches('.').to_ascii_lowercase()),
+        Host::Domain(domain) => Some(domain.to_ascii_lowercase()),
         Host::Ipv4(ip) => Some(ip.to_string()),
         Host::Ipv6(ip) => Some(ip.to_string()),
     }
