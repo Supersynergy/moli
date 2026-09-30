@@ -36,6 +36,10 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "Headers",
     "Request",
     "Response",
+    "ServiceWorker",
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    "NavigationPreloadManager",
     "Cache",
     "CacheStorage",
     "ProgressEvent",
@@ -138,6 +142,10 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
+    "ServiceWorker",
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    "NavigationPreloadManager",
     "Cache",
     "CacheStorage",
     "DeviceMotionEvent",
