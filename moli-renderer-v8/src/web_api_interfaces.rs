@@ -324,6 +324,8 @@ interfaces! {
     MediaDeviceInfo;
     InputDeviceInfo: MediaDeviceInfo;
     MediaDevices: EventTarget;
+    WakeLock;
+    WakeLockSentinel: EventTarget;
     MediaError;
     MediaList;
     MediaQueryList: EventTarget;

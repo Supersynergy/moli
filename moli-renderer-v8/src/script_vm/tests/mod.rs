@@ -2277,6 +2277,7 @@ mod service_worker_interfaces;
 mod streams;
 mod string_timers;
 mod url_components;
+mod wake_lock_interfaces;
 mod webgl_interfaces;
 mod webidl_collections;
 mod webidl_fetch;
