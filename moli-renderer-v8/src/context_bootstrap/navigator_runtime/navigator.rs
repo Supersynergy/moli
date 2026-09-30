@@ -896,7 +896,9 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_media_capabilities_template_bindings(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     match interface_name {
-        "MediaDevices" => install_media_devices_template_bindings(scope, template),
+        "MediaDevices" | "MediaDeviceInfo" | "InputDeviceInfo" => {
+            install_media_devices_template_bindings(scope, template, interface_name)
+        }
         "Navigator" => {
             NavigatorRuntimeDataPrototypeDeclaration::initialize_prototype_template(
                 scope, prototype,

@@ -282,6 +282,8 @@ interfaces! {
     Location;
     MathMLElement: Element;
     MediaCapabilities;
+    MediaDeviceInfo;
+    InputDeviceInfo: MediaDeviceInfo;
     MediaDevices: EventTarget;
     MediaError;
     MediaList;

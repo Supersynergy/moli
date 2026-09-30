@@ -4,6 +4,8 @@ use crate::util::{get_private_value, set_private_value, throw_type_error};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod info;
+
 const MEDIA_DEVICES_LISTENERS_SLOT: &str = "__moliMediaDevicesListeners";
 const MEDIA_DEVICES_ONDEVICECHANGE_SLOT: &str = "__moliMediaDevicesOndevicechange";
 
@@ -42,9 +44,16 @@ pub(super) fn build_media_devices_object<'s>(
 pub(super) fn install_media_devices_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
+    name: &str,
 ) {
-    let prototype = template.prototype_template(scope);
-    MediaDevicesPrototypeDeclaration::initialize_prototype_template(scope, prototype);
+    if name == "MediaDevices" {
+        MediaDevicesPrototypeDeclaration::initialize_prototype_template(
+            scope,
+            template.prototype_template(scope),
+        );
+    } else {
+        info::install(scope, template, name);
+    }
 }
 
 fn receiver_is_media_devices<'s>(
