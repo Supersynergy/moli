@@ -110,6 +110,7 @@ stylo_atoms = { git = "https://github.com/lexmount/stylo", branch = "moli" }
 stylo_dom = { git = "https://github.com/lexmount/stylo", branch = "moli" }
 stylo_static_prefs = { git = "https://github.com/lexmount/stylo", branch = "moli" }
 stylo_traits = { git = "https://github.com/lexmount/stylo", branch = "moli" }
+svgtypes = { git = "https://github.com/lexmount/svgtypes", branch = "feat/strict-path-numbers" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "645bf5a49df607a8bff34ec90c5343901d04f10e" }
 
 [workspace.lints.clippy]

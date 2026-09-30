@@ -5160,8 +5160,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "svgtypes"
 version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "695b5790b3131dafa99b3bbfd25a216edb3d216dad9ca208d4657bfb8f2abc3d"
+source = "git+https://github.com/lexmount/svgtypes?branch=feat%2Fstrict-path-numbers#173b361d4b0711829748befdde382228e6ab8095"
 dependencies = [
  "kurbo",
  "siphasher",
