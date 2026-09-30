@@ -2145,6 +2145,7 @@ mod post_parse;
 mod queue_microtask;
 mod rendering_update;
 mod script_terminal_completion;
+mod service_worker_interfaces;
 mod streams;
 mod url_components;
 mod webidl_collections;
