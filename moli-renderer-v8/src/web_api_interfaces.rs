@@ -180,6 +180,10 @@ interfaces! {
     GeolocationCoordinates;
     GeolocationPosition;
     GeolocationPositionError;
+    Gamepad;
+    GamepadButton;
+    GamepadEvent: Event;
+    GamepadHapticActuator;
     HTMLAllCollection;
     HTMLAnchorElement: HTMLElement;
     HTMLAreaElement: HTMLElement;
