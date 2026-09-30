@@ -2245,6 +2245,7 @@ mod history_referrer;
 mod history_replace_forward;
 mod http_fixture;
 mod iframe_reinsertion;
+mod iir_filter_interfaces;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
