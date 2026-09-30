@@ -2144,6 +2144,7 @@ mod lazy_window_surfaces;
 mod mouse_snapshot;
 mod no_cors_header_fill;
 mod observer_callbacks;
+mod observer_receivers;
 mod post_parse;
 mod queue_microtask;
 mod rendering_update;
