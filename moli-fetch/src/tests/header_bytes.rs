@@ -62,8 +62,13 @@ async fn request_content_type_distinguishes_absent_empty_and_nonempty_in_all_tra
         ("POST", Some("")),
         ("POST", Some("body")),
         ("PUT", None),
+        ("PUT", Some("")),
         ("PUT", Some("body")),
+        ("PATCH", None),
+        ("PATCH", Some("")),
         ("PATCH", Some("body")),
+        ("DELETE", None),
+        ("DELETE", Some("")),
         ("DELETE", Some("body")),
     ];
     for mode in ["buffered", "html", "raw"] {
@@ -105,6 +110,31 @@ async fn request_content_type_distinguishes_absent_empty_and_nonempty_in_all_tra
                     "{mode}, {method}, body={body:?}: {request}"
                 );
                 assert_eq!(request_head_header_value(request, "x-test"), Some(""));
+                if body.is_none_or(str::is_empty) {
+                    let expected_length = if body.is_some() || matches!(method, "POST" | "PUT") {
+                        Some("0")
+                    } else {
+                        None
+                    };
+                    let header_values = |name: &str| {
+                        request
+                            .split("\r\n")
+                            .filter_map(|line| {
+                                let (header, value) = line.split_once(':')?;
+                                header.eq_ignore_ascii_case(name).then(|| value.trim())
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    assert_eq!(
+                        header_values("content-length"),
+                        expected_length.into_iter().collect::<Vec<_>>(),
+                        "{mode}, {method}, body={body:?}: {request}"
+                    );
+                    assert!(
+                        header_values("transfer-encoding").is_empty(),
+                        "{mode}, {method}, body={body:?}: {request}"
+                    );
+                }
             }
         }
     }
