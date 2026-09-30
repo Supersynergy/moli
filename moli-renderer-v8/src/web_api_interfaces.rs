@@ -496,6 +496,14 @@ interfaces! {
     WebGLRenderingContext;
     WebGLShader: WebGLObject;
     WebGLShaderPrecisionFormat;
+    WebGLActiveInfo;
+    WebGLContextEvent: Event;
+    WebGLTexture: WebGLObject;
+    WebGLQuery: WebGLObject;
+    WebGLSampler: WebGLObject;
+    WebGLSync: WebGLObject;
+    WebGLTransformFeedback: WebGLObject;
+    WebGLVertexArrayObject: WebGLObject;
     WebGLUniformLocation;
     WebSocket: EventTarget;
     WebSocketError: DOMException;

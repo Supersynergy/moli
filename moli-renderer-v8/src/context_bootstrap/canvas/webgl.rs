@@ -1,3 +1,4 @@
+mod interfaces;
 use super::objects::{build_webgl_debug_renderer_info_object, build_webgl_lose_context_object};
 use super::*;
 use crate::web_api_interfaces;
@@ -5,6 +6,7 @@ use crate::{
     util::{callback_data_item, get_private_value, set_private_value, v8_string, v8str},
     webidl,
 };
+pub(super) use interfaces::install_value_template_bindings;
 use moli_webapi_declare::{WebApiObject, WebApiValue};
 
 const WEBGL_VIEWPORT_SLOT: &str = "__moliWebGlViewport";
@@ -776,35 +778,28 @@ pub(crate) fn webgl_get_shader_precision_format_callback(
     _args: v8::FunctionCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = WebGlShaderPrecisionFormat::default()
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+        scope,
+        "WebGLShaderPrecisionFormat",
+    )
+    .expect("WebGLShaderPrecisionFormat intrinsic prototype should be available");
+    let value = WebGlShaderPrecisionFormat::new(prototype, 23, 127, 127)
         .bind(scope)
         .expect("WebGL shader precision format declaration should bind");
     rv.set(value.into());
 }
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::WebGLShaderPrecisionFormat,
-    prototype = "Object",
-    data_properties,
-    enumerable
-)]
-struct WebGlShaderPrecisionFormat {
+#[webapi(interface = web_api_interfaces::WebGLShaderPrecisionFormat)]
+struct WebGlShaderPrecisionFormat<'s> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'s, v8::Object>,
+    #[webapi(slot = interfaces::PRECISION)]
     precision: i32,
-    #[webapi(data_property = "rangeMin")]
+    #[webapi(slot = interfaces::RANGE_MIN)]
     range_min: i32,
-    #[webapi(data_property = "rangeMax")]
+    #[webapi(slot = interfaces::RANGE_MAX)]
     range_max: i32,
-}
-
-impl Default for WebGlShaderPrecisionFormat {
-    fn default() -> Self {
-        Self {
-            precision: 23,
-            range_min: 127,
-            range_max: 127,
-        }
-    }
 }
 
 pub(crate) fn webgl_lose_context_noop_callback(

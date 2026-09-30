@@ -271,6 +271,7 @@ pub(super) fn install_canvas_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
+    webgl::install_value_template_bindings(scope, template, interface_name);
     match interface_name {
         "HTMLCanvasElement" => {
             let prototype = template.prototype_template(scope);

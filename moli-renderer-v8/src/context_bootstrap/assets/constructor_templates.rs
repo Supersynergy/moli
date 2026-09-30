@@ -108,6 +108,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             build_value_event_template(scope, ValueEventKind::Transition)
         }
         ConstructorKind::BlobEvent => build_value_event_template(scope, ValueEventKind::Blob),
+        ConstructorKind::WebGLContextEvent => {
+            build_value_event_template(scope, ValueEventKind::WebGlContext)
+        }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
         }
