@@ -271,6 +271,28 @@ async fn runtime_enable_on_service_worker_session_replays_real_worker_context() 
     }))
     .await;
 
+    let response_index = ctx
+        .sent
+        .iter()
+        .position(|message| message["id"] == json!(82))
+        .expect("enable response");
+    for method in [
+        "Runtime.executionContextCreated",
+        "Runtime.consoleAPICalled",
+        "Runtime.exceptionThrown",
+    ] {
+        let event_index = ctx
+            .sent
+            .iter()
+            .position(|message| message["method"] == json!(method))
+            .expect("buffered Runtime replay");
+        assert!(
+            event_index < response_index,
+            "{method} must precede the enable reply: {:#?}",
+            ctx.sent
+        );
+    }
+
     ctx.expect_result(82, json!({}), Some("SID-service-worker"));
     let context_event = ctx.take_first_matching("service worker execution context", |message| {
         message["method"] == json!("Runtime.executionContextCreated")

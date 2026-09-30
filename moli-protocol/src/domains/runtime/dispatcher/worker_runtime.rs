@@ -1181,7 +1181,10 @@ pub(super) fn shared_worker_runtime_enable_command_output_plan_for_session(
         target.mark_runtime_console_emitted(session_id, console_end);
     }
 
-    let mut plan = CommandOutputPlan::success();
+    // Runtime.enable reports its existing inventory before acknowledging the
+    // enable. Keep replay and reply in one ordered plan, including worker
+    // adapters that synthesize the replay outside the V8 session sink.
+    let mut plan = CommandOutputPlan::default();
     if let Some(execution_context_created) = execution_context_created {
         target.record_runtime_contexts_reported_to_frontend(session_id);
         push_execution_context_created_background_event(
@@ -1204,6 +1207,7 @@ pub(super) fn shared_worker_runtime_enable_command_output_plan_for_session(
             base_timestamp + ((index + 1) as f64 * 0.000_001),
         );
     }
+    plan.push_success();
     plan
 }
 
@@ -1236,7 +1240,10 @@ pub(super) fn service_worker_runtime_enable_command_output_plan_for_session(
         target.mark_runtime_exception_emitted(session_id, exception_end);
     }
 
-    let mut plan = CommandOutputPlan::success();
+    // Runtime.enable reports its existing inventory before acknowledging the
+    // enable. Keep replay and reply in one ordered plan, including worker
+    // adapters that synthesize the replay outside the V8 session sink.
+    let mut plan = CommandOutputPlan::default();
     if let Some(execution_context_created) = execution_context_created {
         target.record_runtime_contexts_reported_to_frontend(session_id);
         push_execution_context_created_background_event(
@@ -1265,6 +1272,7 @@ pub(super) fn service_worker_runtime_enable_command_output_plan_for_session(
         &exception_messages,
         exception_start,
     );
+    plan.push_success();
     plan
 }
 

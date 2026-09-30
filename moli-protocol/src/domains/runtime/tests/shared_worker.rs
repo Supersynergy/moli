@@ -103,6 +103,27 @@ async fn runtime_enable_on_shared_worker_session_replays_real_worker_context() {
     }))
     .await;
 
+    let response_index = ctx
+        .sent
+        .iter()
+        .position(|message| message["id"] == json!(72))
+        .expect("enable response");
+    for method in [
+        "Runtime.executionContextCreated",
+        "Runtime.consoleAPICalled",
+    ] {
+        let event_index = ctx
+            .sent
+            .iter()
+            .position(|message| message["method"] == json!(method))
+            .expect("buffered Runtime replay");
+        assert!(
+            event_index < response_index,
+            "{method} must precede the enable reply: {:#?}",
+            ctx.sent
+        );
+    }
+
     ctx.expect_result(72, json!({}), Some("SID-shared-worker"));
     let context_event = ctx.take_first_matching("shared worker execution context", |message| {
         message["method"] == json!("Runtime.executionContextCreated")
