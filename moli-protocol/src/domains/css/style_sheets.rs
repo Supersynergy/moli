@@ -127,7 +127,7 @@ fn set_css_enabled(conn: &mut CdpConnection, cmd: &Cmd<'_>, enabled: bool) {
     });
 }
 
-fn style_sheet_header_value(frame_id: &str, header: &RendererStyleSheetHeader) -> Value {
+pub(super) fn style_sheet_header_value(frame_id: &str, header: &RendererStyleSheetHeader) -> Value {
     json!({
         "styleSheetId": header.style_sheet_id,
         "frameId": frame_id,

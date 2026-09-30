@@ -1,3 +1,5 @@
+pub(crate) mod native;
+
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::CssAction;
 use crate::domains::command_output::CommandOutputPlan;
@@ -777,7 +779,9 @@ mod tests {
             let completed = pending.wait().await;
             match ctx.conn.complete_pending_command_dispatch(completed).await {
                 CdpCommandTaskStep::Pending(next) => pending = *next,
-                CdpCommandTaskStep::Complete(outcome) => return outcome.into_parts(),
+                CdpCommandTaskStep::Complete(outcome) => {
+                    return ctx.route_completed_command_outcome_for_test(outcome).await;
+                }
             }
         }
     }
@@ -1276,8 +1280,8 @@ mod tests {
             .position(|message| message["method"] == json!("CSS.styleSheetAdded"))
             .expect("CSS.styleSheetAdded event");
         assert!(
-            response_pos < first_event_pos,
-            "stylesheet event should follow CSS.enable response: {:?}",
+            first_event_pos < response_pos,
+            "stylesheet event should precede CSS.enable response: {:?}",
             ctx.sent
         );
 
@@ -1683,6 +1687,9 @@ mod tests {
             .await
             .expect("background page should load");
 
+        let active_renderer = crate::conn::RendererPageResidenceIdentity::from_page(&active_page);
+        let background_renderer =
+            crate::conn::RendererPageResidenceIdentity::from_page(&background_page);
         let mut browser_context = BrowserContext::new("BID-css-owner-route".to_owned());
         browser_context.set_active_target_id("TID-css-active".to_owned());
         browser_context
@@ -1702,6 +1709,26 @@ mod tests {
             .replace_loaded_page(Some(background_page));
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
+        // These fixture Pages bypass production attachment. Preserve their
+        // exact stream owners before any command publishes a native response.
+        for (target, renderer) in [
+            ("TID-css-active", active_renderer),
+            ("TID-css-background", background_renderer),
+        ] {
+            let owner = crate::conn::CommandOwnerScope::for_route(
+                crate::conn::CdpSessionRoute::PageTarget {
+                    browser_context_id: "BID-css-owner-route".to_owned(),
+                    target_id: target.to_owned(),
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                },
+            );
+            let residence = ctx
+                .conn
+                .target_page_residence_identity_for_owner(&owner)
+                .unwrap();
+            ctx.conn
+                .bind_renderer_page_output_owner(renderer, residence);
+        }
 
         let background_session = attach_page_session_async(&mut ctx, "TID-css-background").await;
         let active_style_sheet_id = inline_style_sheet_id_for_session_async(&mut ctx, None).await;
@@ -2370,7 +2397,8 @@ mod tests {
         let CdpCommandTaskStep::Complete(outcome) = step else {
             panic!("CSS objectId computed style should complete after one renderer command");
         };
-        let (messages, scheduler_events) = outcome.into_parts();
+        let (messages, scheduler_events) =
+            ctx.route_completed_command_outcome_for_test(outcome).await;
         assert!(
             scheduler_events.is_empty(),
             "computed style objectId lookup should not enqueue scheduler events: {scheduler_events:?}"
