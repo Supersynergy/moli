@@ -169,6 +169,15 @@ impl From<UnrestrictedDouble> for f64 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Float(pub f32);
+
+impl From<Float> for f32 {
+    fn from(value: Float) -> Self {
+        value.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Double(pub f64);
 
 impl From<Double> for f64 {

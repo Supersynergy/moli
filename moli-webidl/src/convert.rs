@@ -155,6 +155,24 @@ impl<'s> WebIdlConverter<'s> for UnrestrictedDouble {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::Float {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let value = number_value(scope, value, context, "float")? as f32;
+        if value.is_finite() {
+            Ok(Self(value))
+        } else {
+            Err(WebIdlError::cannot_convert(context, "float"))
+        }
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for Double {
     type Options = ();
 

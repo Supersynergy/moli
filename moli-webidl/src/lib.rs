@@ -67,3 +67,6 @@ pub use types::{
     Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong,
     UnsignedShort, UsvString,
 };
+
+/// Restricted WebIDL float represented as a finite binary32 value.
+pub use types::Float;
