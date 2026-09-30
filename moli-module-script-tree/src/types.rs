@@ -519,7 +519,8 @@ impl FetchedModuleSource {
 pub enum ModuleSource {
     /// Share decoded text across fetch clients and the renderer's compiled record.
     Text(Arc<str>),
-    Binary(Vec<u8>),
+    /// Share immutable Wasm bytes across fetch clients and compilation.
+    Binary(Arc<[u8]>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

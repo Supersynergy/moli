@@ -2707,6 +2707,59 @@ mod tests {
     }
 
     #[test]
+    fn wasm_module_compilation_shares_fetched_bytes_and_preserves_map_source() {
+        let bytes = b"\0asm\x01\0\0\0";
+        for phase in [
+            module_tree::ModuleImportPhase::Evaluation,
+            module_tree::ModuleImportPhase::Source,
+        ] {
+            let mut vm = new_test_vm("https://app.example.test/page");
+            let source_url = url("https://app.example.test/source.wasm");
+            let key = ModuleMapKey::webassembly(source_url.clone());
+            let shared_bytes: std::sync::Arc<[u8]> = bytes.as_slice().into();
+            let weak_source = std::sync::Arc::downgrade(&shared_bytes);
+            let source = ModuleSource::binary(shared_bytes);
+            let source_pointer = source.binary_source().unwrap().as_ptr();
+            let fetched = module_tree::FetchedModuleSource::new(
+                chromium_module_key(&key),
+                chromium_module_key(&key),
+                source_url.clone(),
+                source_url,
+                chromium_source(source.clone()),
+                module_tree::ModuleFetchMetadata::default(),
+            );
+            let snapshot = {
+                let mut host =
+                    RendererModuleScriptTreeHost::new(NativeModuleTreeDocumentOwner::new(&mut vm));
+                module_tree::ModuleScriptTreeHost::compile_module_source(
+                    &mut host,
+                    fetched.clone(),
+                    phase,
+                )
+                .expect("Wasm module should compile")
+            };
+            let entry = local_entry_id(snapshot.entry);
+            let retained_source = vm.document_runtime.native_module_source(entry).unwrap();
+            assert_eq!(retained_source.binary_source(), Some(bytes.as_slice()));
+            assert_eq!(
+                retained_source.binary_source().unwrap().as_ptr(),
+                source_pointer,
+                "{phase:?}: compilation must share the original fetched byte allocation",
+            );
+            drop(retained_source);
+            drop(fetched);
+            drop(source);
+            assert_eq!(
+                weak_source.strong_count(),
+                1,
+                "{phase:?}: the module map should retain the original byte allocation",
+            );
+            drop(vm);
+            assert!(weak_source.upgrade().is_none());
+        }
+    }
+
+    #[test]
     fn native_json_module_fetch_request_uses_json_destination_metadata() {
         let fetch_request = NativeModuleGraphFetchRequest::new_for_test(
             url("https://app.example.test/data.json"),

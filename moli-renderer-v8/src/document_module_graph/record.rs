@@ -8,7 +8,8 @@ use super::{ModuleAttributesKey, ModuleKind, ModuleMapKey};
 pub(crate) enum ModuleSource {
     /// The fetch pipeline and synthetic evaluation share this immutable allocation.
     Text(Arc<str>),
-    Binary(Vec<u8>),
+    /// Retained Wasm bytes share the fetch allocation across clones.
+    Binary(Arc<[u8]>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,8 +90,8 @@ impl ModuleSource {
         Self::Text(source.into())
     }
 
-    pub(crate) fn binary(bytes: Vec<u8>) -> Self {
-        Self::Binary(bytes)
+    pub(crate) fn binary(bytes: impl Into<Arc<[u8]>>) -> Self {
+        Self::Binary(bytes.into())
     }
 
     pub(crate) fn text_source(&self) -> Option<&str> {
