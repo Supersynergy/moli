@@ -2249,6 +2249,7 @@ mod lazy_storage;
 mod lazy_window_surfaces;
 mod legacy_performance;
 mod location_put_forwards;
+mod media_device_interfaces;
 mod mouse_snapshot;
 mod native_dom_strings;
 mod navigation_timing_inheritance;
