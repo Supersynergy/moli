@@ -838,7 +838,10 @@ pub(super) fn complete_pending_runtime_enable_command(
     }
     let frame_id = conn.runtime_session_owner_frame_id_for_owner(&completed.owner_scope);
 
-    let mut plan = CommandOutputPlan::success();
+    // Runtime.enable reports its existing inventory before acknowledging the
+    // enable. Keep replay and reply in one ordered plan, including worker
+    // adapters that synthesize the replay outside the V8 session sink.
+    let mut plan = CommandOutputPlan::default();
     for event in replay.into_events() {
         match event {
             RuntimeEnableReplayEvent::Context(event) => {
@@ -874,6 +877,7 @@ pub(super) fn complete_pending_runtime_enable_command(
             }
         }
     }
+    plan.push_success();
     plan
 }
 

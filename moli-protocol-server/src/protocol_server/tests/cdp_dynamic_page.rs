@@ -139,34 +139,82 @@ async fn enable_runtime_and_expect_default_context(
     session_id: Option<&str>,
     label: &str,
 ) -> Vec<serde_json::Value> {
-    let mut messages =
+    let messages =
         send_cdp_command(socket, command_id, "Runtime.enable", session_id, json!({})).await;
     assert_eq!(response_by_id(&messages, command_id)["result"], json!({}));
-    if !messages.iter().any(|message| {
-        message.get("sessionId").and_then(serde_json::Value::as_str) == session_id
-            && message["method"] == json!("Runtime.executionContextCreated")
-            && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
-    }) {
-        messages.extend(
-            send_cdp_command(
-                socket,
-                command_id + 1,
-                "Runtime.evaluate",
-                session_id,
-                json!({ "expression": "void 0" }),
-            )
-            .await,
-        );
-    }
+    // V8RuntimeAgentImpl::enable reports existing contexts synchronously;
+    // Blink's DevToolsSession flushes those notifications before the reply.
+    // Waiting for another command would conceal a broken enable boundary.
     assert!(
         messages.iter().any(|message| {
             message.get("sessionId").and_then(serde_json::Value::as_str) == session_id
                 && message["method"] == json!("Runtime.executionContextCreated")
                 && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
         }),
-        "{label} did not report the existing default context before the next Runtime response: {messages:#?}"
+        "{label} did not report the existing default context before Runtime.enable replied: {messages:#?}"
     );
     messages
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cdp_ordering_deferred_reply_allows_its_later_resolver() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let context = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    send_cdp_command_without_wait(
+        &mut browser, 10, "Runtime.evaluate", session,
+        json!({ "expression": "new Promise(resolve => globalThis.finishOrderingProbe = resolve)", "awaitPromise": true, "returnByValue": true }),
+    ).await;
+    let later = send_cdp_command(
+        &mut browser,
+        11,
+        "Runtime.evaluate",
+        session,
+        json!({ "expression": "typeof finishOrderingProbe", "returnByValue": true }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&later, 11)["result"]["result"]["value"],
+        json!("function")
+    );
+    assert!(
+        later.iter().all(|message| message["id"] != json!(10)),
+        "an unresolved Promise must have no terminal reply: {later:#?}"
+    );
+    send_cdp_command_without_wait(
+        &mut browser,
+        12,
+        "Runtime.evaluate",
+        session,
+        json!({ "expression": "finishOrderingProbe(42); 'resolved'", "returnByValue": true }),
+    )
+    .await;
+    let mut terminal_ids = std::collections::HashSet::new();
+    let completed = recv_until_match(&mut browser, |message| {
+        if let Some(id) = message["id"].as_u64() {
+            assert!(
+                terminal_ids.insert(id),
+                "duplicate terminal reply: {message}"
+            );
+        }
+        terminal_ids.contains(&10) && terminal_ids.contains(&12)
+    })
+    .await;
+    assert_eq!(
+        response_by_id(&completed, 10)["result"]["result"]["value"],
+        json!(42)
+    );
+    assert_eq!(
+        response_by_id(&completed, 12)["result"]["result"]["value"],
+        json!("resolved")
+    );
+    browser.close(None).await.expect("close browser websocket");
+    abort_test_cdp_server(server).await;
 }
 
 async fn puppeteer_auto_attach_existing_page(
