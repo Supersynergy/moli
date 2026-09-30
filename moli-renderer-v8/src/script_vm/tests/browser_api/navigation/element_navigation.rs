@@ -1,5 +1,32 @@
 use super::*;
 
+#[test]
+fn noopener_named_hyperlink_reuses_an_existing_iframe() {
+    let mut vm = new_storage_test_vm("https://example.com/page.html");
+    vm.eval(
+        r#"
+const body = document.body;
+const frame = document.createElement('iframe');
+frame.name = 'report';
+body.append(frame);
+const link = document.createElement('a');
+link.target = 'report';
+link.rel = 'noopener';
+link.href = 'about:blank#isolated';
+body.append(link);
+link.click();
+"#,
+    )
+    .expect("noopener named hyperlink should evaluate");
+
+    assert_eq!(
+        vm.eval("frame.contentWindow.location.href")
+            .expect("iframe URL should evaluate"),
+        "about:blank#isolated"
+    );
+    assert!(vm.take_pending_popup_activations().is_empty());
+}
+
 #[tokio::test]
 async fn named_element_navigation_prefers_its_source_frame_over_duplicate_names() {
     for action in ["anchor", "submit", "requestSubmit"] {

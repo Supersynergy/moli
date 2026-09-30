@@ -1214,7 +1214,7 @@ impl JsContextHost {
         self.child_window_proxy_records.realm_top(scope, handle)
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_parent_window<'s>(
+    pub(crate) fn child_browsing_context_parent_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,
@@ -1280,7 +1280,7 @@ impl JsContextHost {
         set_object_slot(scope, window, "__moliWindowTop", top.into());
     }
 
-    pub(in crate::native_bridge::context_host) fn child_window_object_slot<'s>(
+    pub(crate) fn child_window_object_slot<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         window: v8::Local<'s, v8::Object>,
         name: &str,
@@ -1368,7 +1368,7 @@ impl JsContextHost {
         (parent, top)
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_root_window<'s>(
+    pub(crate) fn child_browsing_context_root_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         handle: DomHandle,

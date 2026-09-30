@@ -1,7 +1,7 @@
-use super::shared::WINDOW_NAVIGATOR_SLOT;
+use super::shared::{CHILD_BROWSING_CONTEXT_HANDLE_SLOT, WINDOW_NAVIGATOR_SLOT};
 use crate::util::{
-    callback_data_index_value, context_host_ptr_from_context_slot,
-    context_host_ptr_from_window_object, get_private_value, throw_type_error,
+    callback_data_index_value, context_host_ptr_from_context_slot, get_private_value,
+    throw_type_error,
 };
 
 /// Recognizes a native Window receiver for WebIDL brand checks.
@@ -34,7 +34,10 @@ fn is_live_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if context_host_ptr_from_window_object(scope, receiver).is_some() {
+    if crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some()
+        || crate::native_bridge::cross_origin_lightweight_popup_id(scope, receiver).is_some()
+        || get_private_value(scope, receiver, CHILD_BROWSING_CONTEXT_HANDLE_SLOT).is_some()
+    {
         return true;
     }
     // The shared helper maps an `undefined` rollback marker to `None`.
