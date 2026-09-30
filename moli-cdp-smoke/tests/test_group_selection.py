@@ -30,6 +30,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("runtime-exception", DEFAULT_GROUP_NAMES)
         self.assertIn("file-chooser", DEFAULT_GROUP_NAMES)
         self.assertIn("inspector-routing", DEFAULT_GROUP_NAMES)
+        self.assertIn("cdp-ordering", DEFAULT_GROUP_NAMES)
         self.assertIn("navigation-outcomes", DEFAULT_GROUP_NAMES)
         self.assertIn("media-error", DEFAULT_GROUP_NAMES)
         self.assertIn("locale-timezone-inputs", DEFAULT_GROUP_NAMES)

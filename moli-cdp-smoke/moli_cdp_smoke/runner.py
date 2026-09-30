@@ -21,6 +21,7 @@ from .groups.action_window import run_action_window_group
 from .groups.agent_browser import run_agent_browser_group
 from .groups.agent_episode import run_agent_episode_group
 from .groups.browser_semantics import run_browser_semantics_group
+from .groups.cdp_ordering import run_cdp_ordering_group
 from .groups.classic_scrollbar import run_classic_scrollbar_group
 from .groups.cdp_use import run_cdp_use_group
 from .groups.chrome_remote_interface import run_chrome_remote_interface_group
@@ -134,6 +135,12 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
         "Chromium-calibrated Page/Worker active-JS interrupt, nested Main receiver, per-session FIFO, and non-V8 IO boundaries.",
         "raw",
         run_inspector_routing_group,
+    ),
+    SmokeGroup(
+        "cdp-ordering",
+        "Renderer native/Inspector reply and notification order, deferred resolvers, pause reentry, and explicit Moli owner-only mutation boundaries.",
+        "raw",
+        run_cdp_ordering_group,
     ),
     SmokeGroup(
         "action-window",

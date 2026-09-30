@@ -25,6 +25,33 @@ observed, but it does not replace the executable probe when one can be run. If
 Chromium cannot be tested, document that limitation explicitly instead of
 presenting an inferred expectation as verified behavior.
 
+The default `cdp-ordering` group locks down Renderer native and Inspector wire
+publication order. It pipelines Page trees/layout, DOMSnapshot, DOM queries and
+objects, CSS, AX, and a native backend error before `Runtime.enable`; stylesheet
+and isolated-world context notifications must precede their corresponding
+responses. Trees must reflect the preceding pipelined history mutation even
+when its response has not been consumed. The effective URL includes Chromium's
+separate `urlFragment` field; Moli currently includes the fragment in `url`.
+Deferred Promise evaluation must allow its later resolver to run,
+ordinary pause must allow native queries and synchronous focus callback reentry,
+and instrumentation pause must leave Main work pending while IO remains live.
+All scenarios use local fixture documents, match the navigation's loader and
+`DOMContentLoaded` before setup, track the original response session
+and exactly one terminal per command, retain the full wire transcript, and use
+protocol events/responses instead of sleeps or retries.
+
+Four mutation cases explicitly preserve Moli's current VM entry boundary:
+`DOM.setAttributeValue`, `CSS.setStyleSheetText`, `Page.setDocumentContent`, and
+`Emulation.setHardwareConcurrencyOverride` wait for resume in Moli but complete
+during ordinary pause in Chromium. This is a Moli implementation limitation,
+not a CDP requirement; supporting nested mutation later must deliberately update
+this expectation. CSS editing checks effective computed color, since Chromium
+changes CSSOM without rewriting the style element's DOM text. The group is
+calibrated against `/usr/bin/chromium` 145.0.7632.116 and can run unchanged using
+`uv run moli-cdp-smoke --group cdp-ordering --endpoint URL`. Run a bounded stress
+check with `--group cdp-ordering --repeat 20 --jobs 4`; any failed run fails the
+suite.
+
 The `history-worlds` group was calibrated on 2026-09-25 against macOS Google
 Chrome 154.0.8037.57 using a fresh headless profile. It uses a real CDP WebSocket
 and `Page.createIsolatedWorld` to cover the PR #818 regressions: entry wrapper
