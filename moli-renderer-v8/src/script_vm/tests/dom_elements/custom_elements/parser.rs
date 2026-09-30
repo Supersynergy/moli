@@ -631,7 +631,7 @@ fn child_parser_write_queues_mutation_records_for_parser_insertions() {
 
 #[test]
 fn child_parser_guards_dynamic_markup_during_construction_and_attribute_reactions() {
-    let mut vm = new_storage_test_vm("https://child-parser-dynamic-markup.test/");
+    let mut vm = new_storage_html_test_vm("https://child-parser-dynamic-markup.test/");
     let result = vm.eval(r#"
       (() => {
         const frame = document.createElement('iframe');

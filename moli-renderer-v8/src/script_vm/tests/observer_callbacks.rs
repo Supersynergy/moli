@@ -21,6 +21,16 @@ fn observer_callback_test_vm(url: &str) -> StandaloneScriptVmHarness {
 }
 
 #[test]
+fn document_preinsert_validation_precedes_mutation_and_adoption() {
+    let mut vm = observer_callback_test_vm("https://document-preinsert.test/");
+    assert_eq!(
+        vm.eval(include_str!("document_preinsert_validation.js"))
+            .expect("Document pre-insert validation should precede mutation and adoption"),
+        "true"
+    );
+}
+
+#[test]
 fn windowless_fragment_insertions_preserve_native_mutation_records() {
     let mut vm = observer_callback_test_vm("https://windowless-fragments.test/");
     assert_eq!(

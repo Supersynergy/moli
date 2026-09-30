@@ -648,7 +648,7 @@ fn scoped_registry_initialize_upgrades_existing_associated_nodes() {
 
 #[test]
 fn custom_element_registry_associations_survive_tree_mutations_and_adoption() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+    let mut vm = new_storage_html_test_vm("https://example.com/");
 
     let result = vm
         .eval(
@@ -1055,7 +1055,7 @@ fn unresolved_custom_elements_in_detached_documents_use_current_realm_prototypes
 
 #[test]
 fn unresolved_custom_elements_adopted_from_detached_documents_upgrade_in_live_document() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+    let mut vm = new_storage_html_test_vm("https://example.com/");
 
     let result = vm
         .eval(

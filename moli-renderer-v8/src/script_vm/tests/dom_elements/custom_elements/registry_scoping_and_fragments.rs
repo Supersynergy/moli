@@ -951,7 +951,7 @@ fn scoped_registry_define_upgrades_open_popup_documents() {
 
 #[test]
 fn scoped_registry_upgrade_order_follows_cross_document_shadow_tree_adoption() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+    let mut vm = new_storage_html_test_vm("https://example.com/");
 
     let result = vm
         .eval(

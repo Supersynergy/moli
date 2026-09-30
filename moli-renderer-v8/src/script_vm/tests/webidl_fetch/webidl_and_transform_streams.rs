@@ -66,7 +66,7 @@ fn webidl_required_nullable_dictionary_rejects_undefined_member() {
 
 #[test]
 fn fetch_url_constructors_use_child_frame_base_url() {
-    let mut vm = new_storage_test_vm("https://fetch-current.test/entry/page.html");
+    let mut vm = new_storage_html_test_vm("https://fetch-current.test/entry/page.html");
 
     let result = vm
         .eval(

@@ -328,7 +328,7 @@ fn crypto_secure_context_exposure_matches_wpt_historical_and_idl() {
 }
 #[test]
 fn crypto_secure_context_inherited_child_frames_use_creator_origin() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+    let mut vm = new_storage_html_test_vm("https://example.com/");
 
     let result = vm
         .eval(

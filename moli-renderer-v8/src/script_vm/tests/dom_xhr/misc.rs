@@ -604,7 +604,7 @@ fn node_move_before_parent_node_surface_and_validation() {
 }
 #[test]
 fn node_move_before_preserves_nonce_content_attribute() {
-    let mut vm = new_storage_test_vm("https://node-move-before-nonce.test/");
+    let mut vm = new_storage_html_test_vm("https://node-move-before-nonce.test/");
 
     let result = vm
         .eval(

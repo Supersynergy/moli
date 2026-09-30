@@ -1047,7 +1047,7 @@ fn document_fonts_tracks_connected_style_candidates() {
 }
 #[test]
 fn document_fonts_updates_only_the_changed_owner_contribution() {
-    let mut vm = new_storage_test_vm("https://document-fonts-owner-projection.test/");
+    let mut vm = new_storage_html_test_vm("https://document-fonts-owner-projection.test/");
 
     let result = vm
         .eval(

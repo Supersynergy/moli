@@ -276,7 +276,7 @@ fn every_declared_lazy_window_interface_materializes_with_data_property_shape() 
 fn many_unused_child_realms_keep_storage_surfaces_unmaterialized() {
     const CHILD_COUNT: usize = 16;
 
-    let mut vm = new_storage_test_vm("https://lazy-unused-child-realms.test/");
+    let mut vm = new_storage_html_test_vm("https://lazy-unused-child-realms.test/");
     assert_eq!(
         vm.eval(&format!(
             r#"

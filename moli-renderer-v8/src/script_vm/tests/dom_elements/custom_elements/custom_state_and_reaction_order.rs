@@ -1071,7 +1071,7 @@ fn custom_element_dataset_and_dom_token_list_use_native_reaction_path() {
 
 #[test]
 fn custom_element_inner_and_outer_text_replacements_enqueue_disconnected_callback() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+    let mut vm = new_storage_html_test_vm("https://example.com/");
 
     let result = vm
         .eval(

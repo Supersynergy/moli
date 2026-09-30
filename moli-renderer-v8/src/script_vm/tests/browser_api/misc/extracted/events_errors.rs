@@ -306,8 +306,8 @@ async fn showing_popover_focuses_autofocus_descendant_before_toggle_event() {
         .eval(
             r#"
             (() => {
-              const html = document.appendChild(document.createElement("html"));
-              const body = html.appendChild(document.createElement("body"));
+              const html = document.documentElement || document.appendChild(document.createElement("html"));
+              const body = document.body || html.appendChild(document.createElement("body"));
               const button = document.createElement("button");
               const popover = document.createElement("div");
               const focusTarget = document.createElement("button");
@@ -365,8 +365,8 @@ async fn removing_open_popover_dispatches_forced_close_events() {
         .eval(
             r#"
             (() => {
-              const html = document.appendChild(document.createElement("html"));
-              const body = html.appendChild(document.createElement("body"));
+              const html = document.documentElement || document.appendChild(document.createElement("html"));
+              const body = document.body || html.appendChild(document.createElement("body"));
               const popover = document.createElement("div");
               popover.popover = "auto";
               body.append(popover);
@@ -452,8 +452,8 @@ async fn popover_toggle_events_coalesce_within_one_task() {
             (() => {
               const popover = document.createElement("div");
               popover.setAttribute("popover", "");
-              const html = document.appendChild(document.createElement("html"));
-              html.appendChild(document.createElement("body")).appendChild(popover);
+              const html = document.documentElement || document.appendChild(document.createElement("html"));
+              (document.body || html.appendChild(document.createElement("body"))).appendChild(popover);
               globalThis.__lmPopoverToggleEvents = [];
               popover.addEventListener("toggle", event => {
                 globalThis.__lmPopoverToggleEvents.push(`${event.oldState}->${event.newState}`);

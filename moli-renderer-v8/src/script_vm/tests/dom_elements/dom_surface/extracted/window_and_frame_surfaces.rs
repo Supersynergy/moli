@@ -681,7 +681,7 @@ fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() 
 }
 #[test]
 fn targeted_anchor_click_reports_same_document_hash_change_for_child_window() {
-    let mut vm = new_storage_test_vm("https://targeted-child-hash.test/page.html");
+    let mut vm = new_storage_html_test_vm("https://targeted-child-hash.test/page.html");
 
     let result = vm
         .eval(

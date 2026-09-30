@@ -52,7 +52,7 @@ fn css_escape_rethrows_string_conversion_errors() {
 }
 #[test]
 fn get_computed_style_accepts_adopted_child_frame_node_wrapper() {
-    let mut vm = new_storage_test_vm("https://style-adopted-child-frame-node.test/");
+    let mut vm = new_storage_html_test_vm("https://style-adopted-child-frame-node.test/");
 
     let result = vm
         .eval(
