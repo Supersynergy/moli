@@ -1,4 +1,5 @@
 use super::super::constructors::*;
+use super::super::events::{device_motion_event_constructor, device_orientation_event_constructor};
 use super::super::{
     animation_runtime::{animation_constructor_callback, keyframe_effect_constructor_callback},
     broadcast_channel::broadcast_channel_constructor_callback,
@@ -151,6 +152,16 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::WheelEvent => {
             build_event_subclass_template(scope, EventSubclassKind::WheelEvent)
+        }
+        ConstructorKind::DeviceMotionEvent => {
+            v8::FunctionTemplate::builder(device_motion_event_constructor)
+                .length(1)
+                .build(scope)
+        }
+        ConstructorKind::DeviceOrientationEvent => {
+            v8::FunctionTemplate::builder(device_orientation_event_constructor)
+                .length(1)
+                .build(scope)
         }
         ConstructorKind::PointerEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PointerEvent)

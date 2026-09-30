@@ -205,6 +205,22 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::BlobEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::DeviceMotionEvent::DESCRIPTOR,
+        kind: ConstructorKind::DeviceMotionEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::DeviceMotionEventAcceleration::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::DeviceMotionEventRotationRate::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::DeviceOrientationEvent::DESCRIPTOR,
+        kind: ConstructorKind::DeviceOrientationEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::UIEvent::DESCRIPTOR,
         kind: ConstructorKind::UiEvent,
     },

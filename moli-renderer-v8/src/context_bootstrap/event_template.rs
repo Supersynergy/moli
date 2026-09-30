@@ -336,6 +336,7 @@ pub(super) fn install_event_template_bindings<'s>(
         install_event_base_bindings(scope, template);
     }
     super::events::install_value_event_template_bindings(scope, template, spec.interface.name());
+    super::events::install_device_event_template_bindings(scope, template, spec.interface.name());
 
     match spec.interface.name() {
         "UIEvent" => {

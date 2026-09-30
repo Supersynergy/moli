@@ -10,7 +10,7 @@ struct DocumentCreateEventArgs {
     interface: String,
 }
 
-#[derive(Debug, PartialEq, Eq, strum::EnumString)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 enum DocumentCreateEventKind {
     BeforeUnloadEvent,
@@ -45,8 +45,8 @@ impl DocumentCreateEventKind {
             DocumentCreateEventKind::BeforeUnloadEvent => "Event",
             DocumentCreateEventKind::Event => "Event",
             DocumentCreateEventKind::CustomEvent => "CustomEvent",
-            DocumentCreateEventKind::DeviceMotionEvent => "Event",
-            DocumentCreateEventKind::DeviceOrientationEvent => "Event",
+            DocumentCreateEventKind::DeviceMotionEvent => "DeviceMotionEvent",
+            DocumentCreateEventKind::DeviceOrientationEvent => "DeviceOrientationEvent",
             DocumentCreateEventKind::DragEvent => "Event",
             DocumentCreateEventKind::UiEvent => "UIEvent",
             DocumentCreateEventKind::TextEvent => "TextEvent",
@@ -66,6 +66,22 @@ fn throw_not_supported_dom_exception(scope: &mut v8::PinScope<'_, '_>, message: 
     crate::context_bootstrap::throw_dom_exception_value(scope, message, "NotSupportedError");
 }
 
+fn new_uninitialized_document_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    kind: DocumentCreateEventKind,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let name = kind.constructor_name();
+    let constructor =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, name).ok()?;
+    if kind == DocumentCreateEventKind::TextEvent {
+        return new_uninitialized_text_event(scope);
+    }
+    let empty_type = v8str(scope, "");
+    let event = constructor.new_instance(scope, &[empty_type.into()])?;
+    set_event_initialized(scope, event, false);
+    Some(event)
+}
+
 pub(super) fn document_create_event_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -78,30 +94,27 @@ pub(super) fn document_create_event_callback<'s>(
         throw_not_supported_dom_exception(scope, "The provided event type is not supported.");
         return;
     };
-    if kind == DocumentCreateEventKind::TextEvent {
-        match new_uninitialized_text_event(scope) {
-            Some(event) => rv.set(event.into()),
-            None => rv.set_undefined(),
-        }
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    // Exposure follows the Document's realm, while an operation's exception
+    // belongs to the callee realm even when its receiver is from another one.
+    let exposed = {
+        let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+        super::exposed_interfaces::is_window_interface_exposed(
+            target_scope,
+            kind.constructor_name(),
+        )
+    };
+    if !exposed {
+        throw_not_supported_dom_exception(
+            scope,
+            "The provided event type is not exposed in this realm.",
+        );
         return;
     }
-    let ctor_name = kind.constructor_name();
-
-    let global = scope.get_current_context().global(scope);
-    let Some(constructor_value) = global.get(scope, v8str(scope, ctor_name).into()) else {
-        rv.set_undefined();
-        return;
-    };
-    let Ok(constructor) = v8::Local::<v8::Function>::try_from(constructor_value) else {
-        rv.set_undefined();
-        return;
-    };
-    let empty_type = v8str(scope, "");
-    match constructor.new_instance(scope, &[empty_type.into()]) {
-        Some(event) => {
-            set_event_initialized(scope, event, false);
-            rv.set(event.into());
-        }
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    match new_uninitialized_document_event(target_scope, kind) {
+        Some(event) => rv.set(event.into()),
         None => rv.set_undefined(),
     }
 }

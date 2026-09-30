@@ -2129,6 +2129,7 @@ mod canvas_arguments;
 mod canvas_paths;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
+mod device_events;
 mod dom_elements;
 mod dom_xhr;
 mod element_click;

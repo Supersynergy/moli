@@ -3,12 +3,18 @@ use crate::util::{get_private_value, utf16_units, v8_string, v8_string_from_utf1
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 mod base;
+mod device;
 mod init;
 mod kind;
 mod methods;
 mod subclasses;
 mod value;
 mod wrappers;
+
+pub(in crate::context_bootstrap) use device::{
+    device_motion_event_constructor, device_orientation_event_constructor,
+    install_device_event_template_bindings,
+};
 
 pub(in crate::context_bootstrap) use value::{
     ValueEventKind, build_value_event_template, install_value_event_template_bindings,

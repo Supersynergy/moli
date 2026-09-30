@@ -10,9 +10,9 @@ use super::realm_registry::{IntrinsicInterfaceRegistry, RealmInterfaceState};
 use super::template_registry::ExposedInterfaceTemplateRegistry;
 use crate::context_bootstrap::specs::ConstructorSpec;
 use crate::util::{
-    constructor_object, constructor_prototype_object, initialize_intrinsic_interface_registry,
-    register_intrinsic_interface, registered_intrinsic_constructor, registered_intrinsic_prototype,
-    v8str,
+    constructor_object, constructor_prototype_object, get_private_value,
+    initialize_intrinsic_interface_registry, register_intrinsic_interface,
+    registered_intrinsic_constructor, registered_intrinsic_prototype, v8str,
 };
 
 const LEGACY_WINDOW_INTERFACE_ALIASES: &[(&str, &str)] = &[
@@ -151,6 +151,28 @@ pub(crate) fn filter_window_exposed_interfaces(
         }
     }
     Ok(())
+}
+
+/// Exposure is determined by the realm's native metadata, independently of
+/// author changes to the corresponding global property.
+pub(in crate::context_bootstrap) fn is_window_interface_exposed(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+) -> bool {
+    let global = scope.get_current_context().global(scope);
+    let secure = get_private_value(
+        scope,
+        global,
+        crate::context_bootstrap::runtime_state::WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT,
+    )
+    .is_some_and(|value| value.boolean_value(scope));
+    let Some(registry) = ExposedInterfaceTemplateRegistry::current(scope) else {
+        return false;
+    };
+    registry
+        .id_by_name(name)
+        .and_then(|id| registry.metadata(id))
+        .is_some_and(|metadata| metadata.is_exposed(RealmKind::Window, secure))
 }
 
 pub(crate) fn initialize_realm_interface_registry(
