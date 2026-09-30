@@ -2261,6 +2261,7 @@ mod observer_receivers;
 mod performance_receivers;
 mod popup_root_window;
 mod post_parse;
+mod push_interfaces;
 mod queue_microtask;
 mod rendering_observers;
 mod rendering_update;
