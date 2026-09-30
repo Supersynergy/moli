@@ -1232,6 +1232,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::AudioBuffer,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioProcessingEvent::DESCRIPTOR,
+        kind: ConstructorKind::AudioProcessingEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::OfflineAudioCompletionEvent::DESCRIPTOR,
+        kind: ConstructorKind::OfflineAudioCompletionEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AbstractRange::DESCRIPTOR,
         kind: ConstructorKind::AbstractRange,
     },

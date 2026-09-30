@@ -323,6 +323,7 @@ interfaces! {
     Notification: EventTarget;
     NotificationEvent: ExtendableEvent;
     OfflineAudioCompletionEvent: Event;
+    AudioProcessingEvent: Event;
     OfflineAudioContext: BaseAudioContext;
     OffscreenCanvas;
     OffscreenCanvasRenderingContext2D;

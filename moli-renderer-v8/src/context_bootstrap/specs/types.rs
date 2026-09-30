@@ -79,6 +79,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     File,
     FileReader,
     FileReaderSync,
+    AudioProcessingEvent,
+    OfflineAudioCompletionEvent,
     XmlSerializer,
     AbortController,
     BroadcastChannel,
