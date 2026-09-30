@@ -694,6 +694,30 @@ JSON.stringify([selected === window, selected === fake, location.href, marker, p
     assert!(vm.take_pending_location_navigation_with_seed().is_none());
 }
 
+#[test]
+fn borrowed_popup_open_parent_and_top_use_the_popup_receiver_identity() {
+    let mut vm = new_storage_test_vm("https://example.com/source");
+    assert_eq!(
+        vm.eval(
+            r#"
+const popup = open("about:blank#popup", "report");
+const selectedParent = popup.open("", "_parent");
+const selectedTop = popup.open("", "_top");
+JSON.stringify([
+  selectedParent === popup,
+  selectedTop === popup,
+  selectedParent === window,
+  selectedTop === window,
+  popup.location.href
+]);
+"#,
+        )
+        .expect("borrowed popup special-target selection should evaluate"),
+        r#"[true,true,false,false,"about:blank#popup"]"#
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
 #[tokio::test]
 async fn child_window_open_empty_parent_and_top_use_internal_browsing_context_identity() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

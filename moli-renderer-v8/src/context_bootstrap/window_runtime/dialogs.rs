@@ -11,7 +11,7 @@ use crate::{
             SpecialBrowsingContextTarget, existing_browsing_context_target_from_window,
             navigate_existing_browsing_context_target_from_window, navigate_named_iframe_target,
         },
-        entered_child_window_handle,
+        entered_child_window_handle, lightweight_popup_id_from_window,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
@@ -194,8 +194,7 @@ pub(crate) fn window_open_callback<'s>(
         target @ (SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top),
     ) = special_target
     {
-        let source_scope = window_open_receiver_child_handle(scope, args.this())
-            .map(OwnerDispatchScope::Child)
+        let source_scope = window_open_receiver_dispatch_scope(scope, args.this())
             .unwrap_or_else(|| unsafe { &*host_ptr }.entered_owner_dispatch_scope(scope));
         let selected = if navigation_requested {
             navigate_existing_browsing_context_target_from_window(
@@ -350,6 +349,18 @@ pub(crate) fn window_open_callback<'s>(
         Some(window_open_event),
     );
     rv.set(v8::null(scope).into());
+}
+
+fn window_open_receiver_dispatch_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<OwnerDispatchScope> {
+    window_open_receiver_child_handle(scope, receiver)
+        .map(OwnerDispatchScope::Child)
+        .or_else(|| {
+            lightweight_popup_id_from_window(scope, receiver)
+                .map(OwnerDispatchScope::LightweightPopup)
+        })
 }
 
 fn window_open_receiver_child_handle<'s>(
