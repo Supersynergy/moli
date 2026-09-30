@@ -1,3 +1,5 @@
+pub(crate) mod native;
+
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::AccessibilityAction;
 use crate::domains::command_output::CommandOutputPlan;

@@ -3381,3 +3381,175 @@ async fn websocket_cdp_owner_registry_shutdown_joins_shared_default_page_owner()
 
     abort_test_cdp_server(server).await;
 }
+
+async fn assert_native_isolate_handler_waits_for_resume(method: &str) {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().route("/page", get(|| async {
+            axum::response::Html("<!doctype html><style>input {color: red}</style><form><input id=number autocomplete=cc-number></form>")
+        })),
+        "native-isolate-entry",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    navigate_fixture_document(
+        &mut browser,
+        4,
+        &target,
+        &format!("http://{fixture_addr}/page"),
+    )
+    .await;
+    let document = send_cdp_command(&mut browser, 5, "DOM.getDocument", session, json!({})).await;
+    let root = response_by_id(&document, 5)["result"]["root"]["nodeId"]
+        .as_u64()
+        .unwrap();
+    let query = send_cdp_command(
+        &mut browser,
+        6,
+        "DOM.querySelector",
+        session,
+        json!({"nodeId": root, "selector": "#number"}),
+    )
+    .await;
+    let node = response_by_id(&query, 6)["result"]["nodeId"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("fixture query failed after parsing: {query:#?}"));
+    let describe = send_cdp_command(
+        &mut browser,
+        7,
+        "DOM.describeNode",
+        session,
+        json!({"nodeId": node}),
+    )
+    .await;
+    let backend = response_by_id(&describe, 7)["result"]["node"]["backendNodeId"]
+        .as_u64()
+        .unwrap();
+    let css = send_cdp_command(&mut browser, 8, "CSS.enable", session, json!({})).await;
+    let stylesheet = css
+        .iter()
+        .find(|message| message["method"] == "CSS.styleSheetAdded")
+        .expect("fixture inline stylesheet")["params"]["header"]["styleSheetId"]
+        .clone();
+    let (params, expression, expected) = match method {
+        "Page.setDocumentContent" => (
+            json!({"frameId": target.target_id, "html": "<!doctype html><body>resumed content</body>"}),
+            "document.body.textContent",
+            json!("resumed content"),
+        ),
+        "Page.resetNavigationHistory" => (json!({}), "history.length", json!(1)),
+        "Autofill.trigger" => (
+            json!({"fieldId": backend, "card": {
+                "number": "4444444444444448", "name": "Test Card", "expiryMonth": "12", "expiryYear": "2030", "cvc": "123"
+            }}),
+            "document.getElementById('number').value",
+            json!("4444444444444448"),
+        ),
+        "CSS.setStyleSheetText" => (
+            json!({"styleSheetId": stylesheet, "text": "input {color: blue}"}),
+            "document.querySelector('style').textContent",
+            json!("input {color: blue}"),
+        ),
+        "Emulation.setHardwareConcurrencyOverride" => (
+            json!({"hardwareConcurrency": 4}),
+            "navigator.hardwareConcurrency",
+            json!(4),
+        ),
+        _ => panic!("unsupported isolate-entry fixture: {method}"),
+    };
+    let enabled = send_cdp_command(&mut browser, 10, "Debugger.enable", session, json!({})).await;
+    assert!(response_by_id(&enabled, 10)["error"].is_null());
+    send_cdp_command_without_wait(
+        &mut browser,
+        12,
+        "Runtime.evaluate",
+        session,
+        json!({
+            "expression": "(() => { history.pushState(null, '', '#one'); debugger; return 42; })()",
+            "returnByValue": true
+        }),
+    )
+    .await;
+    let paused = recv_until_match(&mut browser, |message| {
+        message["sessionId"] == target.session_id && message["method"] == "Debugger.paused"
+    })
+    .await;
+    assert!(paused.iter().all(|message| message["id"] != 12));
+
+    // This must be the first Main command after pausing. An earlier owner-only
+    // command would hide a missing requirement by blocking the session lane.
+    send_cdp_command_without_wait(&mut browser, 13, method, session, params).await;
+    let gate = send_cdp_command(
+        &mut browser,
+        14,
+        "Performance.getMetrics",
+        session,
+        json!({}),
+    )
+    .await;
+    assert!(response_by_id(&gate, 14)["error"].is_null());
+    assert!(
+        gate.iter()
+            .all(|message| message["id"] != 12 && message["id"] != 13),
+        "{method} must wait for its independent V8 entry: {gate:?}"
+    );
+    send_cdp_command_without_wait(&mut browser, 15, "Debugger.resume", session, json!({})).await;
+    let mut completed = std::collections::HashSet::new();
+    let resumed = recv_until_match(&mut browser, |message| {
+        if message["sessionId"] == target.session_id
+            && let Some(id) = message["id"].as_u64()
+        {
+            assert!(completed.insert(id), "duplicate terminal: {message}");
+        }
+        [12, 13, 15].iter().all(|id| completed.contains(id))
+    })
+    .await;
+    assert_eq!(
+        response_by_id(&resumed, 12)["result"]["result"]["value"],
+        42
+    );
+    assert!(
+        response_by_id(&resumed, 13)["error"].is_null(),
+        "{method}: {resumed:?}"
+    );
+    assert!(response_by_id(&resumed, 15)["error"].is_null());
+    let state = send_cdp_command(
+        &mut browser,
+        16,
+        "Runtime.evaluate",
+        session,
+        json!({"expression": expression, "returnByValue": true}),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&state, 16)["result"]["result"]["value"],
+        expected,
+        "{method}: {state:?}"
+    );
+    assert!(
+        state.iter().all(|message| message["id"] != 13),
+        "duplicate terminal: {state:?}"
+    );
+    browser.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cdp_ordering_document_content_waits_for_isolate_owner() {
+    assert_native_isolate_handler_waits_for_resume("Page.setDocumentContent").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cdp_ordering_history_reset_waits_for_isolate_owner() {
+    assert_native_isolate_handler_waits_for_resume("Page.resetNavigationHistory").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cdp_ordering_stylesheet_edit_waits_for_isolate_owner() {
+    assert_native_isolate_handler_waits_for_resume("CSS.setStyleSheetText").await;
+}

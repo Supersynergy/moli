@@ -13,7 +13,9 @@ async fn complete_pending_command_task_for_test(
         let completed = pending.wait().await;
         match ctx.conn.complete_pending_command_dispatch(completed).await {
             CdpCommandTaskStep::Pending(next) => pending = *next,
-            CdpCommandTaskStep::Complete(outcome) => return outcome.into_parts(),
+            CdpCommandTaskStep::Complete(outcome) => {
+                return ctx.route_completed_command_outcome_for_test(outcome).await;
+            }
         }
     }
 }
@@ -23,7 +25,11 @@ async fn complete_command_task_for_test(
     step: CdpCommandTaskStep,
 ) -> Vec<Value> {
     match step {
-        CdpCommandTaskStep::Complete(outcome) => outcome.into_parts().0,
+        CdpCommandTaskStep::Complete(outcome) => {
+            ctx.route_completed_command_outcome_for_test(outcome)
+                .await
+                .0
+        }
         CdpCommandTaskStep::Pending(pending) => {
             complete_pending_command_task_for_test(ctx, *pending)
                 .await
@@ -435,7 +441,7 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_activ
         "method": "Accessibility.getFullAXTree"
     }))
     .await;
-    let full_tree = ctx.take_one();
+    let full_tree = ctx.take_response_by_id(201);
     assert_eq!(full_tree["sessionId"], "SID-background");
     let nodes = full_tree["result"]["nodes"]
         .as_array()
@@ -554,7 +560,7 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
         "method": "Accessibility.getFullAXTree"
     }))
     .await;
-    let full_tree = ctx.take_one();
+    let full_tree = ctx.take_response_by_id(211);
     assert_eq!(full_tree["sessionId"], "SID-inactive");
     let nodes = full_tree["result"]["nodes"]
         .as_array()
@@ -570,7 +576,7 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
         "method": "Accessibility.getRootAXNode"
     }))
     .await;
-    let root = ctx.take_one();
+    let root = ctx.take_response_by_id(212);
     assert_eq!(root["sessionId"], "SID-inactive");
     assert_eq!(root["result"]["node"]["role"]["value"], "RootWebArea");
     assert_eq!(
@@ -1970,7 +1976,7 @@ async fn get_ax_node_and_ancestors_object_id_completes_with_single_renderer_comm
     else {
         panic!("top-frame object id AX lookup should complete after one renderer command");
     };
-    let (messages, scheduler_events) = outcome.into_parts();
+    let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
     assert!(
         scheduler_events.is_empty(),
         "AX top-frame object lookup should not enqueue scheduler events: {scheduler_events:?}"
@@ -2282,7 +2288,7 @@ async fn async_dispatch_get_ax_node_and_ancestors_accepts_child_frame_object_id(
     else {
         panic!("child-frame object id AX lookup should complete after one renderer command");
     };
-    let (messages, scheduler_events) = outcome.into_parts();
+    let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
     assert!(
         scheduler_events.is_empty(),
         "AX child-frame object lookup should not enqueue scheduler events: {scheduler_events:?}"
@@ -2364,7 +2370,8 @@ async fn child_frame_ax_reference_accepts_renderer_backend_node_id_live() {
                 "{method} with child renderer backend id should complete after one renderer command"
             );
         };
-        let (messages, scheduler_events) = outcome.into_parts();
+        let (messages, scheduler_events) =
+            ctx.route_completed_command_outcome_for_test(outcome).await;
         assert!(
             scheduler_events.is_empty(),
             "{method} should not enqueue scheduler events: {scheduler_events:?}"
@@ -2839,7 +2846,7 @@ async fn async_dispatch_query_ax_tree_accepts_child_frame_object_id() {
     else {
         panic!("child-frame object id AX query should complete after one renderer command");
     };
-    let (messages, scheduler_events) = outcome.into_parts();
+    let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
     assert!(
         scheduler_events.is_empty(),
         "AX child-frame object query should not enqueue scheduler events: {scheduler_events:?}"
@@ -3165,7 +3172,7 @@ async fn async_dispatch_get_partial_ax_tree_accepts_child_frame_object_id() {
             "child-frame object id partial AX lookup should complete after one renderer command"
         );
     };
-    let (messages, scheduler_events) = outcome.into_parts();
+    let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
     assert!(
         scheduler_events.is_empty(),
         "AX child-frame object partial lookup should not enqueue scheduler events: {scheduler_events:?}"

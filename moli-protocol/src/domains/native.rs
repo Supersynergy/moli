@@ -155,6 +155,8 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
         match cmd.method.split_once('.')?.0 {
             "Page" => super::page::native::try_start,
             "DOMSnapshot" => super::dom_snapshot::try_start_native_command,
+            "CSS" => super::css::native::try_start,
+            "Accessibility" => super::accessibility::native::try_start,
             _ => return None,
         };
     frontend_attachment(conn, cmd)?;
