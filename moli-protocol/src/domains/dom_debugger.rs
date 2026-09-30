@@ -1,3 +1,5 @@
+pub(crate) mod native;
+
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererDomDebuggerDomBreakpointResolution,
     RendererDomDebuggerEventListener, RendererDomDebuggerEventListenerBreakpoint,

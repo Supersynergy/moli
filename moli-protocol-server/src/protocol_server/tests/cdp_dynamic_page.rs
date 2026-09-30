@@ -677,6 +677,106 @@ async fn cdp_ordering_deferred_reply_allows_its_later_resolver() {
     abort_test_cdp_server(server).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cdp_ordering_native_focus_can_reenter_main_before_reply() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let context = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    let fixture = send_cdp_command(
+        &mut browser,
+        10,
+        "Runtime.evaluate",
+        session,
+        json!({
+            "expression": r#"
+            document.body.innerHTML = '<input id="ordering-focus">';
+            document.querySelector('input').addEventListener('focus', () => {
+                debugger;
+                globalThis.focusCallbackFinished = true;
+            });
+        "#
+        }),
+    )
+    .await;
+    assert!(
+        response_by_id(&fixture, 10)["result"]
+            .get("exceptionDetails")
+            .is_none()
+    );
+    let enabled = send_cdp_command(&mut browser, 11, "Debugger.enable", session, json!({})).await;
+    assert!(response_by_id(&enabled, 11).get("error").is_none());
+    let document = send_cdp_command(&mut browser, 12, "DOM.getDocument", session, json!({})).await;
+    let root = response_by_id(&document, 12)["result"]["root"]["nodeId"]
+        .as_u64()
+        .expect("document node id");
+    let node = send_cdp_command(
+        &mut browser,
+        13,
+        "DOM.querySelector",
+        session,
+        json!({ "nodeId": root, "selector": "#ordering-focus" }),
+    )
+    .await;
+    let node_id = response_by_id(&node, 13)["result"]["nodeId"]
+        .as_u64()
+        .expect("input node id");
+    send_cdp_command_without_wait(
+        &mut browser,
+        14,
+        "DOM.focus",
+        session,
+        json!({ "nodeId": node_id }),
+    )
+    .await;
+    let paused = recv_until_match(&mut browser, |message| {
+        message["sessionId"] == json!(target.session_id)
+            && message["method"] == json!("Debugger.paused")
+    })
+    .await;
+    assert!(paused.iter().all(|message| message["id"] != json!(14)));
+    // DOM.focus has a synchronous Blink backend signature, but can execute
+    // user JavaScript. Its unfinished stack must not lock nested Main work.
+    let nested = send_cdp_command(&mut browser, 15, "Page.getFrameTree", session, json!({})).await;
+    assert_eq!(
+        response_by_id(&nested, 15)["result"]["frameTree"]["frame"]["id"],
+        json!(target.target_id)
+    );
+    assert!(nested.iter().all(|message| message["id"] != json!(14)));
+    send_cdp_command_without_wait(&mut browser, 16, "Debugger.resume", session, json!({})).await;
+    let mut terminal_ids = std::collections::HashSet::new();
+    let completed = recv_until_match(&mut browser, |message| {
+        if let Some(id) = message["id"].as_u64() {
+            assert!(
+                terminal_ids.insert(id),
+                "duplicate terminal reply: {message}"
+            );
+        }
+        terminal_ids.contains(&14) && terminal_ids.contains(&16)
+    })
+    .await;
+    assert_eq!(response_by_id(&completed, 14)["result"], json!({}));
+    assert_eq!(response_by_id(&completed, 16)["result"], json!({}));
+    let value = send_cdp_command(
+        &mut browser,
+        17,
+        "Runtime.evaluate",
+        session,
+        json!({ "expression": "focusCallbackFinished", "returnByValue": true }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&value, 17)["result"]["result"]["value"],
+        json!(true)
+    );
+    browser.close(None).await.expect("close browser websocket");
+    abort_test_cdp_server(server).await;
+}
+
 async fn puppeteer_auto_attach_existing_page(
     browser: &mut TestCdpSocket,
     command_id: u64,
@@ -3547,6 +3647,11 @@ async fn cdp_ordering_document_content_waits_for_isolate_owner() {
 #[tokio::test(flavor = "current_thread")]
 async fn cdp_ordering_history_reset_waits_for_isolate_owner() {
     assert_native_isolate_handler_waits_for_resume("Page.resetNavigationHistory").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cdp_ordering_autofill_waits_for_isolate_owner() {
+    assert_native_isolate_handler_waits_for_resume("Autofill.trigger").await;
 }
 
 #[tokio::test(flavor = "current_thread")]

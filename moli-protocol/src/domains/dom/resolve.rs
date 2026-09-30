@@ -1,3 +1,5 @@
+pub(super) mod native;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 

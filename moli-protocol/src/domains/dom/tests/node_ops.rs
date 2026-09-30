@@ -2054,7 +2054,7 @@ async fn set_file_input_files_updates_file_input_for_frontend_node_id() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("nodeId DOM.setFileInputFiles should start a renderer command");
-    assert_eq!(pending.kind_name(), "DOM");
+    assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let _ = std::fs::remove_file(&file_path);
     let response = messages
@@ -3660,7 +3660,7 @@ async fn get_outer_html_and_scroll_low_node_refs_use_renderer_dispatch() {
         .conn
         .try_start_pending_command_dispatch(&outer_raw)
         .expect("low nodeId DOM.getOuterHTML should start a renderer command");
-    assert_eq!(outer_pending.kind_name(), "DOM");
+    assert_eq!(outer_pending.kind_name(), "Native");
     let outer = complete_pending_command_task_for_test(&mut ctx, outer_pending).await;
     assert_eq!(outer.len(), 1);
     assert!(
@@ -3679,7 +3679,7 @@ async fn get_outer_html_and_scroll_low_node_refs_use_renderer_dispatch() {
         .conn
         .try_start_pending_command_dispatch(&scroll_raw)
         .expect("backendNodeId DOM.scrollIntoViewIfNeeded should start a renderer command");
-    assert_eq!(scroll_pending.kind_name(), "DOM");
+    assert_eq!(scroll_pending.kind_name(), "Native");
     let scroll = complete_pending_command_task_for_test(&mut ctx, scroll_pending).await;
     assert_eq!(
         scroll,
@@ -3788,7 +3788,7 @@ async fn describe_node_low_node_id_reads_renderer_live_snapshot() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("low nodeId DOM.describeNode should start a renderer snapshot command");
-    assert_eq!(pending.kind_name(), "DOM");
+    assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let described = messages
         .iter()
@@ -5189,24 +5189,17 @@ async fn resolve_node_caches_node_payload_from_renderer_snapshot_command() {
     let resolve_raw = json!({
         "id": 4,
         "method": "DOM.resolveNode",
-        "params": { "nodeId": node_id }
+        "params": { "nodeId": node_id, "objectGroup": "native-resolve" }
     })
     .to_string();
     let resolve_pending = ctx
         .conn
         .try_start_pending_command_dispatch(&resolve_raw)
         .expect("DOM.resolveNode should start a renderer runtime-object command");
-    let completed = resolve_pending.wait().await;
-    let cache_pending = match ctx.conn.complete_pending_command_dispatch(completed).await {
-        CdpCommandTaskStep::Pending(pending) => *pending,
-        CdpCommandTaskStep::Complete(outcome) => {
-            panic!(
-                "DOM.resolveNode should wait for renderer cache snapshot command: {:?}",
-                outcome.into_parts().0
-            )
-        }
-    };
-    let messages = complete_pending_command_task_for_test(&mut ctx, cache_pending).await;
+    // Resolution and the fallback snapshot run in one renderer handler. The
+    // Browser applies the cached node from the journal before exposing the reply.
+    assert_eq!(resolve_pending.kind_name(), "Native");
+    let messages = complete_pending_command_task_for_test(&mut ctx, resolve_pending).await;
     let resolved = messages
         .iter()
         .find(|message| message["id"] == json!(4))
@@ -5215,6 +5208,13 @@ async fn resolve_node_caches_node_payload_from_renderer_snapshot_command() {
         .as_str()
         .expect("DOM.resolveNode should return objectId")
         .to_owned();
+
+    assert_eq!(
+        ctx.conn
+            .runtime_remote_object_group_for_session_owner(None, &object_id),
+        Some("native-resolve".to_owned()),
+        "the Browser registry must be updated before the terminal becomes visible",
+    );
 
     navigate_to_data_html_async(&mut ctx, 5, "<!doctype html><html><body>next</body></html>").await;
 

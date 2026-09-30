@@ -153,7 +153,10 @@ pub(crate) fn frontend_attachment(
 pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<NativeCommandStep> {
     let start: fn(&mut CdpConnection, &Cmd<'_>) -> Option<NativeCommandStep> =
         match cmd.method.split_once('.')?.0 {
+            "DOMDebugger" => super::dom_debugger::native::try_start,
+            "Autofill" => super::autofill::try_start_native_command,
             "Page" => super::page::native::try_start,
+            "DOM" => super::dom::try_start_native_command,
             "DOMSnapshot" => super::dom_snapshot::try_start_native_command,
             "CSS" => super::css::native::try_start,
             "Accessibility" => super::accessibility::native::try_start,

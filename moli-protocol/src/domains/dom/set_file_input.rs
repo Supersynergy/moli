@@ -547,7 +547,7 @@ fn start_set_file_input_files_for_runtime_object(
     })
 }
 
-fn selected_files_from_paths(
+pub(super) fn selected_files_from_paths(
     paths: &[String],
 ) -> Result<Vec<SelectedFile>, PendingDomCommandStartError> {
     paths
