@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::*;
 
 impl ScriptVm {
@@ -67,7 +69,7 @@ impl ScriptVm {
                 )
             }
             ModuleKind::Json | ModuleKind::Css => {
-                let Some(source) = source.text_source() else {
+                let ModuleSource::Text(source) = source else {
                     return Err(ModuleLoadError::new(
                         ModuleLoadStage::Compile,
                         format!("synthetic text module `{source_url}` did not retain text source"),
@@ -76,7 +78,7 @@ impl ScriptVm {
                 self.compile_synthetic_module_record_in_context(
                     context_ptr,
                     key,
-                    source,
+                    Arc::clone(source),
                     source_url,
                 )
             }
@@ -237,7 +239,7 @@ impl ScriptVm {
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
         key: ModuleMapKey,
-        source: &str,
+        source: Arc<str>,
         source_url: &Url,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         self.renderer_document_isolate

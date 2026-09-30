@@ -3,7 +3,7 @@ use std::fmt;
 use moli_module_script_tree as module_tree;
 
 use super::{
-    ModuleCompiledRecordId, ModuleFetchMetadata, ModuleIdentityHash, ModuleKind, ModuleLoadError,
+    ModuleCompiledRecordId, ModuleFetchMetadata, ModuleIdentityHash, ModuleLoadError,
     ModuleMapEntryState, ModuleMapFetchClient, ModuleMapKey, ModuleMapTerminalClients,
     ModuleResolvedDependency, ModuleSource,
 };
@@ -149,10 +149,7 @@ impl ModuleMapEntry {
         identity: ModuleIdentityHash,
         effective_fetch_metadata: ModuleFetchMetadata,
     ) {
-        // V8 owns the compiled JavaScript module from this point onward. Keep
-        // synthetic-module sources because their evaluation callbacks still
-        // consume them after compilation.
-        if effective_key.kind() == ModuleKind::JavaScript {
+        if !effective_key.kind().retains_source_after_compilation() {
             self.source = None;
         }
         self.key = request_key;
@@ -262,12 +259,12 @@ mod tests {
     use crate::document_module_graph::ModuleAttributesKey;
     use url::Url;
 
-    fn compiled_entry_for(key: ModuleMapKey) -> ModuleMapEntry {
+    fn compiled_entry_for(key: ModuleMapKey, source: ModuleSource) -> ModuleMapEntry {
         let mut entry = ModuleMapEntry::new(key.clone(), ModuleMapEntryState::Fetching);
         entry.set_fetched_source(
             key.clone(),
             key.clone(),
-            ModuleSource::text("export default 1;".to_owned()),
+            source,
             ModuleFetchMetadata::default(),
         );
         entry.set_compiled_record(
@@ -286,16 +283,49 @@ mod tests {
             Url::parse("https://example.test/module.js").expect("module URL"),
         );
 
-        assert!(compiled_entry_for(key).source().is_none());
+        assert!(
+            compiled_entry_for(key, ModuleSource::text("export default 1;"))
+                .source()
+                .is_none()
+        );
     }
 
     #[test]
-    fn compiled_synthetic_entry_retains_source_for_evaluation() {
-        let key = ModuleMapKey::json_with_attributes(
-            Url::parse("https://example.test/data.json").expect("module URL"),
-            ModuleAttributesKey::from_pairs(vec![("type".to_owned(), "json".to_owned())]),
-        );
+    fn compiled_synthetic_entry_releases_source_owned_by_record() {
+        for (key, source) in [
+            (
+                ModuleMapKey::json_with_attributes(
+                    Url::parse("https://example.test/data.json").unwrap(),
+                    ModuleAttributesKey::from_pairs(vec![("type".to_owned(), "json".to_owned())]),
+                ),
+                "{\"answer\":42}",
+            ),
+            (
+                ModuleMapKey::css_with_attributes(
+                    Url::parse("https://example.test/style.css").unwrap(),
+                    ModuleAttributesKey::from_pairs(vec![("type".to_owned(), "css".to_owned())]),
+                ),
+                "body { color: red; }",
+            ),
+        ] {
+            assert!(
+                compiled_entry_for(key, ModuleSource::text(source))
+                    .source()
+                    .is_none()
+            );
+        }
+    }
 
-        assert!(compiled_entry_for(key).source().is_some());
+    #[test]
+    fn compiled_wasm_entry_retains_binary_source() {
+        let key =
+            ModuleMapKey::webassembly(Url::parse("https://example.test/module.wasm").unwrap());
+        let bytes = b"\0asm\x01\0\0\0";
+        let entry = compiled_entry_for(key, ModuleSource::binary(bytes.to_vec()));
+
+        assert_eq!(
+            entry.source().unwrap().binary_source(),
+            Some(bytes.as_slice())
+        );
     }
 }

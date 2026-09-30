@@ -511,7 +511,7 @@ fn network_fetch_source_is_compiled_by_tree_before_link() {
         key: root_key.clone(),
         client: fetches[0].client,
         requested_phase: ModuleImportPhase::Evaluation,
-        outcome: fetched_outcome(root_key, ModuleSource::Text("export {};".to_owned())),
+        outcome: fetched_outcome(root_key, ModuleSource::Text("export {};".into())),
     };
 
     let ModuleScriptTreePoll::Complete(graph) =
@@ -749,7 +749,7 @@ fn parse_error_waits_for_pending_sibling_fetches_before_failing() {
             key: a_key.clone(),
             client: a_fetch.client,
             requested_phase: ModuleImportPhase::Evaluation,
-            outcome: fetched_outcome(a_key.clone(), ModuleSource::Text("bad".to_owned())),
+            outcome: fetched_outcome(a_key.clone(), ModuleSource::Text("bad".into())),
         },
     );
     assert_waiting_for_clients(wait, 1);
@@ -768,7 +768,7 @@ fn parse_error_waits_for_pending_sibling_fetches_before_failing() {
             key: b_key.clone(),
             client: b_fetch.client,
             requested_phase: ModuleImportPhase::Evaluation,
-            outcome: fetched_outcome(b_key, ModuleSource::Text("export {};".to_owned())),
+            outcome: fetched_outcome(b_key, ModuleSource::Text("export {};".into())),
         },
     ) else {
         panic!("tree should fail with delayed parse error after sibling completion");
@@ -943,7 +943,7 @@ fn parse_error_result_uses_module_discovery_order_not_completion_order() {
             key: b_key.clone(),
             client: b_fetch.client,
             requested_phase: ModuleImportPhase::Evaluation,
-            outcome: fetched_outcome(b_key.clone(), ModuleSource::Text("bad b".to_owned())),
+            outcome: fetched_outcome(b_key.clone(), ModuleSource::Text("bad b".into())),
         },
     );
     assert_waiting_for_clients(wait, 1);
@@ -957,7 +957,7 @@ fn parse_error_result_uses_module_discovery_order_not_completion_order() {
             key: a_key.clone(),
             client: a_fetch.client,
             requested_phase: ModuleImportPhase::Evaluation,
-            outcome: fetched_outcome(a_key, ModuleSource::Text("bad a".to_owned())),
+            outcome: fetched_outcome(a_key, ModuleSource::Text("bad a".into())),
         },
     ) else {
         panic!("tree should fail once all sibling fetches finish");
@@ -1090,7 +1090,7 @@ fn joined_fetch_fetched_module_map_entry_compiles_from_fanout_completion() {
         key: child_key.clone(),
         client,
         requested_phase: ModuleImportPhase::Evaluation,
-        outcome: fetched_outcome(child_key, ModuleSource::Text("export {};".to_owned())),
+        outcome: fetched_outcome(child_key, ModuleSource::Text("export {};".into())),
     };
 
     let ModuleScriptTreePoll::Complete(graph) = job.resume_single_module(&mut host, client, result)

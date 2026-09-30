@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
 use url::Url;
 
 use super::{ModuleAttributesKey, ModuleKind, ModuleMapKey};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ModuleSource {
-    Text(String),
+    /// The fetch pipeline and synthetic evaluation share this immutable allocation.
+    Text(Arc<str>),
     Binary(Vec<u8>),
 }
 
@@ -82,8 +85,8 @@ impl ModuleGraphFetchedSource {
 }
 
 impl ModuleSource {
-    pub(crate) fn text(source: String) -> Self {
-        Self::Text(source)
+    pub(crate) fn text(source: impl Into<Arc<str>>) -> Self {
+        Self::Text(source.into())
     }
 
     pub(crate) fn binary(bytes: Vec<u8>) -> Self {
