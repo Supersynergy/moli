@@ -249,17 +249,6 @@ struct OfflineAudioCompletePayloadDeclaration<'scope> {
     rendered_buffer: v8::Local<'scope, v8::Object>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::OfflineAudioCompletionEvent,
-    prototype = "Object",)]
-struct OfflineAudioCompletionEventDeclaration<'scope> {
-    #[webapi(data_property = "type")]
-    event_type: &'static str,
-    #[webapi(data_property = "renderedBuffer")]
-    rendered_buffer: v8::Local<'scope, v8::Object>,
-}
-
 #[derive(Default, WebApiObject)]
 #[webapi(interface = web_api_interfaces::AudioDestinationNode)]
 struct AudioDestinationNodeObjectDeclaration {}
@@ -1503,9 +1492,14 @@ fn offline_audio_context_complete_microtask_callback<'s>(
     };
     mark_context_compressors_rendered(scope, context);
 
-    let event = OfflineAudioCompletionEventDeclaration::new("complete", rendered_buffer)
-        .bind(scope)
-        .expect("OfflineAudio completion event declaration should bind");
+    let Some(realm) = context.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, realm);
+    let Some(event) = events::audio::new_offline_audio_completion_event(scope, rendered_buffer)
+    else {
+        return;
+    };
     let _ = dispatch_simple_event_target_event(
         scope,
         context,

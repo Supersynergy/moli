@@ -2144,6 +2144,8 @@ mod element_click;
 mod event_receivers;
 mod headers_list;
 mod http_fixture;
+
+mod audio_event_interfaces;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;

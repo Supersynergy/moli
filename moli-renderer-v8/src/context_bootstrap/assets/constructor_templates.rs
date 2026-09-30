@@ -941,6 +941,18 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::AbstractRange => build_abstract_range_template(scope),
         ConstructorKind::Range => build_range_constructor_template(scope),
         ConstructorKind::StaticRange => build_static_range_constructor_template(scope),
+        ConstructorKind::AudioProcessingEvent => {
+            super::super::events::audio::build_audio_event_template(
+                scope,
+                super::super::events::audio::AudioEventKind::Processing,
+            )
+        }
+        ConstructorKind::OfflineAudioCompletionEvent => {
+            super::super::events::audio::build_audio_event_template(
+                scope,
+                super::super::events::audio::AudioEventKind::Completion,
+            )
+        }
         ConstructorKind::Url => build_url_constructor_template(scope),
         ConstructorKind::UrlSearchParams => build_url_search_params_constructor_template(scope),
         ConstructorKind::FormData => build_form_data_constructor_template(scope),
