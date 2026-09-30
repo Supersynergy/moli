@@ -2133,6 +2133,7 @@ mod device_events;
 mod dom_elements;
 mod dom_xhr;
 mod element_click;
+mod event_receivers;
 mod headers_list;
 mod http_fixture;
 mod import_meta;

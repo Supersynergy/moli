@@ -37,7 +37,7 @@ pub(in crate::context_bootstrap) fn object_is_event_target<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Event, enumerable)]
+#[webapi(interface = web_api_interfaces::Event, enumerable, receiver)]
 struct EventBaseTemplateMethodsDeclaration {
     #[webapi(accessor_property = "type", getter = event_type_getter_function)]
     event_type: (),
@@ -131,7 +131,7 @@ struct EventBaseTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CloseEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::CloseEvent, enumerable, receiver)]
 struct CloseEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "wasClean", getter = close_event_was_clean_getter_function)]
     was_clean: (),
@@ -144,28 +144,28 @@ struct CloseEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TrackEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::TrackEvent, enumerable, receiver)]
 struct TrackEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = track_event_track_getter_function)]
     track: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::SubmitEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::SubmitEvent, enumerable, receiver)]
 struct SubmitEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = submit_event_submitter_getter_function)]
     submitter: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FormDataEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::FormDataEvent, enumerable, receiver)]
 struct FormDataEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "formData", getter = form_data_event_form_data_getter_function)]
     form_data: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::UIEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
 struct UiEventTemplateMethodsDeclaration {
     #[webapi(method = "initUIEvent", length = 0, callback = ui_event_init_callback)]
     init_ui_event: (),
@@ -178,7 +178,7 @@ struct UiEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FocusEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::FocusEvent, enumerable, receiver)]
 struct FocusEventTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "relatedTarget",
@@ -188,14 +188,14 @@ struct FocusEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::TextEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::TextEvent, enumerable, receiver)]
 struct TextEventTemplateMethodsDeclaration {
     #[webapi(method = "initTextEvent", length = 1, callback = text_event_init_callback)]
     init_text_event: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CompositionEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::CompositionEvent, enumerable, receiver)]
 struct CompositionEventTemplateMethodsDeclaration {
     #[webapi(
         method = "initCompositionEvent",
@@ -206,14 +206,14 @@ struct CompositionEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::CustomEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::CustomEvent, enumerable, receiver)]
 struct CustomEventTemplateMethodsDeclaration {
     #[webapi(method = "initCustomEvent", length = 1, callback = custom_event_init_callback)]
     init_custom_event: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::StorageEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::StorageEvent, enumerable, receiver)]
 struct StorageEventTemplateMethodsDeclaration {
     #[webapi(
         method = "initStorageEvent",
@@ -224,7 +224,7 @@ struct StorageEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::KeyboardEvent, enumerable, receiver)]
 struct KeyboardEventTemplateMethodsDeclaration {
     #[webapi(method = "initKeyboardEvent", length = 7, callback = keyboard_event_init_callback)]
     init_keyboard_event: (),
@@ -238,7 +238,7 @@ struct KeyboardEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MouseEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::MouseEvent, enumerable, receiver)]
 struct MouseEventTemplateMethodsDeclaration {
     #[webapi(
         accessor_property = "relatedTarget",
@@ -270,7 +270,7 @@ struct WheelEventTemplateConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::PointerEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::PointerEvent, enumerable, receiver)]
 struct PointerEventTemplateMethodsDeclaration {
     #[webapi(
         method = "getPredictedEvents",

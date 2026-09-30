@@ -1084,7 +1084,12 @@ fn event_composed_path_slot_ignores_reflection_and_spoofing() {
               }, { once: true });
               simpleTarget.dispatchEvent(simple);
 
-              const fakePath = Event.prototype.composedPath.call({ __lmCp: ["fake"] });
+              let fakePathThrowsTypeError = false;
+              try {
+                Event.prototype.composedPath.call({ __lmCp: ["fake"] });
+              } catch (error) {
+                fakePathThrowsTypeError = error instanceof TypeError;
+              }
               return JSON.stringify({
                 cleanBeforeOwn,
                 cleanDuring,
@@ -1094,7 +1099,7 @@ fn event_composed_path_slot_ignores_reflection_and_spoofing() {
                 spoofedAfterLength: spoofed.composedPath().length,
                 simpleDuring,
                 simpleAfterLength: simple.composedPath().length,
-                fakePathLength: fakePath.length
+                fakePathThrowsTypeError
               });
             })()
             "#,
@@ -1103,7 +1108,7 @@ fn event_composed_path_slot_ignores_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"cleanBeforeOwn":false,"cleanDuring":{"ownNameVisible":false,"firstIsTarget":true,"hasPath":true},"cleanAfterLength":0,"spoofedBeforeLength":0,"spoofedDuring":{"ownValue":"spoofed-during","firstIsTarget":true,"containsSpoof":false},"spoofedAfterLength":0,"simpleDuring":{"ownValue":"spoofed-simple","firstIsSimpleTarget":true,"length":1,"containsSpoof":false},"simpleAfterLength":0,"fakePathLength":0}"#
+        r#"{"cleanBeforeOwn":false,"cleanDuring":{"ownNameVisible":false,"firstIsTarget":true,"hasPath":true},"cleanAfterLength":0,"spoofedBeforeLength":0,"spoofedDuring":{"ownValue":"spoofed-during","firstIsTarget":true,"containsSpoof":false},"spoofedAfterLength":0,"simpleDuring":{"ownValue":"spoofed-simple","firstIsSimpleTarget":true,"length":1,"containsSpoof":false},"simpleAfterLength":0,"fakePathThrowsTypeError":true}"#
     );
 }
 
@@ -1290,6 +1295,11 @@ fn event_subclass_slots_ignore_reflection_and_spoofing() {
         .eval(
             r#"
             (() => {
+              const rejectsReceiver = (getter, receiver) => {
+                try { getter.call(receiver); }
+                catch (error) { return error instanceof TypeError; }
+                return false;
+              };
               const getterDescriptor = (prototype, name) => {
                 const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
                 return [
@@ -1377,20 +1387,20 @@ fn event_subclass_slots_ignore_reflection_and_spoofing() {
                   close.__moliCloseEventReason
                 ],
                 fakeClose: [
-                  closeWasCleanGetter.call(fakeClose),
-                  closeCodeGetter.call(fakeClose),
-                  closeReasonGetter.call(fakeClose)
+                  rejectsReceiver(closeWasCleanGetter, fakeClose),
+                  rejectsReceiver(closeCodeGetter, fakeClose),
+                  rejectsReceiver(closeReasonGetter, fakeClose)
                 ],
                 submitOwnBefore,
                 submitterDescriptor: getterDescriptor(SubmitEvent.prototype, "submitter"),
                 submitterIsButton: submit.submitter === button,
                 submitSpoofIsInput: submit.__moliSubmitEventSubmitter instanceof HTMLInputElement,
-                fakeSubmitterIsNull: submitterGetter.call(fakeSubmit) === null,
+                fakeSubmitterThrowsTypeError: rejectsReceiver(submitterGetter, fakeSubmit),
                 formDataOwnBefore,
                 formDataDescriptor: getterDescriptor(FormDataEvent.prototype, "formData"),
                 formDataIsReal: formDataEvent.formData === formData,
                 formDataSpoofIsSpoofed: formDataEvent.__moliFormDataEventFormData === spoofedFormData,
-                fakeFormDataIsUndefined: formDataGetter.call(fakeFormDataEvent) === undefined
+                fakeFormDataThrowsTypeError: rejectsReceiver(formDataGetter, fakeFormDataEvent)
               });
             })()
             "#,
@@ -1399,7 +1409,7 @@ fn event_subclass_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"closeDescriptors":["wasClean:function:get wasClean:0:undefined:true:true","code:function:get code:0:undefined:true:true","reason:function:get reason:0:undefined:true:true"],"closeOwnBefore":[],"closeValues":[true,1000,"done"],"closeSpoofValues":[false,4000,"spoofed"],"fakeClose":[false,0,""],"submitOwnBefore":[],"submitterDescriptor":"submitter:function:get submitter:0:undefined:true:true","submitterIsButton":true,"submitSpoofIsInput":true,"fakeSubmitterIsNull":true,"formDataOwnBefore":[],"formDataDescriptor":"formData:function:get formData:0:undefined:true:true","formDataIsReal":true,"formDataSpoofIsSpoofed":true,"fakeFormDataIsUndefined":true}"#
+        r#"{"closeDescriptors":["wasClean:function:get wasClean:0:undefined:true:true","code:function:get code:0:undefined:true:true","reason:function:get reason:0:undefined:true:true"],"closeOwnBefore":[],"closeValues":[true,1000,"done"],"closeSpoofValues":[false,4000,"spoofed"],"fakeClose":[true,true,true],"submitOwnBefore":[],"submitterDescriptor":"submitter:function:get submitter:0:undefined:true:true","submitterIsButton":true,"submitSpoofIsInput":true,"fakeSubmitterThrowsTypeError":true,"formDataOwnBefore":[],"formDataDescriptor":"formData:function:get formData:0:undefined:true:true","formDataIsReal":true,"formDataSpoofIsSpoofed":true,"fakeFormDataThrowsTypeError":true}"#
     );
 }
 
