@@ -1174,6 +1174,9 @@ fn track_event_track_uses_prototype_private_slot() {
   const ownBefore = Object.getOwnPropertyNames(event).filter(name => name === 'track');
   event.track = second;
   const fake = { track: second };
+  let fakeTrackThrowsTypeError = false;
+  try { descriptor.get.call(fake); }
+  catch (error) { fakeTrackThrowsTypeError = error instanceof TypeError; }
 
   return JSON.stringify({
     hasGetter: typeof descriptor.get === 'function',
@@ -1186,7 +1189,7 @@ fn track_event_track_uses_prototype_private_slot() {
     trackAfterAssignment: event.track === first,
     assignmentCreatedOwn: Object.prototype.hasOwnProperty.call(event, 'track'),
     emptyTrackIsNull: empty.track === null,
-    fakeTrackIsNull: descriptor.get.call(fake) === null
+    fakeTrackThrowsTypeError
   });
 })()
 "#,
@@ -1195,7 +1198,7 @@ fn track_event_track_uses_prototype_private_slot() {
 
     assert_eq!(
         result,
-        r#"{"hasGetter":true,"getterName":"get track","getterLength":0,"hasSetter":true,"enumerable":true,"configurable":true,"ownBefore":[],"trackAfterAssignment":true,"assignmentCreatedOwn":false,"emptyTrackIsNull":true,"fakeTrackIsNull":true}"#
+        r#"{"hasGetter":true,"getterName":"get track","getterLength":0,"hasSetter":true,"enumerable":true,"configurable":true,"ownBefore":[],"trackAfterAssignment":true,"assignmentCreatedOwn":false,"emptyTrackIsNull":true,"fakeTrackThrowsTypeError":true}"#
     );
 }
 
