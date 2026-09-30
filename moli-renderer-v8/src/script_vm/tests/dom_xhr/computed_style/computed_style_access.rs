@@ -1714,7 +1714,7 @@ fn computed_absolute_grid_inset_left_defaults_to_zero() {
 
 #[test]
 fn computed_grid_column_auto_and_unset_resolve_to_auto() {
-    let mut vm = new_storage_test_vm("https://computed-grid-column-auto.test/");
+    let mut vm = new_storage_html_test_vm("https://computed-grid-column-auto.test/");
 
     let result = vm
         .eval(

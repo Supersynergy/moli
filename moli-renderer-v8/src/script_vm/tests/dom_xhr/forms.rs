@@ -1293,7 +1293,7 @@ fn form_reset_clears_option_selectedness_dirty_flag() {
 
 #[test]
 fn form_reset_event_uses_form_wrapper_realm_after_cross_frame_move() {
-    let mut vm = new_storage_test_vm("https://form-reset-event-realm.test/");
+    let mut vm = new_storage_html_test_vm("https://form-reset-event-realm.test/");
 
     let result = vm
         .eval(
@@ -2871,7 +2871,7 @@ fn submit_event_constructor_surface() {
 }
 #[test]
 fn live_form_request_submit_dispatches_submit_event_with_submitter() {
-    let mut vm = new_storage_test_vm("https://submit-event-requestsubmit.test/");
+    let mut vm = new_storage_html_test_vm("https://submit-event-requestsubmit.test/");
 
     let result = vm
         .eval(

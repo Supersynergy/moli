@@ -486,7 +486,7 @@ fn sandboxed_fragment_parsers_parse_noscript_when_scripting_disabled() {
 }
 #[test]
 fn globally_disabled_fragment_parsers_parse_noscript_markup() {
-    let mut vm = new_storage_test_vm("https://disabled-fragment-noscript.test/");
+    let mut vm = new_storage_html_test_vm("https://disabled-fragment-noscript.test/");
     vm.set_script_execution_disabled(true);
 
     let result = vm
@@ -515,7 +515,7 @@ fn globally_disabled_fragment_parsers_parse_noscript_markup() {
 }
 #[test]
 fn document_fragment_script_start_revalidates_after_an_earlier_script_mutates_the_batch() {
-    let mut vm = new_storage_test_vm("https://document-fragment-script-revalidation.test/");
+    let mut vm = new_storage_html_test_vm("https://document-fragment-script-revalidation.test/");
 
     let result = vm
         .eval(

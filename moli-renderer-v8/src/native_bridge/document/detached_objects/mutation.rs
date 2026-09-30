@@ -800,6 +800,21 @@ fn detached_insert_node_with_current_queue_policy<'s>(
             "The operation would yield an invalid node tree.",
         ));
     }
+    let parent_is_document = detached_node_type(scope, parent) == Some(9);
+    // Pre-insert validates a Document before removing the input node. An
+    // existing root/doctype cannot be reinserted, even at its old position.
+    if parent_is_document
+        && matches!(child_type, 1 | 10)
+        && current_children
+            .iter()
+            .any(|candidate| candidate.strict_equals(child.into()))
+    {
+        return Err((
+            "HierarchyRequestError",
+            3,
+            "The operation would yield an invalid node tree.",
+        ));
+    }
     let prospective = current_children
         .iter()
         .copied()
@@ -822,9 +837,7 @@ fn detached_insert_node_with_current_queue_policy<'s>(
         insert_nodes.iter().copied(),
     );
 
-    if detached_node_type(scope, parent) == Some(9)
-        && !detached_validate_document_children(scope, &prospective)
-    {
+    if parent_is_document && !detached_validate_document_children(scope, &prospective) {
         return Err((
             "HierarchyRequestError",
             3,

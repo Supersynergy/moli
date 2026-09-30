@@ -288,10 +288,8 @@ async fn hyperlink_target_blank_reloads_rel_opener_policy_for_each_activation() 
       window.close();
     <\/script>
   `], { type: "text/html" }));
-  const html = document.createElement("html");
-  const body = document.createElement("body");
-  html.appendChild(body);
-  document.appendChild(html);
+  const html = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || html.appendChild(document.createElement("body"));
   globalThis.__hyperlink = document.createElement("a");
   __hyperlink.target = "_blank";
   __hyperlink.rel = "noopener";

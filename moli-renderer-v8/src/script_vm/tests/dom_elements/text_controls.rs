@@ -448,7 +448,7 @@ fn text_control_default_value_type_and_reset_paths_clamp_selection() {
 
 #[test]
 fn input_click_activation_state_and_type_change_defaults_match_browser_order() {
-    let mut vm = new_storage_test_vm("https://forms-input-click-activation.test/");
+    let mut vm = new_storage_html_test_vm("https://forms-input-click-activation.test/");
 
     let result = vm
         .eval(
@@ -537,7 +537,7 @@ fn input_click_activation_state_and_type_change_defaults_match_browser_order() {
 
 #[test]
 fn checkbox_click_activation_tracks_trust_and_indeterminate_state() {
-    let mut vm = new_storage_test_vm("https://forms-checkbox-click-activation.test/");
+    let mut vm = new_storage_html_test_vm("https://forms-checkbox-click-activation.test/");
 
     let result = vm
         .eval(

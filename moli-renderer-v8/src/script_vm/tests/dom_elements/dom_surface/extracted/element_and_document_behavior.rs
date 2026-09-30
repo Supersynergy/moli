@@ -1403,7 +1403,7 @@ fn document_named_item_does_not_shadow_legacy_unforgeable_document_alias() {
 }
 #[test]
 fn response_csp_sandbox_disables_top_document_scripting_semantics() {
-    let mut vm = new_storage_test_vm("https://response-sandbox-noscript.test/");
+    let mut vm = new_storage_html_test_vm("https://response-sandbox-noscript.test/");
     vm.set_response_content_security_policies(&["sandbox".to_owned()]);
 
     let result = vm

@@ -440,7 +440,7 @@ fn child_window_forwarded_constructors_use_captured_native_intrinsics() {
 
 #[test]
 fn cross_realm_listener_throw_reports_listener_global_not_target_global() {
-    let mut vm = new_storage_test_vm("https://event-listener-multiple-globals.test/");
+    let mut vm = new_storage_html_test_vm("https://event-listener-multiple-globals.test/");
 
     vm.eval(
         r#"

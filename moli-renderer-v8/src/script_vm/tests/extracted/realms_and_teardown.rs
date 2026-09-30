@@ -937,7 +937,7 @@ fn page_context_teardown_releases_all_context_owned_v8_finalizers() {
 }
 #[test]
 fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
-    let mut vm = new_storage_test_vm("https://embedded-frame-owner-selection.test/");
+    let mut vm = new_storage_html_test_vm("https://embedded-frame-owner-selection.test/");
 
     assert_eq!(
         vm.eval(

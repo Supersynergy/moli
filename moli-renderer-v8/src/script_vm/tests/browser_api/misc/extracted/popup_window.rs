@@ -94,7 +94,7 @@ fn window_open_rejects_invalid_urls_before_selecting_a_target() {
 }
 #[test]
 fn window_open_resolves_relative_urls_against_the_entry_function_realm() {
-    let mut vm = new_storage_test_vm("https://entry-realm.test/top/page.html");
+    let mut vm = new_storage_html_test_vm("https://entry-realm.test/top/page.html");
 
     let result = vm
         .eval(

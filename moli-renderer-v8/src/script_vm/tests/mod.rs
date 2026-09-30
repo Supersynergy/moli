@@ -536,6 +536,14 @@ fn new_storage_test_vm(url: &str) -> StandaloneScriptVmHarness {
     new_storage_test_vm_with_completion_sender(url, resource_completion_queue.sender())
 }
 
+fn new_storage_html_test_vm(url: &str) -> StandaloneScriptVmHarness {
+    let mut vm = new_storage_test_vm(url);
+    vm.document_runtime
+        .dom_host_mut()
+        .reset_html_document_shell();
+    vm
+}
+
 fn refresh_layout_for_test(vm: &mut StandaloneScriptVmHarness) {
     assert!(
         vm.refresh_layout_snapshot_for_test(moli_layout::LayoutViewport::new(800, 600, 1.0,))

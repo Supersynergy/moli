@@ -100,6 +100,9 @@ pub(in crate::native_bridge) fn node_append_child_callback<'s>(
     ) else {
         return;
     };
+    if !validate_pre_insert_handles(scope, unsafe { &*runtime_ptr }, parent, child, None, &[]) {
+        return;
+    }
     let child_value = args.get(0);
     let post_insert_event_handles =
         inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, child);
@@ -200,7 +203,7 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
         parent,
         child,
         reference_child,
-        &[child],
+        &[],
     ) {
         return;
     }
@@ -292,12 +295,16 @@ fn validate_pre_insert_node_type_and_document(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return false;
     };
+    let parent_is_document = node_is_document(runtime, parent);
     if !node_type_is_insertable(child_node_type)
-        || (node_type_is_text_like(child_node_type) && node_is_document(runtime, parent))
-        || (child_node_type == NodeType::DocumentType && !node_is_document(runtime, parent))
+        || (node_type_is_text_like(child_node_type) && parent_is_document)
+        || (child_node_type == NodeType::DocumentType && !parent_is_document)
     {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return false;
+    }
+    if !parent_is_document {
+        return true;
     }
 
     let inserted = pre_insert_validation_handles(runtime, child);

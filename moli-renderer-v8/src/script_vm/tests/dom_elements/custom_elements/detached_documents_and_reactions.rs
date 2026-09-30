@@ -910,7 +910,7 @@ fn document_adopt_node_defers_disconnected_reaction_until_owner_retarget() {
 
 #[test]
 fn form_associated_custom_element_validation_participates_in_forms() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+    let mut vm = new_storage_html_test_vm("https://example.com/");
 
     let result = vm
         .eval(

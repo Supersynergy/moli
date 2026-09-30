@@ -202,7 +202,7 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
 #[tokio::test]
 async fn idle_callback_exception_and_retirement_use_the_callback_realm() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_test_vm("https://idle-callback-lifetime.test/");
+    let mut vm = new_storage_html_test_vm("https://idle-callback-lifetime.test/");
     vm.eval(
         r#"
         const errorFrame = document.createElement("iframe");

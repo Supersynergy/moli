@@ -1098,7 +1098,7 @@ fn contextual_fragment_scripts_run_when_inserted() {
 }
 #[test]
 fn document_fragment_insert_runs_nested_scripts_in_tree_order() {
-    let mut vm = new_storage_test_vm("https://document-fragment-script-order.test/");
+    let mut vm = new_storage_html_test_vm("https://document-fragment-script-order.test/");
 
     let result = vm
         .eval(

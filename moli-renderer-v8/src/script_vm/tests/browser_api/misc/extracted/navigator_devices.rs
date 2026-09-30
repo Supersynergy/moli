@@ -257,7 +257,7 @@ fn navigator_geolocation_clear_watch_cancels_only_the_exact_pending_watch() {
 }
 #[test]
 fn navigator_geolocation_retires_with_target_or_callback_window() {
-    let mut vm = new_storage_test_vm("https://geolocation-window-retirement.test/");
+    let mut vm = new_storage_html_test_vm("https://geolocation-window-retirement.test/");
     vm.eval(
         r#"
         const callbackFrame = document.createElement("iframe");

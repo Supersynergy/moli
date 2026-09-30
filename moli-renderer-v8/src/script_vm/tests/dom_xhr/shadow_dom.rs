@@ -3809,7 +3809,7 @@ fn document_import_node_resolves_shadow_adopted_sheets_against_destination_docum
 }
 #[test]
 fn declarative_shadow_adopted_stylesheets_resolve_same_document_css_module() {
-    let mut vm = new_storage_test_vm("https://shadow-adopted-css-module.test/");
+    let mut vm = new_storage_html_test_vm("https://shadow-adopted-css-module.test/");
 
     let result = vm
         .eval(
@@ -3819,7 +3819,7 @@ fn declarative_shadow_adopted_stylesheets_resolve_same_document_css_module() {
   style.setAttribute('type', 'module');
   style.setAttribute('specifier', 'foo');
   style.textContent = 'span { color: blue }';
-  document.appendChild(style);
+  document.head.appendChild(style);
 
   const wrapper = document.createElement('section');
   wrapper.setHTMLUnsafe(
@@ -3829,7 +3829,7 @@ fn declarative_shadow_adopted_stylesheets_resolve_same_document_css_module() {
       "</template>" +
     "</div>"
   );
-  document.appendChild(wrapper);
+  document.body.appendChild(wrapper);
 
   const host = document.getElementById('host');
   const parsed = Document.parseHTMLUnsafe(

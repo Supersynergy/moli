@@ -314,7 +314,7 @@ fn navigation_runtime_state_ignores_proto_pollution_slots() {
 }
 #[test]
 fn targeted_anchor_click_dispatches_navigate_on_named_child_window() {
-    let mut vm = new_storage_test_vm("https://targeted-child-navigate.test/page.html");
+    let mut vm = new_storage_html_test_vm("https://targeted-child-navigate.test/page.html");
 
     let result = vm
         .eval(

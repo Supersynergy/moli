@@ -562,7 +562,7 @@ fn computed_style_map_uses_native_reads_and_validates_typed_om_calls() {
 
 #[test]
 fn computed_style_enumerates_registered_custom_properties() {
-    let mut vm = new_storage_test_vm("https://computed-style-custom-properties.test/");
+    let mut vm = new_storage_html_test_vm("https://computed-style-custom-properties.test/");
 
     let result = vm
         .eval(
@@ -1705,7 +1705,7 @@ fn live_inline_font_shorthand_serializes_line_height_slash_spacing() {
 
 #[test]
 fn computed_color_normalizes_named_and_hex_colors() {
-    let mut vm = new_storage_test_vm("https://computed-color-normalization.test/");
+    let mut vm = new_storage_html_test_vm("https://computed-color-normalization.test/");
 
     let result = vm
         .eval(
@@ -1715,7 +1715,7 @@ fn computed_color_normalizes_named_and_hex_colors() {
   return values.map((value) => {
     const element = document.createElement('div');
     element.style.color = value;
-    document.appendChild(element);
+    document.body.appendChild(element);
     return getComputedStyle(element).color;
   }).join('|');
 })()

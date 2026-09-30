@@ -101,7 +101,7 @@
         check(error && error.name === expected, "empty fragment still validates insertion");
       }
     });
-    if (owner.defaultView === null) run(name + "/invalid document insertion", () => {
+    run(name + "/invalid document insertion", () => {
       const fragment = owner.createDocumentFragment();
       const nodes = [owner.createElement("one"), owner.createElement("two")];
       nodes.forEach(node => fragment.appendChild(node));

@@ -1043,7 +1043,7 @@ const childSelection = frame.contentWindow.getSelection();
 
 #[test]
 fn selection_get_composed_ranges_rescopes_shadow_boundaries() {
-    let mut vm = new_storage_test_vm("https://selection-composed-ranges.test/");
+    let mut vm = new_storage_html_test_vm("https://selection-composed-ranges.test/");
 
     let result = vm
         .eval(
@@ -1098,7 +1098,7 @@ fn selection_get_composed_ranges_rescopes_shadow_boundaries() {
 
 #[test]
 fn selection_get_composed_ranges_static_range_init_ignores_prototype_setters() {
-    let mut vm = new_storage_test_vm("https://selection-composed-ranges-init.test/");
+    let mut vm = new_storage_html_test_vm("https://selection-composed-ranges-init.test/");
 
     let result = vm
         .eval(
@@ -1167,7 +1167,7 @@ fn selection_get_composed_ranges_static_range_init_ignores_prototype_setters() {
 
 #[test]
 fn selection_get_range_at_returns_shadow_collapsed_range_for_cross_root_selection() {
-    let mut vm = new_storage_test_vm("https://selection-cross-root-range-at.test/");
+    let mut vm = new_storage_html_test_vm("https://selection-cross-root-range-at.test/");
 
     let result = vm
         .eval(
@@ -1287,7 +1287,7 @@ fn selection_cross_root_set_base_and_extent_collapses_legacy_to_focus() {
 
 #[test]
 fn selection_set_base_and_extent_to_earlier_shadow_root_collapses_to_anchor() {
-    let mut vm = new_storage_test_vm("https://selection-cross-root-backward-collapse.test/");
+    let mut vm = new_storage_html_test_vm("https://selection-cross-root-backward-collapse.test/");
 
     let result = vm
         .eval(
@@ -1420,7 +1420,7 @@ fn selection_get_composed_ranges_orders_slotted_boundary_like_chromium() {
 
 #[test]
 fn selection_get_composed_ranges_tracks_associated_range_updates() {
-    let mut vm = new_storage_test_vm("https://selection-composed-range-update.test/");
+    let mut vm = new_storage_html_test_vm("https://selection-composed-range-update.test/");
 
     let result = vm
         .eval(
