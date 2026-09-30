@@ -87,6 +87,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "SubtleCrypto",
     "CryptoKey",
     "IdleDetector",
+    "Worklet",
+    "AudioWorklet",
     "Clipboard",
     "ClipboardItem",
 ];

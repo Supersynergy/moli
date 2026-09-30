@@ -2063,6 +2063,14 @@ pub(crate) fn set_interface_prototype_constructor<'s>(
     );
 }
 
+pub(crate) fn window_realm_secure_context_available<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, window, WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT)
+        .is_some_and(|value| value.is_true())
+}
+
 fn install_window_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,

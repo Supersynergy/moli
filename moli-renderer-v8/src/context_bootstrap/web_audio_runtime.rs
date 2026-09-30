@@ -6,8 +6,7 @@ use super::media_queries::{
 use super::*;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::{
-    array_push_value, call_object_method, get_private_value, object_string_property,
-    set_private_value, set_symbol_to_string_tag,
+    call_object_method, get_private_value, object_string_property, set_private_value,
 };
 use crate::web_api_interfaces;
 use crate::webidl;
@@ -23,11 +22,12 @@ const AUDIO_CONTEXT_LISTENERS_SLOT: &str = "__moliAudioContextListeners";
 const AUDIO_CONTEXT_MODULES_SLOT: &str = "__moliAudioContextModules";
 const AUDIO_CONTEXT_MODULE_LIST_SLOT: &str = "__moliAudioContextModuleList";
 const AUDIO_CONTEXT_PROCESSORS_SLOT: &str = "__moliAudioContextProcessors";
+const AUDIO_CONTEXT_WORKLET_SLOT: &str = "__moliAudioContextWorklet";
 const AUDIO_WORKLET_CONTEXT_SLOT: &str = "__moliAudioWorkletContext";
 const AUDIO_WORKLET_MODULE_CONTEXT_SLOT: &str = "__moliAudioWorkletModuleContext";
 const AUDIO_WORKLET_MODULE_WORKER_SLOT: &str = "__moliAudioWorkletModuleWorker";
-const AUDIO_WORKLET_MODULE_PROMISE_SLOT: &str = "__moliAudioWorkletModulePromise";
-const AUDIO_WORKLET_MODULE_RESOLVER_SLOT: &str = "__moliAudioWorkletModuleResolver";
+const AUDIO_WORKLET_MODULE_RESOLVERS_SLOT: &str = "__moliAudioWorkletModuleResolvers";
+const AUDIO_WORKLET_MODULE_ERROR_SLOT: &str = "__moliAudioWorkletModuleError";
 const AUDIO_WORKLET_MODULE_LOADED_SLOT: &str = "__moliAudioWorkletModuleLoaded";
 const AUDIO_WORKLET_MODULE_SETTLED_SLOT: &str = "__moliAudioWorkletModuleSettled";
 const AUDIO_WORKLET_CALLBACK_MODULE_SLOT: &str = "__moliAudioWorkletCallbackModule";
@@ -51,8 +51,6 @@ struct AudioContextObjectDeclaration<'scope> {
     state: &'static str,
     #[webapi(data_property)]
     destination: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = "audioWorklet")]
-    audio_worklet: v8::Local<'scope, v8::Object>,
     #[webapi(slot = SIMPLE_EVENT_TARGET_SLOT, value = AUDIO_CONTEXT_LISTENERS_SLOT)]
     event_target_slot: (),
     #[webapi(slot = AUDIO_CONTEXT_MODULES_SLOT)]
@@ -66,10 +64,10 @@ struct AudioContextObjectDeclaration<'scope> {
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::AudioWorklet)]
 struct AudioWorkletObjectDeclaration<'scope> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'scope, v8::Object>,
     #[webapi(slot = AUDIO_WORKLET_CONTEXT_SLOT)]
     context: v8::Local<'scope, v8::Object>,
-    #[webapi(method = "addModule", length = 1, callback = audio_worklet_add_module_callback)]
-    add_module: (),
 }
 
 #[derive(WebApiObject)]
@@ -88,10 +86,8 @@ struct AudioWorkletModuleStateDeclaration<'scope> {
     context: v8::Local<'scope, v8::Object>,
     #[webapi(slot = AUDIO_WORKLET_MODULE_WORKER_SLOT)]
     worker: v8::Local<'scope, v8::Object>,
-    #[webapi(slot = AUDIO_WORKLET_MODULE_PROMISE_SLOT)]
-    promise: v8::Local<'scope, v8::Promise>,
-    #[webapi(slot = AUDIO_WORKLET_MODULE_RESOLVER_SLOT)]
-    resolver: v8::Local<'scope, v8::PromiseResolver>,
+    #[webapi(slot = AUDIO_WORKLET_MODULE_RESOLVERS_SLOT)]
+    resolvers: v8::Local<'scope, v8::Array>,
     #[webapi(slot = AUDIO_WORKLET_MODULE_LOADED_SLOT)]
     loaded: bool,
     #[webapi(slot = AUDIO_WORKLET_MODULE_SETTLED_SLOT)]
@@ -480,6 +476,10 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
         graph::install(scope, template);
     }
     match interface_name {
+        "Worklet" => WorkletPrototypeDeclaration::initialize_prototype_template(
+            scope,
+            template.prototype_template(scope),
+        ),
         "AudioParam" => audio_param::install(scope, template),
         "BiquadFilterNode" => biquad::install(scope, template),
         "BaseAudioContext" => {
@@ -528,17 +528,12 @@ fn audio_context_constructor_callback<'s>(
     let modules = new_web_audio_map_object(scope);
     let module_list = v8::Array::new(scope, 0);
     let processors = new_web_audio_map_object(scope);
-    let audio_worklet = AudioWorkletObjectDeclaration::new(context)
-        .bind(scope)
-        .expect("AudioWorklet declaration should bind");
-    set_symbol_to_string_tag(scope, audio_worklet, "AudioWorklet");
 
     AudioContextObjectDeclaration::new(
         0.0,
         44_100.0,
         "running",
         destination,
-        audio_worklet,
         modules,
         module_list,
         processors,
@@ -579,20 +574,12 @@ fn audio_context_close_callback<'s>(
                 module_state,
                 AUDIO_WORKLET_MODULE_SETTLED_SLOT,
             ) {
-                set_audio_worklet_module_bool_slot(
+                let error = new_dom_exception_value(
                     scope,
-                    module_state,
-                    AUDIO_WORKLET_MODULE_SETTLED_SLOT,
-                    true,
+                    "AudioWorklet module loading was aborted.",
+                    "AbortError",
                 );
-                if let Some(resolver) = audio_worklet_module_resolver(scope, module_state) {
-                    let error = new_dom_exception_value(
-                        scope,
-                        "AudioWorklet module loading was aborted.",
-                        "AbortError",
-                    );
-                    let _ = resolver.reject(scope, error);
-                }
+                settle_audio_worklet_module(scope, module_state, Err(error));
             }
             if let Some(worker) =
                 web_audio_object_slot(scope, module_state, AUDIO_WORKLET_MODULE_WORKER_SLOT)
@@ -627,76 +614,184 @@ fn audio_context_close_callback<'s>(
     }
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::Worklet, enumerable, receiver)]
+struct WorkletPrototypeDeclaration {
+    #[webapi(method = "addModule", length = 1, returns_promise, callback = audio_worklet_add_module_callback)]
+    add_module: (),
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(fragment, prototype = "BaseAudioContext", enumerable, receiver = web_api_interfaces::BaseAudioContext::is_instance)]
+struct BaseAudioContextSecureAttributes {
+    #[webapi(accessor_property = "audioWorklet", getter = audio_worklet_getter)]
+    audio_worklet: (),
+}
+
+pub(super) fn finalize_base_audio_context_realm_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    prototype: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    let global = scope.get_current_context().global(scope);
+    if super::runtime_state::window_realm_secure_context_available(scope, global) {
+        BaseAudioContextSecureAttributes::default()
+            .initialize(scope, prototype)
+            .map_err(|error| anyhow!(error))?;
+    }
+    Ok(())
+}
+
+fn audio_worklet_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let context = args.this();
+    if let Some(worklet) = web_audio_object_slot(scope, context, AUDIO_CONTEXT_WORKLET_SLOT) {
+        rv.set(worklet.into());
+        return;
+    }
+    let Some(realm) = context.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, realm);
+    let Ok(prototype) = ensure_intrinsic_interface_prototype(scope, "AudioWorklet") else {
+        return;
+    };
+    let worklet = AudioWorkletObjectDeclaration::new(prototype, context)
+        .bind(scope)
+        .expect("AudioWorklet declaration should bind");
+    set_private_value(scope, context, AUDIO_CONTEXT_WORKLET_SLOT, worklet.into());
+    rv.set(worklet.into());
+}
+
+#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
+#[webidl(name = "RequestCredentials", rename_all = "kebab-case")]
+enum WorkletCredentials {
+    Omit,
+    #[default]
+    SameOrigin,
+    Include,
+}
+
+impl WorkletCredentials {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Omit => "omit",
+            Self::SameOrigin => "same-origin",
+            Self::Include => "include",
+        }
+    }
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "WorkletOptions")]
+struct WorkletOptions {
+    #[webidl(converter = "enum", default = WorkletCredentials::SameOrigin)]
+    credentials: WorkletCredentials,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Worklet.addModule")]
+struct WorkletAddModuleArgs {
+    #[webidl(required, converter = "usv_string")]
+    module_url: String,
+    #[webidl(with = worklet_options_arg)]
+    options: WorkletOptions,
+}
+
+fn worklet_options_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<WorkletOptions, webidl::WebIdlError> {
+    webidl::parse_dictionary(
+        scope,
+        args.get(index),
+        webidl::Context::argument("Worklet.addModule", 2),
+    )
+    .map(Option::unwrap_or_default)
+}
+
 fn audio_worklet_add_module_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<WorkletAddModuleArgs>(scope, &args) else {
+        return;
+    };
     let worklet = args.this();
     let Some(context) = web_audio_object_slot(scope, worklet, AUDIO_WORKLET_CONTEXT_SLOT) else {
-        let error = type_error_value(
-            scope,
-            "AudioWorklet.addModule called on incompatible receiver.",
-        )
-        .unwrap_or_else(|| v8::undefined(scope).into());
-        set_rejected_promise_return(scope, &mut rv, error);
+        throw_type_error(scope, "AudioWorklet context state is unavailable.");
         return;
     };
-    let Some(module_url) = resolve_audio_worklet_module_url(scope, args.get(0)) else {
-        let error = type_error_value(scope, "AudioWorklet.addModule module URL is invalid.")
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        set_rejected_promise_return(scope, &mut rv, error);
+    // Argument conversion failures use the method's realm. The operation's
+    // Promise, URL resolution and workers use the Worklet's relevant realm.
+    let Some(realm) = worklet.get_creation_context(scope) else {
         return;
     };
-    let credentials = match audio_worklet_credentials(scope, &args) {
-        Ok(credentials) => credentials,
-        Err(message) => {
-            let error =
-                type_error_value(scope, &message).unwrap_or_else(|| v8::undefined(scope).into());
-            set_rejected_promise_return(scope, &mut rv, error);
-            return;
-        }
-    };
-    let Some(modules) = web_audio_object_slot(scope, context, AUDIO_CONTEXT_MODULES_SLOT) else {
-        let error = type_error_value(scope, "AudioWorklet context state is unavailable.")
-            .unwrap_or_else(|| v8::undefined(scope).into());
-        set_rejected_promise_return(scope, &mut rv, error);
-        return;
-    };
-    if let Some(existing_module) = map_get_object(scope, modules, &module_url)
-        && let Some(promise) =
-            get_private_value(scope, existing_module, AUDIO_WORKLET_MODULE_PROMISE_SLOT)
-                .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok())
-    {
-        rv.set(promise.into());
-        return;
-    }
-
+    let scope = &mut v8::ContextScope::new(scope, realm);
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set_undefined();
         return;
     };
     let promise = resolver.get_promise(scope);
-    let Some(worker) = create_audio_worklet_module_worker(scope, &module_url, credentials) else {
+    rv.set(promise.into());
+    let Some(module_url) = resolve_audio_worklet_module_url(scope, &parsed.module_url) else {
+        let error = new_dom_exception_value(
+            scope,
+            "AudioWorklet.addModule module URL is invalid.",
+            "SyntaxError",
+        );
+        let _ = resolver.reject(scope, error);
+        return;
+    };
+    let Some(modules) = web_audio_object_slot(scope, context, AUDIO_CONTEXT_MODULES_SLOT) else {
+        let error = v8::Exception::type_error(
+            scope,
+            v8str(scope, "AudioWorklet context state is unavailable."),
+        );
+        let _ = resolver.reject(scope, error);
+        return;
+    };
+    if let Some(module_state) = map_get_object(scope, modules, &module_url) {
+        if audio_worklet_module_bool_slot(scope, module_state, AUDIO_WORKLET_MODULE_SETTLED_SLOT) {
+            if audio_worklet_module_bool_slot(scope, module_state, AUDIO_WORKLET_MODULE_LOADED_SLOT)
+            {
+                let _ = resolver.resolve(scope, v8::undefined(scope).into());
+            } else if let Some(error) =
+                get_private_value(scope, module_state, AUDIO_WORKLET_MODULE_ERROR_SLOT)
+            {
+                let _ = resolver.reject(scope, error);
+            }
+        } else if let Some(resolvers) =
+            web_audio_array_slot(scope, module_state, AUDIO_WORKLET_MODULE_RESOLVERS_SLOT)
+        {
+            let key = v8_string(scope, &resolvers.length().to_string()).expect("array index");
+            let _ = resolvers.create_data_property(scope, key.into(), resolver.into());
+        }
+        return;
+    }
+    let Some(worker) =
+        create_audio_worklet_module_worker(scope, &module_url, parsed.options.credentials.as_str())
+    else {
         let error = type_error_value(scope, "AudioWorklet module failed.")
             .unwrap_or_else(|| v8::undefined(scope).into());
         let _ = resolver.reject(scope, error);
-        rv.set(promise.into());
         return;
     };
-
+    let resolvers = v8::Array::new_with_elements(scope, &[resolver.into()]);
     let module_state =
-        AudioWorkletModuleStateDeclaration::new(context, worker, promise, resolver, false, false)
+        AudioWorkletModuleStateDeclaration::new(context, worker, resolvers, false, false)
             .bind(scope)
             .expect("AudioWorklet module state declaration should bind");
     install_audio_worklet_worker_callbacks(scope, worker, module_state);
     let _ = map_set_object(scope, modules, &module_url, module_state);
     if let Some(module_list) = web_audio_array_slot(scope, context, AUDIO_CONTEXT_MODULE_LIST_SLOT)
     {
-        array_push_value(scope, module_list, module_state.into());
+        let key = v8_string(scope, &module_list.length().to_string()).expect("array index");
+        let _ = module_list.create_data_property(scope, key.into(), module_state.into());
     }
-
-    rv.set(promise.into());
 }
 
 fn install_audio_worklet_worker_callbacks<'s>(
@@ -756,35 +851,12 @@ fn audio_worklet_worker_message_callback<'s>(
             };
             let _ = map_set_object(scope, processors, &name, module_state);
         }
-        "module-loaded" => {
-            if audio_worklet_module_bool_slot(
-                scope,
-                module_state,
-                AUDIO_WORKLET_MODULE_SETTLED_SLOT,
-            ) {
-                return;
-            }
-            set_audio_worklet_module_bool_slot(
-                scope,
-                module_state,
-                AUDIO_WORKLET_MODULE_LOADED_SLOT,
-                true,
-            );
-            set_audio_worklet_module_bool_slot(
-                scope,
-                module_state,
-                AUDIO_WORKLET_MODULE_SETTLED_SLOT,
-                true,
-            );
-            if let Some(resolver) = audio_worklet_module_resolver(scope, module_state) {
-                let _ = resolver.resolve(scope, v8::undefined(scope).into());
-            }
-        }
+        "module-loaded" => settle_audio_worklet_module(scope, module_state, Ok(())),
         "processor-error" => {
             let message = object_string_property(scope, message, "message")
                 .unwrap_or_else(|| "AudioWorklet processor failed.".to_owned());
             let error = error_value(scope, &message).unwrap_or_else(|| v8::undefined(scope).into());
-            fail_audio_worklet_module(scope, module_state, error);
+            settle_audio_worklet_module(scope, module_state, Err(error));
         }
         _ => {}
     }
@@ -793,7 +865,7 @@ fn audio_worklet_worker_message_callback<'s>(
 fn audio_worklet_worker_error_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'s, v8::Value>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some(module_state) = audio_worklet_callback_module_state(scope, &args) else {
         return;
@@ -807,7 +879,10 @@ fn audio_worklet_worker_error_callback<'s>(
         })
         .unwrap_or_else(|| "AudioWorklet module failed.".to_owned());
     let error = error_value(scope, &message).unwrap_or_else(|| v8::undefined(scope).into());
-    fail_audio_worklet_module(scope, module_state, error);
+    settle_audio_worklet_module(scope, module_state, Err(error));
+    // This internal worker failure is reported through addModule's Promise.
+    // Cancel the handled error instead of reporting it again on Window.
+    rv.set_bool(false);
 }
 
 fn audio_worklet_node_constructor_callback<'s>(
@@ -884,28 +959,6 @@ fn audio_worklet_node_constructor_callback<'s>(
     rv.set(node.into());
 }
 
-fn set_rejected_promise_return<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rv: &mut v8::ReturnValue<'s, v8::Value>,
-    error: v8::Local<'s, v8::Value>,
-) {
-    if let Some(promise) = rejected_promise(scope, error) {
-        rv.set(promise.into());
-    } else {
-        rv.set(v8::undefined(scope).into());
-    }
-}
-
-fn rejected_promise<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    error: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Promise>> {
-    let resolver = v8::PromiseResolver::new(scope)?;
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.reject(scope, error);
-    Some(promise)
-}
-
 fn resolved_undefined_promise<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
@@ -958,50 +1011,23 @@ fn map_set_object<'s>(
 
 fn resolve_audio_worklet_module_url(
     scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
+    input: &str,
 ) -> Option<String> {
-    let input = value.to_string(scope)?.to_rust_string_lossy(scope);
-    let base_url = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &*host_ptr };
-        super::worker_host::worker_constructor_base_url(host)
-    } else {
-        let global = scope.get_current_context().global(scope);
-        let location = object_property_as_object(scope, global, "location")?;
-        let href = object_string_property(scope, location, "href")?;
-        url::Url::parse(&href).ok()?
-    };
-    base_url.join(&input).ok().map(|url| url.to_string())
-}
+    use crate::native_bridge::OwnerDispatchScope;
 
-fn audio_worklet_credentials(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> std::result::Result<&'static str, String> {
-    let value = args.get(1);
-    if value.is_undefined() || value.is_null() {
-        return Ok("same-origin");
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok("same-origin");
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    // SAFETY: the bridge owns the host for the lifetime of the callback.
+    let host = unsafe { &*host_ptr };
+    let global = scope.get_current_context().global(scope);
+    let document = match super::navigation_window::runtime_window_dispatch_scope(scope, global)? {
+        OwnerDispatchScope::Top => host.document_handle(),
+        OwnerDispatchScope::Child(handle) => host.child_browsing_context_document_handle(handle)?,
+        OwnerDispatchScope::LightweightPopup(id) => host.lightweight_popup_document_handle(id)?,
     };
-    let Some(credentials) = options.get(scope, v8str(scope, "credentials").into()) else {
-        return Ok("same-origin");
-    };
-    if credentials.is_undefined() {
-        return Ok("same-origin");
-    }
-    let Some(credentials) = credentials.to_string(scope) else {
-        return Err("AudioWorklet.addModule options.credentials is invalid.".to_owned());
-    };
-    let credentials = credentials.to_rust_string_lossy(scope);
-    match credentials.as_str() {
-        "omit" => Ok("omit"),
-        "same-origin" => Ok("same-origin"),
-        "include" => Ok("include"),
-        _ => Err(format!(
-            "The provided value '{credentials}' is not a valid enum value of type RequestCredentials."
-        )),
-    }
+    host.document_base_url_for_handle(document)
+        .join(input)
+        .ok()
+        .map(|url| url.to_string())
 }
 
 fn create_audio_worklet_module_worker<'s>(
@@ -1176,10 +1202,10 @@ fn audio_worklet_callback_module_state<'s>(
     web_audio_object_slot(scope, data, AUDIO_WORKLET_CALLBACK_MODULE_SLOT)
 }
 
-fn fail_audio_worklet_module<'s>(
+fn settle_audio_worklet_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     module_state: v8::Local<'s, v8::Object>,
-    error: v8::Local<'s, v8::Value>,
+    result: Result<(), v8::Local<'s, v8::Value>>,
 ) {
     if audio_worklet_module_bool_slot(scope, module_state, AUDIO_WORKLET_MODULE_SETTLED_SLOT) {
         return;
@@ -1190,8 +1216,45 @@ fn fail_audio_worklet_module<'s>(
         AUDIO_WORKLET_MODULE_SETTLED_SLOT,
         true,
     );
-    if let Some(resolver) = audio_worklet_module_resolver(scope, module_state) {
-        let _ = resolver.reject(scope, error);
+    set_audio_worklet_module_bool_slot(
+        scope,
+        module_state,
+        AUDIO_WORKLET_MODULE_LOADED_SLOT,
+        result.is_ok(),
+    );
+    if let Err(error) = result {
+        set_private_value(scope, module_state, AUDIO_WORKLET_MODULE_ERROR_SLOT, error);
+    }
+    let Some(resolvers) =
+        web_audio_array_slot(scope, module_state, AUDIO_WORKLET_MODULE_RESOLVERS_SLOT)
+    else {
+        return;
+    };
+    // Drop the state's references before settling, and never invoke author
+    // Promise.then / constructor properties to join a module response.
+    set_private_value(
+        scope,
+        module_state,
+        AUDIO_WORKLET_MODULE_RESOLVERS_SLOT,
+        v8::undefined(scope).into(),
+    );
+    for index in 0..resolvers.length() {
+        let Some(value) = resolvers.get_index(scope, index) else {
+            continue;
+        };
+        let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+            continue;
+        };
+        // Only native PromiseResolvers are written to this private array.
+        let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) };
+        match result {
+            Ok(()) => {
+                let _ = resolver.resolve(scope, v8::undefined(scope).into());
+            }
+            Err(error) => {
+                let _ = resolver.reject(scope, error);
+            }
+        }
     }
 }
 
@@ -1213,15 +1276,6 @@ fn set_audio_worklet_module_bool_slot<'s>(
 ) {
     let value = v8::Boolean::new(scope, value);
     set_private_value(scope, object, slot, value.into());
-}
-
-fn audio_worklet_module_resolver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    get_private_value(scope, object, AUDIO_WORKLET_MODULE_RESOLVER_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) })
 }
 
 fn dynamics_compressor_reduction_getter_callback<'s>(
@@ -1272,6 +1326,22 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
     let context = args.this();
     let destination = audio_destination_node(scope, context);
     let compressors = v8::Array::new(scope, 0);
+    let modules = new_web_audio_map_object(scope);
+    let module_list = v8::Array::new(scope, 0);
+    let processors = new_web_audio_map_object(scope);
+    set_private_value(scope, context, AUDIO_CONTEXT_MODULES_SLOT, modules.into());
+    set_private_value(
+        scope,
+        context,
+        AUDIO_CONTEXT_MODULE_LIST_SLOT,
+        module_list.into(),
+    );
+    set_private_value(
+        scope,
+        context,
+        AUDIO_CONTEXT_PROCESSORS_SLOT,
+        processors.into(),
+    );
     OfflineAudioContextObjectDeclaration::new(
         0.0,
         length,

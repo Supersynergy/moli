@@ -227,7 +227,14 @@ async fn audio_worklet_close_rejects_pending_add_module_response() {
                         globalThis.__audioWorkletCloseDone = false;
                         const context = new AudioContext();
                         globalThis.__audioWorkletCloseContext = context;
-                        context.audioWorklet.addModule({module_url_literal}).then(
+                        const first = context.audioWorklet.addModule({module_url_literal});
+                        const second = context.audioWorklet.addModule({module_url_literal});
+                        Promise.allSettled([first, second]).then(results => {{
+                            if (first === second || results.some(result => result.status !== "rejected" || result.reason.name !== "AbortError")) {{
+                                throw new Error("Every pending caller must independently reject on close");
+                            }}
+                            throw results[0].reason;
+                        }}).then(
                             () => {{
                                 globalThis.__audioWorkletCloseResult = "resolved";
                                 globalThis.__audioWorkletCloseDone = true;
@@ -1446,4 +1453,48 @@ async fn worker_owned_messageport_options_transfer_null_clone_path_responds() {
             assert_eq!(result, "ready|plain:0|attached:2|clone:true:2:9,10:0");
         })
         .await;
+}
+
+#[tokio::test]
+async fn worklet_module_promises_preserve_independent_native_waiters() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm_with_document_url(Url::parse("https://worklet-promises.test/").unwrap());
+        let local_executor = page_vm.local_executor.clone();
+        let result = local_executor.run(async move {
+            page_vm.vm_mut().eval(&format!("({}).then(value => globalThis.__workletDone = value, error => globalThis.__workletDone = String(error));", include_str!("../../../../script_vm/tests/worklet_module_promises.js")))?;
+            drive_websocket_until_done(&mut page_vm, "String(globalThis.__workletDone !== undefined)", "Worklet module waiters should settle").await?;
+            page_vm.vm_mut().eval("JSON.stringify(__nodeReplacementResults.failures)")
+        }).await.expect("Worklet module fixture should complete");
+        assert_eq!(result, "[]");
+    }).await;
+}
+
+#[tokio::test]
+async fn borrowed_worklet_add_module_uses_receiver_document_base() {
+    run_page_vm_async_test(async move {
+        let (base_url, request_rx, server) = spawn_shared_worker_script_capture_http_server(
+            "registerProcessor('receiver-base', class extends AudioWorkletProcessor {});",
+        ).await;
+        let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base_url}/main/page.html")).unwrap());
+        let base = serde_json::to_string(&format!("{base_url}/worklet/")).unwrap();
+        let local_executor = page_vm.local_executor.clone();
+        let result = local_executor.run(async move {
+            page_vm.vm_mut().eval(&format!(r#"
+                const frame = document.createElement('iframe'); document.body.append(frame);
+                const other = frame.contentWindow;
+                const base = other.document.createElement('base'); base.href = {base}; other.document.head.append(base);
+                const context = new other.AudioContext();
+                Worklet.prototype.addModule.call(context.audioWorklet, 'entry.js').then(() => {{
+                    globalThis.__receiverBaseResult = String(new other.AudioWorkletNode(context, 'receiver-base') instanceof other.AudioWorkletNode);
+                    return context.close();
+                }}).catch(error => globalThis.__receiverBaseResult = String(error));
+            "#))?;
+            drive_websocket_until_done(&mut page_vm, "String(globalThis.__receiverBaseResult !== undefined)", "borrowed addModule should settle").await?;
+            page_vm.vm_mut().eval("__receiverBaseResult")
+        }).await.expect("receiver base URL test should complete");
+        assert_eq!(result, "true");
+        let request = request_rx.await.expect("module request");
+        assert!(request.starts_with("GET /worklet/entry.js "), "{request}");
+        server.await.expect("server should finish");
+    }).await;
 }

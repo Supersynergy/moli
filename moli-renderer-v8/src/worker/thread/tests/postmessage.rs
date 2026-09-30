@@ -1890,6 +1890,24 @@ async fn worker_self_close() {
 // ─── Error propagation ──────────────────────────────────────────────
 
 #[tokio::test]
+async fn worker_does_not_expose_window_worklet_interfaces() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        "postMessage({Worklet: 'Worklet' in self, AudioWorklet: 'AudioWorklet' in self}); close();"
+            .to_owned(),
+        "https://worklet-worker.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(message),
+        r#"{"Worklet":false,"AudioWorklet":false}"#
+    );
+}
+
+#[tokio::test]
 async fn worker_error_propagation() {
     ensure_v8();
     let mut handle = spawn_worker(
