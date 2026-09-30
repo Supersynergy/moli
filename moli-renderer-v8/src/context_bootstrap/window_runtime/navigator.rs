@@ -1,7 +1,7 @@
 use super::*;
 use crate::web_api_interfaces;
 use moli_browser_profile::BrowserIdentityProfile;
-use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
+use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
     STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT, STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT,
@@ -68,13 +68,18 @@ const STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT: &str =
     "__moliStorageBucketCachePutResponseHeaders";
 const NAVIGATOR_UA_DATA_USER_AGENT_SLOT: &str = "__moliNavigatorUADataUserAgent";
 
-#[derive(Default, WebApiObject)]
-#[webapi(
-    prototype = "Object",
-    interface = web_api_interfaces::CacheStorage,
-    own_to_string_tag = "CacheStorage"
-)]
-struct StorageBucketCacheStorageObjectDeclaration {
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::CacheStorage)]
+struct StorageBucketCacheStorageObjectDeclaration<'scope> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'scope, v8::Object>,
+}
+
+// These Promise-returning operations share branded_promise_resolver, which
+// rejects invalid receivers before conversion in a callee-realm Promise.
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CacheStorage, enumerable)]
+struct CacheStoragePrototypeDeclaration {
     #[webapi(
         method,
         callback = storage_bucket_cache_storage_match_callback,
@@ -108,12 +113,19 @@ struct StorageBucketCacheStorageObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::Cache, own_to_string_tag = "Cache")]
-struct StorageBucketCacheObjectDeclaration {
+#[webapi(interface = web_api_interfaces::Cache)]
+struct StorageBucketCacheObjectDeclaration<'scope> {
+    #[webapi(prototype)]
+    prototype: v8::Local<'scope, v8::Object>,
     #[webapi(slot = STORAGE_BUCKET_CACHE_NAME_SLOT)]
     cache_name: String,
     #[webapi(slot = STORAGE_BUCKET_CACHE_ID_SLOT)]
     cache_id: String,
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::Cache, enumerable)]
+struct CachePrototypeDeclaration {
     #[webapi(method, callback = storage_bucket_cache_put_callback, length = 2)]
     put: (),
     #[webapi(method, callback = storage_bucket_cache_match_callback, length = 1)]
@@ -124,6 +136,23 @@ struct StorageBucketCacheObjectDeclaration {
     keys: (),
     #[webapi(method, callback = storage_bucket_cache_delete_callback, length = 1)]
     delete: (),
+}
+
+pub(in crate::context_bootstrap) fn install_cache_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+    name: &str,
+) {
+    let prototype = template.prototype_template(scope);
+    match name {
+        "CacheStorage" => {
+            CacheStoragePrototypeDeclaration::initialize_prototype_template(scope, prototype);
+        }
+        "Cache" => {
+            CachePrototypeDeclaration::initialize_prototype_template(scope, prototype);
+        }
+        _ => {}
+    }
 }
 
 #[derive(WebApiObject)]
@@ -2442,8 +2471,12 @@ fn build_storage_bucket_cache_storage_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     handle: &StorageBucketHandle,
 ) -> v8::Local<'s, v8::Object> {
-    let object = v8::Object::new(scope);
-    let _ = StorageBucketCacheStorageObjectDeclaration::default().bind_into(scope, object);
+    let prototype =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "CacheStorage")
+            .expect("CacheStorage intrinsic prototype should be available");
+    let object = StorageBucketCacheStorageObjectDeclaration::new(prototype)
+        .bind(scope)
+        .expect("CacheStorage declaration should bind");
     set_storage_bucket_handle_slots(scope, object, handle);
     object
 }
@@ -2454,10 +2487,15 @@ fn build_storage_bucket_cache_object<'s>(
     cache_name: &str,
     cache_id: StorageBucketCacheId,
 ) -> v8::Local<'s, v8::Object> {
-    let object = v8::Object::new(scope);
-    let _ =
-        StorageBucketCacheObjectDeclaration::new(cache_name.to_owned(), cache_id.get().to_string())
-            .bind_into(scope, object);
+    let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Cache")
+        .expect("Cache intrinsic prototype should be available");
+    let object = StorageBucketCacheObjectDeclaration::new(
+        prototype,
+        cache_name.to_owned(),
+        cache_id.get().to_string(),
+    )
+    .bind(scope)
+    .expect("Cache declaration should bind");
     set_storage_bucket_handle_slots(scope, object, bucket);
     if let Some(store) = current_storage_bucket_store(scope) {
         let identity = bucket.identity.clone();
