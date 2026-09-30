@@ -21,6 +21,9 @@ pub(crate) enum NativeCommandStep {
     Complete(CommandOutputPlan),
 }
 
+type UnpublishedFailureProjection =
+    Box<dyn FnOnce(&CdpConnection, String) -> CommandOutputPlan + Send>;
+
 pub(crate) struct PendingNativeCommand {
     // Retain wire routing only; Page settlement uses the exact residence.
     session_id: Option<String>,
@@ -28,6 +31,7 @@ pub(crate) struct PendingNativeCommand {
     command_id: u64,
     pending: PendingPageCommand,
     guard: RendererNativeCommandResponseGuard,
+    unpublished_failure: Option<UnpublishedFailureProjection>,
 }
 
 pub(crate) struct CompletedNativeCommand {
@@ -36,9 +40,20 @@ pub(crate) struct CompletedNativeCommand {
     pub(crate) command_id: u64,
     result: Result<CompletedPageCommand, String>,
     guard: RendererNativeCommandResponseGuard,
+    unpublished_failure: Option<UnpublishedFailureProjection>,
 }
 
 impl PendingNativeCommand {
+    /// Browser policy may outlive a rejected old attachment. This projection
+    /// only runs after publication lost; it cannot replace a committed reply.
+    pub(crate) fn on_unpublished_failure(
+        mut self,
+        project: impl FnOnce(&CdpConnection, String) -> CommandOutputPlan + Send + 'static,
+    ) -> Self {
+        self.unpublished_failure = Some(Box::new(project));
+        self
+    }
+
     pub(crate) fn command_id(&self) -> u64 {
         self.command_id
     }
@@ -54,6 +69,7 @@ impl PendingNativeCommand {
             command_id: self.command_id,
             result: self.pending.wait().await.map_err(|error| error.to_string()),
             guard: self.guard,
+            unpublished_failure: self.unpublished_failure,
         }
     }
 }
@@ -80,7 +96,10 @@ impl CompletedNativeCommand {
                     context.set_renderer_output_predecessor(fence);
                     CommandOutputPlan::default()
                 }
-                None => CommandOutputPlan::error(-32000, error),
+                None => match self.unpublished_failure {
+                    Some(project) => project(conn, error),
+                    None => CommandOutputPlan::error(-32000, error),
+                },
             },
         }
     }
@@ -122,6 +141,7 @@ pub(crate) fn start_operation(
             command_id,
             pending,
             guard,
+            unpublished_failure: None,
         }),
         Err(error) => {
             NativeCommandStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))

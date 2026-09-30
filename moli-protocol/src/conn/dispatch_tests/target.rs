@@ -813,22 +813,9 @@ async fn devtools_command_executes_default_preload_add_and_remove_without_loaded
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_emulation_viewport_keeps_original_page_when_active_target_changes() {
-    let mut conn = CdpConnection::new();
-    let original_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>original viewport owner</title>")
-        .await
-        .expect("original page should load");
-    let replacement_page = conn
-        .load_page_via_runtime_async("data:text/html,<title>replacement active page</title>")
-        .await
-        .expect("replacement page should load");
-
+    let mut ctx = crate::testing::TestContext::new();
     let mut browser_context = BrowserContext::new("BID-emulation-viewport-owner".to_owned());
     browser_context.set_active_target_id("TID-emulation-viewport-original".to_owned());
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(original_page);
     browser_context.stage_background_target(
         "TID-emulation-viewport-replacement".to_owned(),
         None,
@@ -836,11 +823,27 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
         None,
         None,
     );
-    browser_context
-        .background_target_mut("TID-emulation-viewport-replacement")
-        .expect("replacement target")
-        .replace_loaded_page(Some(replacement_page));
-    conn.install_browser_context_fixture_for_test(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>original viewport owner</title>",
+        None,
+    )
+    .await;
+    ctx.conn
+        .select_page_target_for_connection_async("TID-emulation-viewport-replacement")
+        .await
+        .unwrap();
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement active page</title>",
+        None,
+    )
+    .await;
+    ctx.conn
+        .select_page_target_for_connection_async("TID-emulation-viewport-original")
+        .await
+        .unwrap();
+    ctx.take_all();
 
     let raw = serde_json::to_string(&json!({
         "id": 690,
@@ -853,7 +856,7 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
         }
     }))
     .unwrap();
-    let pending = match conn.start_command_dispatch(&raw) {
+    let pending = match ctx.conn.start_command_dispatch(&raw) {
         CdpCommandTaskStep::Pending(pending) => pending,
         CdpCommandTaskStep::Complete(outcome) => {
             panic!(
@@ -864,15 +867,18 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
     };
 
     assert!(
-        conn.select_page_target_for_connection_async("TID-emulation-viewport-replacement",)
+        ctx.conn
+            .select_page_target_for_connection_async("TID-emulation-viewport-replacement",)
             .await
             .expect("target activation should succeed")
             .is_some()
     );
-    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    let (messages, _) = ctx
+        .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(pending))
+        .await;
 
     assert_eq!(messages, vec![json!({ "id": 690, "result": {} })]);
-    let browser_context = conn.browser_context.as_ref().expect("browser context");
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
         browser_context.active_target_id(),
         Some("TID-emulation-viewport-replacement")

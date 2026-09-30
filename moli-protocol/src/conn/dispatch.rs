@@ -869,6 +869,9 @@ impl CdpConnection {
                 self, &cmd,
             )
             .map(|step| match step {
+                crate::domains::emulation::EmulationCommandTaskStep::Native(pending) => {
+                    self.pending_step(PendingCdpCommandDispatchKind::Native(*pending))
+                }
                 crate::domains::emulation::EmulationCommandTaskStep::Pending(pending) => {
                     self.pending_step(PendingCdpCommandDispatchKind::Emulation(pending))
                 }

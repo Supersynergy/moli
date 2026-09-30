@@ -287,6 +287,10 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
                     surfaceEvents.push(['focus', event.isTrusted, event.target === window]));
                 window.addEventListener('blur', event =>
                     surfaceEvents.push(['blur', event.isTrusted, event.target === window]));
+                globalThis.focusArrived = new Promise(resolve =>
+                    window.addEventListener('focus', () => resolve(), {once: true}));
+                globalThis.blurArrived = new Promise(resolve =>
+                    window.addEventListener('blur', () => resolve(), {once: true}));
                 [Object.hasOwn(document, 'hidden'), Object.hasOwn(document, 'visibilityState'),
                  Object.hasOwn(document, 'hasFocus')]"#,
         )
@@ -301,8 +305,10 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
         json!({"enabled": true}),
     )
     .await;
+    // The configuration acknowledgement does not promise a rendering update.
+    // Observe the queued native events through listeners installed beforehand.
     assert_eq!(
-        evaluate(&mut ctx, "surfaceEvents").await,
+        evaluate(&mut ctx, "focusArrived.then(() => surfaceEvents)").await,
         json!([["visibilitychange", true, true], ["focus", true, true]])
     );
     expect_session_command_result(
@@ -314,7 +320,7 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
     )
     .await;
     assert_eq!(
-        evaluate(&mut ctx, "surfaceEvents.slice(2)").await,
+        evaluate(&mut ctx, "blurArrived.then(() => surfaceEvents.slice(2))").await,
         json!([["visibilitychange", true, true], ["blur", true, true]])
     );
 }
@@ -883,5 +889,44 @@ async fn automation_overrides_combine_sessions_without_replacing_native_getters(
         )
         .await,
         json!([false, 2])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn published_configuration_survives_replacement_and_preserves_replay_policy() {
+    let mut ctx = setup().await;
+    ctx.take_all();
+    let raw = json!({"id": 88200, "sessionId": "SID-1",
+        "method": "Emulation.setHardwareConcurrencyOverride",
+        "params": {"hardwareConcurrency": 4}})
+    .to_string();
+    let pending = ctx.conn.try_start_pending_command_dispatch(&raw).unwrap();
+    assert_eq!(pending.kind_name(), "Native");
+    // Hold the adapter after the producer committed its terminal, then replace
+    // the document. Neither replay policy nor completion ownership may depend
+    // on polling that adapter before the navigation.
+    let completed = pending.wait().await;
+    ctx.process_async(json!({"id": 88201, "sessionId": "SID-1", "method": "Page.navigate",
+        "params": {"url": "data:text/html,<script>window.initialHardware=navigator.hardwareConcurrency</script>"}})).await;
+    let messages = ctx.take_all();
+    let replies = messages
+        .iter()
+        .filter(|message| message["id"] == 88200)
+        .collect::<Vec<_>>();
+    assert_eq!(replies.len(), 1, "{messages:?}");
+    assert_eq!(replies[0]["result"], json!({}));
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("published configuration must not restart");
+    };
+    let (late, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    assert!(
+        late.iter().all(|message| message["id"] != 88200),
+        "{late:?}"
+    );
+    assert_eq!(
+        evaluate(&mut ctx, "[initialHardware,navigator.hardwareConcurrency]").await,
+        json!([4, 4])
     );
 }

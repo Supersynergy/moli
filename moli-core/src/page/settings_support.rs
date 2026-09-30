@@ -228,12 +228,18 @@ impl Page {
     ) -> Result<PendingPageCommand> {
         let pending =
             self.start_page_command(RendererPageCommand::SetIdleOverride(idle_override))?;
+        self.record_admitted_idle_override(idle_override);
+        Ok(pending)
+    }
+
+    /// Records frame-host state after either a typed or frontend command has
+    /// been admitted. It belongs to this Page, not the target's replay policy.
+    pub fn record_admitted_idle_override(&mut self, idle_override: Option<EmulatedIdleOverride>) {
         // SetIdleOverride is synchronous browser-side state in Chromium. Make
         // it visible at command admission so a navigation from another CDP
         // session cannot observe an older protocol snapshot after the renderer
         // has already accepted the command.
         self.idle_override = idle_override;
-        Ok(pending)
     }
 
     pub fn finish_set_idle_override(&mut self, completion: CompletedPageCommand) -> Result<()> {

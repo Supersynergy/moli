@@ -23,6 +23,7 @@ use serde_json::json;
 
 mod device;
 mod media;
+mod native_configuration;
 mod page_session;
 mod params;
 #[cfg(test)]
@@ -84,6 +85,7 @@ enum PendingEmulationPageTarget {
 }
 
 pub(crate) enum EmulationCommandTaskStep {
+    Native(Box<crate::domains::native::PendingNativeCommand>),
     Pending(PendingEmulationCommandDispatch),
     Complete(CommandOutputPlan),
 }
@@ -273,6 +275,9 @@ fn start_focus_emulation_enabled_command(
         };
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
+    if let Some(step) = native_configuration::try_start_surface(conn, cmd) {
+        return step;
+    }
     let pending = match start_surface_override_page_commands(conn, cmd) {
         Ok(pending) => pending,
         Err(error) => {
@@ -418,6 +423,16 @@ fn start_navigator_override_page_command(
     let overrides = conn
         .navigation_load_inputs_for_owner(&owner_scope)
         .navigator_overrides;
+    if let Some(step) = native_configuration::try_start(
+        conn,
+        cmd,
+        native_configuration::unit(moli_core::RendererPageCommand::SetNavigatorOverrides(
+            overrides.clone(),
+        )),
+        PendingEmulationPageOperation::SetNavigatorOverrides,
+    ) {
+        return step;
+    }
     let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
@@ -649,6 +664,24 @@ fn start_update_idle_override_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    if let Some(step) = native_configuration::try_start(
+        conn,
+        cmd,
+        native_configuration::unit(moli_core::RendererPageCommand::SetIdleOverride(
+            idle_override,
+        )),
+        PendingEmulationPageOperation::SetIdleOverride,
+    ) {
+        if matches!(step, EmulationCommandTaskStep::Native(_)) {
+            // Preserve the Browser frame-host admission state while the
+            // Renderer publishes the terminal independently of its waiter.
+            conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
+                .expect("admitted idle command retains its Page until dispatch returns")
+                .record_admitted_idle_override(idle_override);
+        }
+        return step;
+    }
+
     let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
@@ -758,6 +791,9 @@ fn start_update_geolocation_override_command(
             "BrowserContextNotLoaded",
         ));
     }
+    if let Some(step) = native_configuration::try_start_surface(conn, cmd) {
+        return step;
+    }
     let pending = match start_surface_override_page_commands(conn, cmd) {
         Ok(pending) => pending,
         Err(error) => {
@@ -833,6 +869,19 @@ fn start_emulated_media_command(
         ));
     }
     let page_overrides: moli_core::page::EmulatedMediaOverrides = (&overrides).into();
+    if !emulation_command_is_context_wide(conn, cmd.session_id)
+        && let Some(step) = native_configuration::try_start(
+            conn,
+            cmd,
+            native_configuration::unit(moli_core::RendererPageCommand::SetEmulatedMedia(
+                page_overrides.clone(),
+            )),
+            PendingEmulationPageOperation::SetEmulatedMedia,
+        )
+    {
+        return step;
+    }
+
     let pending = if emulation_command_is_context_wide(conn, cmd.session_id) {
         match start_context_emulated_media_page_commands(conn, &page_overrides) {
             Ok(pending) => pending,
@@ -954,6 +1003,22 @@ fn start_device_metrics_override_command(
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
+    if crate::domains::native::frontend_attachment(conn, cmd).is_some() {
+        if let Err(error) = record_device_metrics(conn, &owner, &metrics) {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
+                error,
+            ));
+        }
+        return native_configuration::try_start(
+            conn,
+            cmd,
+            native_configuration::unit(moli_core::RendererPageCommand::SetViewportSurface(Some(
+                metrics.viewport_surface(),
+            ))),
+            PendingEmulationPageOperation::SetViewportSurface,
+        )
+        .expect("native configuration admission");
+    }
     match start_apply_device_metrics(conn, cmd.id, metrics, owner) {
         Ok(Some(pending)) => EmulationCommandTaskStep::Pending(pending),
         Ok(None) => EmulationCommandTaskStep::Complete(CommandOutputPlan::success()),
@@ -988,6 +1053,17 @@ fn start_clear_device_metrics_override_command(
     let viewport_surface = conn
         .navigation_load_inputs_for_owner(&owner_scope)
         .viewport_surface;
+    if let Some(step) = native_configuration::try_start(
+        conn,
+        cmd,
+        native_configuration::unit(moli_core::RendererPageCommand::SetViewportSurface(
+            viewport_surface,
+        )),
+        PendingEmulationPageOperation::SetViewportSurface,
+    ) {
+        return step;
+    }
+
     let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
@@ -1024,13 +1100,12 @@ fn start_devtools_set_viewport_command(
     start_apply_device_metrics(conn, command_id, metrics, owner_scope)
 }
 
-fn start_apply_device_metrics(
+fn record_device_metrics(
     conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    metrics: EmulatedDeviceMetrics,
-    owner_scope: CommandOwnerScope,
-) -> Result<Option<PendingEmulationCommandDispatch>, DevToolsError> {
-    if !conn.update_emulation_state_for_owner(&owner_scope, |state| {
+    owner_scope: &CommandOwnerScope,
+    metrics: &EmulatedDeviceMetrics,
+) -> Result<(), DevToolsError> {
+    if !conn.update_emulation_state_for_owner(owner_scope, |state| {
         if let Some(mut state) = state {
             state.set_emulated_device_metrics(Some(metrics.clone()));
         }
@@ -1040,6 +1115,16 @@ fn start_apply_device_metrics(
             "BrowserContextNotLoaded",
         ));
     }
+    Ok(())
+}
+
+fn start_apply_device_metrics(
+    conn: &mut CdpConnection,
+    command_id: Option<u64>,
+    metrics: EmulatedDeviceMetrics,
+    owner_scope: CommandOwnerScope,
+) -> Result<Option<PendingEmulationCommandDispatch>, DevToolsError> {
+    record_device_metrics(conn, &owner_scope, &metrics)?;
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
         .ok()

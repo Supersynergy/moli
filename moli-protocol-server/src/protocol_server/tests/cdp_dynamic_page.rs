@@ -395,6 +395,282 @@ async fn native_snapshot_reply_precedes_later_inspector_context_replay() {
     abort_test_cdp_server(server).await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn native_node_queries_publish_before_later_inspector_replay() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    send_cdp_command(&mut browser, 4, "Runtime.evaluate", session, json!({
+        "expression": "document.head.innerHTML = '<style>button {display: block}</style>'; document.body.innerHTML = '<button id=target style=\"color: red\">native query</button>'"
+    })).await;
+    let document = send_cdp_command(&mut browser, 5, "DOM.getDocument", session, json!({})).await;
+    let root = response_by_id(&document, 5)["result"]["root"]["nodeId"]
+        .as_u64()
+        .unwrap();
+    let node = send_cdp_command(
+        &mut browser,
+        6,
+        "DOM.querySelector",
+        session,
+        json!({"nodeId": root, "selector": "#target"}),
+    )
+    .await;
+    let node_id = response_by_id(&node, 6)["result"]["nodeId"]
+        .as_u64()
+        .unwrap();
+    let described = send_cdp_command(
+        &mut browser,
+        7,
+        "DOM.describeNode",
+        session,
+        json!({"nodeId": node_id}),
+    )
+    .await;
+    let backend_id = response_by_id(&described, 7)["result"]["node"]["backendNodeId"]
+        .as_u64()
+        .unwrap();
+    let queries = [
+        ("CSS.getComputedStyleForNode", json!({"nodeId": node_id})),
+        ("Accessibility.getPartialAXTree", json!({"nodeId": node_id})),
+        ("CSS.getComputedStyleForNode", json!({"nodeId": 2147483647})),
+        ("CSS.getInlineStylesForNode", json!({"nodeId": node_id})),
+        ("Accessibility.getRootAXNode", json!({})),
+        ("CSS.enable", json!({})),
+        ("DOM.getAttributes", json!({"nodeId": node_id})),
+        ("DOM.describeNode", json!({"nodeId": node_id})),
+        (
+            "DOM.querySelector",
+            json!({"nodeId": root, "selector": "#target"}),
+        ),
+        ("DOM.getOuterHTML", json!({"nodeId": node_id})),
+        (
+            "DOM.setAttributeValue",
+            json!({"nodeId": node_id, "name": "data-order", "value": "ready"}),
+        ),
+        ("DOM.focus", json!({"nodeId": node_id})),
+        ("DOM.scrollIntoViewIfNeeded", json!({"nodeId": node_id})),
+        ("DOM.setNodeStackTracesEnabled", json!({"enable": true})),
+        ("DOM.getNodeStackTraces", json!({"nodeId": node_id})),
+        (
+            "DOM.removeAttribute",
+            json!({"nodeId": node_id, "name": "data-order"}),
+        ),
+        ("DOM.disable", json!({})),
+        ("Page.getLayoutMetrics", json!({})),
+        ("Page.captureSnapshot", json!({})),
+        ("Page.setBypassCSP", json!({"enabled": true})),
+        ("Page.resetNavigationHistory", json!({})),
+        (
+            "DOM.resolveNode",
+            json!({"backendNodeId": backend_id, "objectGroup": "native-order"}),
+        ),
+        (
+            "DOMDebugger.setXHRBreakpoint",
+            json!({"url": "native-order"}),
+        ),
+        (
+            "DOMDebugger.removeXHRBreakpoint",
+            json!({"url": "native-order"}),
+        ),
+        (
+            "Autofill.trigger",
+            json!({"fieldId": 0, "card": {"number": "4111111111111111", "name": "Test", "expiryMonth": "12", "expiryYear": "2030", "cvc": "123"}}),
+        ),
+        (
+            "Page.createIsolatedWorld",
+            json!({"frameId": target.target_id, "worldName": "native-order"}),
+        ),
+        (
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({"source": "window.nativePreloadRan = true", "runImmediately": true}),
+        ),
+        ("Page.getResourceTree", json!({})),
+        (
+            "Emulation.setHardwareConcurrencyOverride",
+            json!({"hardwareConcurrency": 4}),
+        ),
+        (
+            "Emulation.setDataSaverOverride",
+            json!({"dataSaverEnabled": true}),
+        ),
+        ("Emulation.setAutomationOverride", json!({"enabled": true})),
+        (
+            "Emulation.setTouchEmulationEnabled",
+            json!({"enabled": true, "maxTouchPoints": 2}),
+        ),
+        ("Emulation.setEmulatedMedia", json!({"media": "print"})),
+        (
+            "Emulation.setFocusEmulationEnabled",
+            json!({"enabled": true}),
+        ),
+        (
+            "Emulation.setGeolocationOverride",
+            json!({"latitude": 40.0, "longitude": 116.0, "accuracy": 1.0}),
+        ),
+        ("Emulation.clearGeolocationOverride", json!({})),
+        (
+            "Emulation.setIdleOverride",
+            json!({"isUserActive": false, "isScreenUnlocked": false}),
+        ),
+        ("Emulation.clearIdleOverride", json!({})),
+        (
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": 900, "height": 650, "deviceScaleFactor": 1, "mobile": false}),
+        ),
+        ("Emulation.clearDeviceMetricsOverride", json!({})),
+    ];
+    let response_end = 10 + queries.len() as u64;
+    for (offset, (method, params)) in queries.into_iter().enumerate() {
+        send_cdp_command_without_wait(&mut browser, 10 + offset as u64, method, session, params)
+            .await;
+    }
+    send_cdp_command_without_wait(&mut browser, 140, "Runtime.enable", session, json!({})).await;
+    let mut replies = Vec::new();
+    let mut preload_identifier = None;
+    let mut resolved_object = None;
+    let mut saw_stylesheet = false;
+    let mut saw_context = false;
+    recv_until_match(&mut browser, |message| {
+        if message["sessionId"] != target.session_id {
+            return false;
+        }
+        if message["method"] == "CSS.styleSheetAdded" {
+            assert!(
+                !replies.contains(&15),
+                "CSS notification must precede its ready response"
+            );
+            saw_stylesheet = true;
+        }
+        if let Some(id) = message["id"].as_u64()
+            && (10..response_end).contains(&id)
+        {
+            assert!(!replies.contains(&id), "duplicate response: {message}");
+            if id == 12 {
+                assert_eq!(message["error"]["code"], -32000);
+            } else if id == 34 {
+                assert_eq!(message["error"]["code"], -32600);
+            } else {
+                assert!(message["error"].is_null(), "{message}");
+            }
+            match id {
+                10 => assert!(message["result"]["computedStyle"].as_array().is_some_and(
+                    |styles| {
+                        styles.iter().any(|style| {
+                            style["name"] == "color" && style["value"] == "rgb(255, 0, 0)"
+                        })
+                    }
+                )),
+                11 => assert!(message["result"]["nodes"].as_array().is_some_and(|nodes| {
+                    nodes.iter().any(|node| {
+                        node["role"]["value"] == "button" && node["name"]["value"] == "native query"
+                    })
+                })),
+                13 => assert!(message["result"]["inlineStyle"]["cssProperties"].is_array()),
+                14 => assert!(message["result"]["node"].is_object()),
+                15 => assert!(saw_stylesheet),
+                16 => assert!(
+                    message["result"]["attributes"]
+                        .as_array()
+                        .is_some_and(|attributes| attributes.contains(&json!("target")))
+                ),
+                17 => assert_eq!(message["result"]["node"]["nodeName"], "BUTTON"),
+                18 => assert_eq!(message["result"]["nodeId"], node_id),
+                19 => assert!(
+                    message["result"]["outerHTML"]
+                        .as_str()
+                        .is_some_and(|html| html.contains("native query"))
+                ),
+                27 => assert!(message["result"]["cssLayoutViewport"].is_object()),
+                28 => assert!(
+                    message["result"]["data"]
+                        .as_str()
+                        .is_some_and(|snapshot| snapshot.contains("MIME-Version: 1.0"))
+                ),
+                35 => assert!(message["result"]["executionContextId"].as_i64().is_some()),
+                36 => {
+                    preload_identifier =
+                        message["result"]["identifier"].as_str().map(str::to_owned);
+                }
+                37 => assert!(message["result"]["frameTree"]["resources"].is_array()),
+                31 => {
+                    resolved_object = message["result"]["object"]["objectId"]
+                        .as_str()
+                        .map(str::to_owned);
+                }
+                _ => {}
+            }
+            replies.push(id);
+        }
+        if message["method"] == "Runtime.executionContextCreated"
+            && message["params"]["context"]["auxData"]["isDefault"] == true
+        {
+            assert_eq!(
+                replies,
+                (10..response_end).collect::<Vec<_>>(),
+                "native lookup/response was overtaken by Inspector"
+            );
+            saw_context = true;
+        }
+        if message["id"] == 140 {
+            assert!(saw_context);
+            return true;
+        }
+        false
+    })
+    .await;
+    let state = send_cdp_command(&mut browser, 141, "Runtime.evaluate", session, json!({
+        "expression": "({preload: window.nativePreloadRan, focused: document.activeElement.id, attribute: document.querySelector('#target').getAttribute('data-order')})", "returnByValue": true
+    })).await;
+    assert_eq!(
+        response_by_id(&state, 141)["result"]["result"]["value"],
+        json!({"preload": true, "focused": "target", "attribute": null})
+    );
+    let object_id = resolved_object.expect("native resolveNode object");
+    let listeners = send_cdp_command(
+        &mut browser,
+        142,
+        "DOMDebugger.getEventListeners",
+        session,
+        json!({"objectId": object_id}),
+    )
+    .await;
+    assert!(response_by_id(&listeners, 142)["result"]["listeners"].is_array());
+    let released = send_cdp_command(
+        &mut browser,
+        143,
+        "Runtime.releaseObjectGroup",
+        session,
+        json!({"objectGroup": "native-order"}),
+    )
+    .await;
+    assert!(response_by_id(&released, 143)["error"].is_null());
+    let stale = send_cdp_command(
+        &mut browser,
+        144,
+        "Runtime.getProperties",
+        session,
+        json!({"objectId": object_id}),
+    )
+    .await;
+    assert_eq!(response_by_id(&stale, 144)["error"]["code"], -32000);
+    let removed = send_cdp_command(
+        &mut browser,
+        145,
+        "Page.removeScriptToEvaluateOnNewDocument",
+        session,
+        json!({"identifier": preload_identifier.unwrap()}),
+    )
+    .await;
+    assert!(response_by_id(&removed, 145)["error"].is_null());
+    browser.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
 async fn assert_pause_command_ordering(instrumentation: bool) {
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
         Router::new().route(
@@ -3657,4 +3933,10 @@ async fn cdp_ordering_autofill_waits_for_isolate_owner() {
 #[tokio::test(flavor = "current_thread")]
 async fn cdp_ordering_stylesheet_edit_waits_for_isolate_owner() {
     assert_native_isolate_handler_waits_for_resume("CSS.setStyleSheetText").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cdp_ordering_navigator_configuration_waits_for_isolate_owner() {
+    assert_native_isolate_handler_waits_for_resume("Emulation.setHardwareConcurrencyOverride")
+        .await;
 }
