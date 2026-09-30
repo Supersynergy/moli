@@ -21,6 +21,7 @@ pub(crate) enum ConverterKind {
     EnforceRangeUnsignedLong,
     UnsignedLongLong,
     EnforceRangeUnsignedLongLong,
+    Float,
     Double,
     UnrestrictedDouble,
     Boolean,
@@ -50,6 +51,7 @@ impl ConverterKind {
             "enforce_range_unsigned_long" => Ok(Self::EnforceRangeUnsignedLong),
             "unsigned_long_long" => Ok(Self::UnsignedLongLong),
             "enforce_range_unsigned_long_long" => Ok(Self::EnforceRangeUnsignedLongLong),
+            "float" => Ok(Self::Float),
             "double" => Ok(Self::Double),
             "unrestricted_double" => Ok(Self::UnrestrictedDouble),
             "boolean" => Ok(Self::Boolean),
@@ -82,6 +84,7 @@ impl ConverterKind {
             Self::EnforceRangeUnsignedLongLong => {
                 quote!(::moli_webidl::EnforceRangeUnsignedLongLong)
             }
+            Self::Float => quote!(::moli_webidl::Float),
             Self::Double => quote!(::moli_webidl::Double),
             Self::UnrestrictedDouble => quote!(::moli_webidl::UnrestrictedDouble),
             Self::Boolean => quote!(::moli_webidl::Boolean),
@@ -119,6 +122,7 @@ impl ConverterKind {
             Self::EnforceRangeUnsignedLongLong => {
                 quote!(::moli_webidl::EnforceRangeUnsignedLongLong(#expr))
             }
+            Self::Float => quote!(::moli_webidl::Float(#expr)),
             Self::Double => quote!(::moli_webidl::Double(#expr)),
             Self::UnrestrictedDouble => quote!(::moli_webidl::UnrestrictedDouble(#expr)),
             Self::Boolean => quote!(::moli_webidl::Boolean(#expr)),
@@ -143,6 +147,7 @@ impl ConverterKind {
             | Self::EnforceRangeUnsignedLong
             | Self::UnsignedLongLong
             | Self::EnforceRangeUnsignedLongLong
+            | Self::Float
             | Self::Double
             | Self::UnrestrictedDouble
             | Self::Boolean
@@ -239,6 +244,9 @@ fn infer_converter_kind(ty: &Type) -> Option<ConverterKind> {
     }
     if is_type_ident(ty, "u64") {
         return Some(ConverterKind::UnsignedLongLong);
+    }
+    if is_type_ident(ty, "f32") {
+        return Some(ConverterKind::Float);
     }
     if is_type_ident(ty, "f64") {
         return Some(ConverterKind::UnrestrictedDouble);
