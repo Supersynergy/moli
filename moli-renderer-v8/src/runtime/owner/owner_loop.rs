@@ -1056,9 +1056,10 @@ impl RendererOwnerHandle {
                 mut first_dispatch,
                 capture_policy,
             } => {
-                // Crossing into the Page owner's concrete command dispatcher
-                // is the Main receiver's first-dispatch boundary.
-                let _post_dispatch_wake = first_dispatch.release_for_dispatch();
+                // First dispatch ends at backend entry. Producer publication
+                // orders frontend output; Browser polling of an internal reply
+                // must never keep this renderer's Main receiver blocked.
+                first_dispatch.release();
                 self.run_live_page_command_turn(token, command, capture_policy)
                     .await
             }

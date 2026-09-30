@@ -391,6 +391,7 @@ impl Page {
             RendererPageReply::AppManifestLoadPreparation(_) => "an app manifest load preparation",
             RendererPageReply::ChildFrameTreeSnapshots(_) => "child frame tree snapshots",
             RendererPageReply::OptionalString(_) => "an optional string reply",
+            RendererPageReply::SerializedDocument { .. } => "a serialized document reply",
             RendererPageReply::OptionalU64(_) => "an optional u64 reply",
             RendererPageReply::Usize(_) => "a usize reply",
             RendererPageReply::SetDocumentContentResult(_) => "a set-document-content result reply",
@@ -402,6 +403,8 @@ impl Page {
             RendererPageReply::CaptureScreenshot(_) => "a capture screenshot reply",
             RendererPageReply::CaptureScreencastFrame(_) => "a capture screencast frame reply",
             RendererPageReply::Unit => "a unit reply",
+            RendererPageReply::NativeCommandReady(_) => "an unsettled native frontend reply",
+            RendererPageReply::NativeCommandPublished => "a published native frontend reply",
         }
     }
 

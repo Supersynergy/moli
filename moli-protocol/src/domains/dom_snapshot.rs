@@ -13,6 +13,46 @@ use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::DomSnapshotAction;
 use crate::domains::command_output::CommandOutputPlan;
 
+pub(crate) fn try_start_native_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> Option<super::native::NativeCommandStep> {
+    use moli_core::RendererNativeProtocolResponse as Response;
+    use moli_core::{RendererPageCommand, RendererPageReply};
+    if cmd.parse_action::<DomSnapshotAction>() != Some(DomSnapshotAction::CaptureSnapshot) {
+        return None;
+    }
+    let params = match cmd.get_params::<CaptureSnapshotParams>() {
+        Ok(params) => params.unwrap_or_default(),
+        Err(_) => {
+            return Some(super::native::NativeCommandStep::Complete(
+                CommandOutputPlan::error(-32602, "InvalidParams"),
+            ));
+        }
+    };
+    let frame_id = top_frame_id_for_session(conn, cmd.session_id).unwrap_or_default();
+    Some(super::native::start(
+        conn,
+        cmd,
+        RendererPageCommand::DomSnapshotCapture {
+            top_frame_id: frame_id,
+            options: params.into(),
+        },
+        |reply| match reply {
+            Ok(RendererPageReply::OptionalDomSnapshotCapturePayload(Some(payload))) => {
+                Response::success(payload.into_protocol_payload())
+            }
+            Ok(RendererPageReply::OptionalDomSnapshotCapturePayload(None)) => {
+                Response::error(-32000, "NoDocumentLoaded")
+            }
+            Ok(_) => unreachable!("DOM snapshot backend returned a different result"),
+            Err(error) => {
+                Response::error(-32000, format!("Could not capture DOM snapshot: {error}"))
+            }
+        },
+    ))
+}
+
 pub(crate) struct PendingDomSnapshotCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
@@ -603,7 +643,7 @@ mod tests {
             .conn
             .try_start_pending_command_dispatch(&raw)
             .expect("DOMSnapshot.captureSnapshot should await renderer live DOM capture");
-        assert_eq!(pending.kind_name(), "DOMSnapshot");
+        assert_eq!(pending.kind_name(), "Native");
 
         let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
         assert_eq!(
@@ -1025,6 +1065,7 @@ mod tests {
             )
             .await
             .expect("background page should load");
+        let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(&page);
 
         let mut background = PageTargetHost::with_url(
             "TID-background".to_owned(),
@@ -1038,6 +1079,14 @@ mod tests {
         bc.attach_active_session("SID-active".to_owned());
         bc.insert_page_target_host(background);
         ctx.conn.install_browser_context_fixture_for_test(bc);
+        // This fixture installs a live Page without the production attachment
+        // transaction. Bind its output stream before native replies publish.
+        let page_owner = ctx
+            .conn
+            .target_page_residence_identity_for_session(Some("SID-background"))
+            .expect("background fixture has a Page owner");
+        ctx.conn
+            .bind_renderer_page_output_owner(renderer_page, page_owner);
 
         ctx.process_async(json!({
             "id": 101,
@@ -1084,6 +1133,7 @@ mod tests {
             )
             .await
             .expect("inactive page should load");
+        let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(&page);
 
         let mut active = BrowserContext::new("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
@@ -1097,6 +1147,12 @@ mod tests {
         inactive.replace_loaded_page(Some(page));
         ctx.conn
             .push_inactive_browser_context_fixture_for_test(inactive);
+        let page_owner = ctx
+            .conn
+            .target_page_residence_identity_for_session(Some("SID-inactive"))
+            .expect("inactive fixture has a Page owner");
+        ctx.conn
+            .bind_renderer_page_output_owner(renderer_page, page_owner);
 
         ctx.process_async(json!({
             "id": 111,

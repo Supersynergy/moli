@@ -1,5 +1,7 @@
 //! Typed metadata and payloads crossing the renderer DevTools ingress boundary.
 
+mod nested;
+
 use crate::runtime::{
     RendererInspectorPageCommand, RendererPageCommand, RendererRuntimeInspectorResponseSender,
 };
@@ -288,8 +290,8 @@ impl RendererDevToolsIoCommandEnvelope {
 /// Unlike `RendererInspectorCommandEnvelope`, this envelope is deliberately
 /// agent-neutral: protocol commands that ultimately need the renderer Page,
 /// DOM, CSS, Accessibility, or V8 agents all enter the same Main receiver.
-/// The boxed payload keeps that admission boundary structural without adding
-/// a second allowlist of `RendererPageCommand` variants.
+/// The payload retains the backend entry requirement for both internal queries
+/// and frontend native operations; wrapping a command cannot make it reentrant.
 #[doc(hidden)]
 pub struct RendererDevToolsMainCommandEnvelope {
     ticket: RendererInspectorIngressTicket,
@@ -331,15 +333,7 @@ impl RendererDevToolsMainCommandEnvelope {
     }
 
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
-        match self.payload.as_ref() {
-            RendererPageCommand::Inspector(envelope)
-                if envelope.can_dispatch_at_nested_inspector_session_boundary() =>
-            {
-                RendererDevToolsMainNestedDispatch::InspectorSession
-            }
-            RendererPageCommand::Inspector(_) => RendererDevToolsMainNestedDispatch::OwnerOnly,
-            _ => RendererDevToolsMainNestedDispatch::PageAgent,
-        }
+        self.payload.nested_dispatch()
     }
 
     pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {

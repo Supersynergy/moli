@@ -179,10 +179,10 @@ pub use renderer_command_support::{
 use crate::renderer::RendererPageTestingHandle;
 
 pub use crate::renderer::{
-    RendererDocumentFrontendNodeIdsResolution, RendererDocumentNodeAttributesResolution,
-    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
-    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
-    RendererDocumentQuerySelectorResolution,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentFrontendNodeIdsResolution,
+    RendererDocumentNodeAttributesResolution, RendererDocumentNodePropertyResolution,
+    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
+    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomBidiNodeBindingResolution,
     RendererDomBidiNodeSharedIdResolution, RendererDomFrontendNodeBindingResolution,
     RendererDomNodeCreationStackFrame, RendererDomNodeCreationStackTrace,

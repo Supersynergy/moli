@@ -394,22 +394,21 @@ async def run_core_group(state: SmokeState) -> None:
         )
 
     await context.route("**/popup-concurrent-*", fulfill_concurrent_popup)
+    first_popup_url = f"{fixture}/popup-concurrent-first"
+    second_popup_url = f"{fixture}/popup-concurrent-second"
     first_popup = None
     second_popup = None
     try:
-        async with page.expect_popup(timeout=5_000) as first_popup_info:
-            await page.evaluate(
-                "(url) => window.open(url, '_blank')",
-                f"{fixture}/popup-concurrent-first",
-            )
-        first_popup = await first_popup_info.value
+        # Playwright reports a popup once its initial document starts loading.
+        # The held response prevents that event, so use route arrival to prove
+        # the first request is pending while the second popup completes.
+        await page.evaluate("(url) => window.open(url, '_blank')", first_popup_url)
         await asyncio.wait_for(first_popup_route_seen.wait(), timeout=5)
 
-        async with page.expect_popup(timeout=5_000) as second_popup_info:
-            await page.evaluate(
-                "(url) => window.open(url, '_blank')",
-                f"{fixture}/popup-concurrent-second",
-            )
+        async with page.expect_popup(
+            predicate=lambda popup: popup.url == second_popup_url, timeout=5_000
+        ) as second_popup_info:
+            await page.evaluate("(url) => window.open(url, '_blank')", second_popup_url)
         second_popup = await second_popup_info.value
         await second_popup.wait_for_load_state("load", timeout=10_000)
         assert_equal(
@@ -418,7 +417,11 @@ async def run_core_group(state: SmokeState) -> None:
             "second popup initial document should load while first popup route is held",
         )
 
-        first_popup_route_release.set()
+        async with page.expect_popup(
+            predicate=lambda popup: popup.url == first_popup_url, timeout=5_000
+        ) as first_popup_info:
+            first_popup_route_release.set()
+        first_popup = await first_popup_info.value
         await first_popup.wait_for_load_state("load", timeout=10_000)
         assert_equal(
             await first_popup.text_content("main", timeout=5_000),
@@ -426,6 +429,7 @@ async def run_core_group(state: SmokeState) -> None:
             "first popup initial document should load after held route resumes",
         )
     finally:
+        first_popup_route_release.set()
         for popup in (first_popup, second_popup):
             if popup is not None:
                 await popup.close()

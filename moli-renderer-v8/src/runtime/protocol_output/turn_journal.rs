@@ -202,6 +202,23 @@ impl RendererTurnOutputJournal {
         Some(cursor)
     }
 
+    /// Admit a prefix whose cursor was already allocated by
+    /// `take_pending_for_resolution`. Resolution updates Inspector mirrors
+    /// outside the journal lock and must not allocate a second cursor.
+    pub(crate) fn publish_resolved_prefix(&self, publication: RendererOutputPublication) -> bool {
+        let mut state = self.state.lock();
+        assert_eq!(publication.cursor().stream(), state.stream);
+        if state.closed {
+            return false;
+        }
+        if let Some(transport) = state.transport.as_ref() {
+            publication.publish_to(transport).is_ok()
+        } else {
+            state.deferred_publications.push(publication);
+            true
+        }
+    }
+
     /// Atomically appends and publishes one already-resolved producer batch.
     ///
     /// A DevTools session response is a terminal renderer observation, not a

@@ -17,11 +17,46 @@ impl RendererOutputRecord {
                 observation_transport_charge_bytes(observation)
             }
             RendererOutputItem::OwnerAction(action) => owner_action_transport_charge_bytes(action),
+            RendererOutputItem::NativeTerminal(terminal) => native_terminal_charge_bytes(terminal),
         };
         std::mem::size_of::<Self>()
             .saturating_add(payload)
             .max(RECORD_FLOOR_BYTES)
     }
+}
+
+fn native_terminal_charge_bytes(terminal: &super::RendererNativeCommandTerminal) -> usize {
+    let mut charge = terminal.session.wire_session_id().map_or(0, string_charge);
+    let response = &terminal.reply;
+    charge = charge.saturating_add(match &response.result {
+        Ok(value) => json_charge(value),
+        Err(error) => string_charge(&error.message),
+    });
+    for update in &response.state_updates {
+        charge = charge.saturating_add(match update {
+            super::RendererNativeProtocolStateUpdate::RemoteObjects {
+                result,
+                object_group,
+            } => {
+                json_charge(result).saturating_add(object_group.as_deref().map_or(0, string_charge))
+            }
+            super::RendererNativeProtocolStateUpdate::DomRemoteObjectNode { object_id, node } => {
+                string_charge(object_id).saturating_add(json_charge(node))
+            }
+        });
+    }
+    for notification in &response.notifications {
+        charge = charge.saturating_add(match notification {
+            super::RendererNativeProtocolNotification::Json(value) => json_charge(value),
+            super::RendererNativeProtocolNotification::DomSetChildNodes { nodes, .. } => {
+                nodes.iter().fold(
+                    std::mem::size_of::<super::RendererNativeProtocolNotification>(),
+                    |charge, node| charge.saturating_add(json_charge(node)),
+                )
+            }
+        });
+    }
+    charge
 }
 
 fn string_charge(value: &str) -> usize {

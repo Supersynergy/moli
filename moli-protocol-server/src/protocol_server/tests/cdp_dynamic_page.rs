@@ -3,6 +3,50 @@ use super::*;
 type TestCdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+async fn navigate_fixture_document(
+    browser: &mut TestCdpSocket,
+    navigation_id: u64,
+    target: &TestCdpTargetSession,
+    url: &str,
+) {
+    let session = Some(target.session_id.as_str());
+    for (id, method, params) in [
+        (90, "Page.enable", json!({})),
+        (
+            91,
+            "Page.setLifecycleEventsEnabled",
+            json!({"enabled": true}),
+        ),
+    ] {
+        let enabled = send_cdp_command(browser, id, method, session, params).await;
+        assert_eq!(response_by_id(&enabled, id)["result"], json!({}));
+    }
+    let navigation = send_cdp_command(
+        browser,
+        navigation_id,
+        "Page.navigate",
+        session,
+        json!({"url": url}),
+    )
+    .await;
+    assert!(response_by_id(&navigation, navigation_id)["error"].is_null());
+    let loader = response_by_id(&navigation, navigation_id)["result"]["loaderId"]
+        .as_str()
+        .expect("fixture navigation loader");
+    // Navigation can acknowledge before parsing finishes and invalidates an
+    // earlier DOM root. Wait for this session and loader's parsed document;
+    // an initial-document lifecycle replay must not satisfy the fixture gate.
+    let parsed = |message: &serde_json::Value| {
+        message["sessionId"] == target.session_id
+            && message["method"] == "Page.lifecycleEvent"
+            && message["params"]["loaderId"] == loader
+            && message["params"]["name"] == "DOMContentLoaded"
+    };
+    if !navigation.iter().any(parsed) {
+        recv_until_match(browser, parsed).await;
+    }
+}
+
 async fn create_dynamic_target(browser: &mut TestCdpSocket, command_id: u64) -> String {
     send_cdp_command(
         browser,
@@ -154,6 +198,422 @@ async fn enable_runtime_and_expect_default_context(
         "{label} did not report the existing default context before Runtime.enable replied: {messages:#?}"
     );
     messages
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipelined_frame_tree_replies_precede_runtime_context_replay() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let browser_context_id = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &browser_context_id).await;
+    let session_id = Some(target.session_id.as_str());
+    let warmup = send_cdp_command(
+        &mut browser,
+        4,
+        "Runtime.evaluate",
+        session_id,
+        json!({ "expression": "globalThis.frameTreeReplayMarker = 42" }),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&warmup, 4)["result"]["result"]["value"],
+        json!(42)
+    );
+
+    // These are real, asynchronous renderer snapshots. Pipeline them with
+    // Runtime.enable as clients do during initial page attachment, without
+    // waiting for a frame-tree response before sending the next command.
+    for round in 0..20_u64 {
+        let base = 100 + round * 20;
+        let disabled =
+            send_cdp_command(&mut browser, base, "Runtime.disable", session_id, json!({})).await;
+        assert_eq!(response_by_id(&disabled, base)["result"], json!({}));
+        for id in base + 1..=base + 8 {
+            send_cdp_command_without_wait(
+                &mut browser,
+                id,
+                "Page.getFrameTree",
+                session_id,
+                json!({}),
+            )
+            .await;
+        }
+        send_cdp_command_without_wait(
+            &mut browser,
+            base + 9,
+            "Runtime.enable",
+            session_id,
+            json!({}),
+        )
+        .await;
+        // Startup also requests browser-owned target metadata. Its handler
+        // may await renderer work while these asynchronous replies are still
+        // pending, so receipt must release the Main handoff before decoding.
+        send_cdp_command_without_wait(
+            &mut browser,
+            base + 10,
+            "Target.getTargetInfo",
+            None,
+            json!({ "targetId": target.target_id }),
+        )
+        .await;
+        let mut tree_responses = std::collections::HashSet::new();
+        let mut saw_enable_response = false;
+        let mut saw_target_info = false;
+        let mut context_id = None;
+        let messages = recv_until_match(&mut browser, |message| {
+            if message["id"] == json!(base + 10) {
+                assert_eq!(message["result"]["targetInfo"]["targetId"], json!(target.target_id));
+                saw_target_info = true;
+                return tree_responses.len() == 8 && saw_enable_response && context_id.is_some();
+            }
+            if message["sessionId"].as_str() != session_id {
+                return false;
+            }
+            if let Some(id) = message["id"].as_u64()
+                && (base + 1..=base + 8).contains(&id)
+            {
+                assert_eq!(
+                    message["result"]["frameTree"]["frame"]["id"],
+                    json!(target.target_id)
+                );
+                tree_responses.insert(id);
+            }
+            if message["id"] == json!(base + 9) {
+                assert_eq!(message["result"], json!({}));
+                assert!(
+                    context_id.is_some(),
+                    "Runtime.enable replied before replaying the default context in round {round}"
+                );
+                saw_enable_response = true;
+            }
+            if message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
+            {
+                assert_eq!(
+                    tree_responses.len(),
+                    8,
+                    "Runtime context replay overtook a frame-tree response in round {round}: {tree_responses:?}"
+                );
+                context_id = message["params"]["context"]["id"].as_i64();
+            }
+            tree_responses.len() == 8 && saw_enable_response && saw_target_info && context_id.is_some()
+        })
+        .await;
+        assert!(
+            context_id.is_some(),
+            "missing default context: {messages:#?}"
+        );
+        let evaluation = send_cdp_command(
+            &mut browser,
+            base + 11,
+            "Runtime.evaluate",
+            session_id,
+            json!({ "expression": "frameTreeReplayMarker", "contextId": context_id }),
+        )
+        .await;
+        assert_eq!(
+            response_by_id(&evaluation, base + 11)["result"]["result"]["value"],
+            json!(42)
+        );
+    }
+    browser.close(None).await.expect("close browser websocket");
+    abort_test_cdp_server(server).await;
+}
+
+// The ordering contracts below mirror the local Chromium probes documented in
+// docs/inner/cdp-command-ordering.md. All fixtures are owned by this test: a
+// fresh about:blank target, inline JavaScript, and protocol completion gates.
+#[tokio::test(flavor = "current_thread")]
+async fn native_snapshot_reply_precedes_later_inspector_context_replay() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    send_cdp_command(
+        &mut browser,
+        4,
+        "Runtime.evaluate",
+        session,
+        json!({"expression": "document.body.innerHTML = '<p>native snapshot</p>'"}),
+    )
+    .await;
+    for id in 10..14 {
+        send_cdp_command_without_wait(
+            &mut browser,
+            id,
+            "DOMSnapshot.captureSnapshot",
+            session,
+            json!({"computedStyles": ["display"]}),
+        )
+        .await;
+    }
+    send_cdp_command_without_wait(&mut browser, 20, "Runtime.enable", session, json!({})).await;
+    let mut replies = std::collections::HashSet::new();
+    let mut saw_context = false;
+    recv_until_match(&mut browser, |message| {
+        if message["sessionId"] != target.session_id {
+            return false;
+        }
+        if let Some(id) = message["id"].as_u64()
+            && (10..14).contains(&id)
+        {
+            assert!(message["error"].is_null(), "{message}");
+            assert!(
+                !message["result"]["documents"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(replies.insert(id), "duplicate native reply: {message}");
+        }
+        if message["method"] == "Runtime.executionContextCreated"
+            && message["params"]["context"]["auxData"]["isDefault"] == true
+        {
+            assert_eq!(
+                replies.len(),
+                4,
+                "Inspector event overtook a completed native snapshot"
+            );
+            saw_context = true;
+        }
+        if message["id"] == 20 {
+            assert!(saw_context);
+            return true;
+        }
+        false
+    })
+    .await;
+    browser.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+async fn assert_pause_command_ordering(instrumentation: bool) {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().route(
+            "/page",
+            get(|| async { axum::response::Html("<!doctype html><body>pause fixture</body>") }),
+        ),
+        "native-pause-snapshot",
+    );
+    let fixture_url = format!("http://{fixture_addr}/page");
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .expect("connect browser websocket");
+    let context = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    navigate_fixture_document(&mut browser, 9, &target, &fixture_url).await;
+
+    let dom = send_cdp_command(&mut browser, 5, "DOM.getDocument", session, json!({})).await;
+    let root = response_by_id(&dom, 5)["result"]["root"]["nodeId"]
+        .as_u64()
+        .unwrap();
+    let nodes = send_cdp_command(
+        &mut browser,
+        6,
+        "DOM.querySelector",
+        session,
+        json!({"nodeId": root, "selector": "body"}),
+    )
+    .await;
+    let body = response_by_id(&nodes, 6)["result"]["nodeId"]
+        .as_u64()
+        .unwrap();
+    let enabled = send_cdp_command(&mut browser, 10, "Debugger.enable", session, json!({})).await;
+    assert!(response_by_id(&enabled, 10).get("error").is_none());
+    if instrumentation {
+        let breakpoint = send_cdp_command(
+            &mut browser,
+            11,
+            "Debugger.setInstrumentationBreakpoint",
+            session,
+            json!({ "instrumentation": "beforeScriptExecution" }),
+        )
+        .await;
+        assert!(response_by_id(&breakpoint, 11).get("error").is_none());
+    }
+    send_cdp_command_without_wait(
+        &mut browser,
+        12,
+        "Runtime.evaluate",
+        session,
+        json!({
+            "expression": if instrumentation { "21 * 2" } else { "(() => { history.replaceState(null, '', '#paused'); document.body.setAttribute('data-paused', 'ready'); debugger; return 42; })()" },
+            "returnByValue": true
+        }),
+    )
+    .await;
+    let paused = recv_until_match(&mut browser, |message| {
+        message["sessionId"] == json!(target.session_id)
+            && message["method"] == json!("Debugger.paused")
+    })
+    .await;
+    assert!(paused.iter().all(|message| message["id"] != json!(12)));
+    if instrumentation {
+        assert_eq!(
+            paused.last().unwrap()["params"]["reason"],
+            json!("instrumentation")
+        );
+    }
+    send_cdp_command_without_wait(&mut browser, 13, "Page.getFrameTree", session, json!({})).await;
+    // IO completion proves the paused renderer has processed a later command;
+    // it is a gate, not a timed assumption about a missing Main response.
+    let gate = if instrumentation {
+        send_cdp_command(
+            &mut browser,
+            14,
+            "Performance.getMetrics",
+            session,
+            json!({}),
+        )
+        .await
+    } else {
+        recv_until_id(&mut browser, 13).await
+    };
+    assert!(gate.iter().all(|message| message["id"] != json!(12)));
+    if instrumentation {
+        assert!(response_by_id(&gate, 14).get("error").is_none());
+        assert!(
+            gate.iter().all(|message| message["id"] != json!(13)),
+            "instrumentation pause must not pump Main: {gate:#?}"
+        );
+    } else {
+        assert_eq!(
+            response_by_id(&gate, 13)["result"]["frameTree"]["frame"]["id"],
+            json!(target.target_id)
+        );
+    }
+    if !instrumentation {
+        // Native wrapping must preserve the isolate-entry constraint of both
+        // an opaque node-resolution chain and a world-creation handler.
+        send_cdp_command_without_wait(
+            &mut browser,
+            16,
+            "DOM.setAttributeValue",
+            session,
+            json!({"nodeId": body, "name": "data-after-pause", "value": "ready"}),
+        )
+        .await;
+        send_cdp_command_without_wait(
+            &mut browser,
+            17,
+            "DOM.resolveNode",
+            session,
+            json!({"nodeId": body}),
+        )
+        .await;
+        send_cdp_command_without_wait(
+            &mut browser,
+            18,
+            "Page.createIsolatedWorld",
+            session,
+            json!({"frameId": target.target_id, "worldName": "after-pause"}),
+        )
+        .await;
+        let io = send_cdp_command(
+            &mut browser,
+            19,
+            "Performance.getMetrics",
+            session,
+            json!({}),
+        )
+        .await;
+        assert!(
+            io.iter()
+                .all(|message| message["id"] != 16 && message["id"] != 17 && message["id"] != 18),
+            "owner-only native handlers must wait for the enclosing V8 entry: {io:?}"
+        );
+    }
+    send_cdp_command_without_wait(&mut browser, 15, "Debugger.resume", session, json!({})).await;
+    let mut completed = std::collections::HashSet::new();
+    let resumed = recv_until_match(&mut browser, |message| {
+        if message["sessionId"] == json!(target.session_id)
+            && let Some(id) = message["id"].as_u64()
+        {
+            assert!(
+                completed.insert(id),
+                "duplicate terminal response: {message}"
+            );
+        }
+        completed.contains(&12)
+            && completed.contains(&15)
+            && (!instrumentation || completed.contains(&13))
+            && (instrumentation
+                || (completed.contains(&16) && completed.contains(&17) && completed.contains(&18)))
+    })
+    .await;
+    assert_eq!(
+        response_by_id(&resumed, 12)["result"]["result"]["value"],
+        json!(42)
+    );
+    assert!(response_by_id(&resumed, 15).get("error").is_none());
+    if instrumentation {
+        assert_eq!(
+            response_by_id(&resumed, 13)["result"]["frameTree"]["frame"]["id"],
+            json!(target.target_id)
+        );
+    }
+    if !instrumentation {
+        let edited = resumed
+            .iter()
+            .position(|message| {
+                message["method"] == "DOM.attributeModified"
+                    && message["params"]["name"] == "data-after-pause"
+            })
+            .expect("resumed mutation notification");
+        let edit_response = resumed
+            .iter()
+            .position(|message| message["id"] == 16)
+            .unwrap();
+        assert!(
+            edited < edit_response,
+            "mutation notification precedes response: {resumed:?}"
+        );
+        assert!(response_by_id(&resumed, 17)["result"]["object"]["objectId"].is_string());
+        assert!(response_by_id(&resumed, 18)["result"]["executionContextId"].is_i64());
+        let prefix = paused.iter().chain(gate.iter()).collect::<Vec<_>>();
+        let event = prefix
+            .iter()
+            .position(|message| {
+                message["method"] == "DOM.attributeModified"
+                    && message["params"]["name"] == "data-paused"
+            })
+            .expect("nested mutation must publish before resume");
+        let response = prefix
+            .iter()
+            .position(|message| message["id"] == 13)
+            .unwrap();
+        assert!(
+            event < response,
+            "native terminal must flush the suspended turn DOM prefix: {prefix:?}"
+        );
+        assert_eq!(
+            response_by_id(&gate, 13)["result"]["frameTree"]["frame"]["url"],
+            format!("{fixture_url}#paused")
+        );
+    }
+    browser.close(None).await.expect("close browser websocket");
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cdp_ordering_normal_pause_allows_nested_main() {
+    assert_pause_command_ordering(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cdp_ordering_instrumentation_pause_only_allows_io() {
+    assert_pause_command_ordering(true).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

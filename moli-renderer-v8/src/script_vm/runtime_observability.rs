@@ -228,6 +228,20 @@ impl ScriptVm {
             .devtools_target()
             .pause_ref()
             .finish_owner_turn();
+        let isolate = self.renderer_document_isolate.clone();
+        isolate.with_renderer_document_isolate_and_inspector_mut(|_, _| {
+            self.settle_renderer_output_prefix()
+        })
+    }
+
+    /// Resolve a nested handler's prefix while its enclosing V8 turn remains
+    /// paused. The caller must already be on the entered isolate (ordinary
+    /// settlement enters above; nested Main runs within V8's pause loop).
+    /// Do not borrow the suspended isolate holder or clear its resume/step
+    /// transition while reading session state.
+    pub(crate) fn settle_renderer_output_prefix(
+        &mut self,
+    ) -> Option<crate::runtime::RendererOutputPublication> {
         self.sync_runtime_observable_source_events()
             .expect("runtime observable source synchronization should be infallible");
         let environment = self.renderer_page_script_environment.as_ref()?;
@@ -248,12 +262,17 @@ impl ScriptVm {
                 self.page_isolated_world_contexts
                     .record_inspector_context_state(&raw_messages, self.root_frame_id.as_deref());
                 if batch.agent_token == current_agent_token {
-                    batch.v8_state_update =
-                        self.inspector_v8_session_state(batch.session.wire_session_id());
+                    batch.v8_state_update = self
+                        .page_inspector
+                        .v8_session_state(batch.session.wire_session_id());
                 }
             });
         }
         Some(pending.finish())
+    }
+
+    pub(crate) fn append_live_command_output_prefix(&self) {
+        self._context_host.borrow().append_live_turn_output_prefix();
     }
 
     pub(crate) fn append_renderer_output_records(
@@ -280,6 +299,16 @@ impl ScriptVm {
 
     pub(crate) fn has_renderer_output_journal(&self) -> bool {
         self.renderer_page_script_environment.is_some()
+    }
+
+    pub(crate) fn renderer_command_output_journal(
+        &self,
+    ) -> crate::runtime::RendererTurnOutputJournal {
+        self.renderer_page_script_environment
+            .as_ref()
+            .expect("a live native frontend command requires a Page output journal")
+            .output_journal()
+            .clone()
     }
 
     #[cfg(test)]

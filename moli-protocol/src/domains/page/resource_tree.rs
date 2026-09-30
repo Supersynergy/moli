@@ -33,7 +33,7 @@ pub(super) fn get_frame_tree_command_output_plan(
     }))
 }
 
-pub(super) fn frame_tree_payload(
+fn frame_tree_payload(
     target_id: String,
     target_loader_id: String,
     target_url: String,
@@ -470,6 +470,11 @@ pub(super) fn start_devtools_get_frame_tree_command(
             }
         };
     let target_unreachable_url = network_error_page_unreachable_url(conn, &owner, &target_url);
+    let target_url = if pending_initial_document_url(conn, &owner).is_some() {
+        ":".to_owned()
+    } else {
+        target_url
+    };
     let target_loader_id = frame_tree_loader_id_for_current_owner(conn, &owner);
     if conn.ensure_document_accessible_for_owner(&owner).is_err() {
         return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
@@ -655,6 +660,80 @@ fn attach_resources_to_frame(
     for child_frame in child_frames {
         attach_resources_to_frame(child_frame, resources, false);
     }
+}
+
+/// Blink initializes a DocumentLoader with an empty URL, while the initial
+/// DOM document exposes about:blank. InspectorPageAgent serializes that empty
+/// loader URL as ":". Moli materializes both using the initial document URL,
+/// so retain the lifecycle distinction until the target's first navigation
+/// replaces it. An ordinary ready about:blank target needs no replacement.
+/// This is independent of debugger suspension and response delivery mode.
+fn pending_initial_document_url(conn: &CdpConnection, owner: &CommandOwnerScope) -> Option<String> {
+    conn.runtime_session_owner_initial_empty_document_has_replacement_url_for_owner(owner)
+        .then(|| conn.runtime_session_owner_record_initial_empty_document_url_for_owner(owner))
+        .flatten()
+}
+
+/// Resolve both children and resource records before publishing the terminal.
+/// Browser identity is fixed at admission; URL, MIME and resource content come
+/// from the renderer's immutable state for the completed command turn.
+pub(super) fn prepare_native_tree(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+    resources: bool,
+) -> Result<moli_core::RendererNativeOperation, CommandOutputPlan> {
+    use moli_core::{
+        RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
+        RendererPageCommand as Command, RendererPageReply as Reply,
+    };
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let (target_id, target_url, security_origin, secure_context_type) = conn
+        .target_session_owner_frame_tree_identity_for_owner(&owner)
+        .ok_or_else(|| CommandOutputPlan::error(-31998, "TargetNotLoaded"))?;
+    let unreachable_url = network_error_page_unreachable_url(conn, &owner, &target_url);
+    let loader_id = frame_tree_loader_id_for_current_owner(conn, &owner);
+    let initial_document_url = pending_initial_document_url(conn, &owner);
+    Ok(Operation::with_page_state(
+        Command::ChildFrameTreeSnapshot,
+        move |reply, state| match reply {
+            Ok(Reply::ChildFrameTreeSnapshots(children)) => {
+                // A preceding renderer command may already have changed the
+                // document URL before its Browser adapter applies the state.
+                // Only project the initial loader while that document is current.
+                let document_url =
+                    if initial_document_url.as_deref() == Some(state.final_url.as_str()) {
+                        ":".to_owned()
+                    } else {
+                        state.final_url.to_string()
+                    };
+                let tree = frame_tree_payload(
+                    target_id,
+                    loader_id,
+                    document_url,
+                    unreachable_url,
+                    security_origin,
+                    secure_context_type,
+                    moli_web_mime::effective_response_mime_essence(&state.headers, None)
+                        .unwrap_or_else(default_document_mime_type),
+                    children,
+                );
+                let tree = if resources {
+                    attach_frame_resources(
+                        tree,
+                        state.script_execution.subresource_network_records(),
+                    )
+                } else {
+                    tree
+                };
+                Response::success(json!({"frameTree": tree}))
+            }
+            Err(error) => Response::error(
+                -32000,
+                format!("Failed to snapshot child frame tree: {error}"),
+            ),
+            _ => unreachable!("Page frame tree reply"),
+        },
+    ))
 }
 
 #[cfg(test)]

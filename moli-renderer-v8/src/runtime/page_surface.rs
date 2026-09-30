@@ -1,5 +1,5 @@
+use super::protocol_output::{RendererCommandResponseAuthority, RendererCommandResponseLease};
 use super::*;
-use crate::devtools::ingress::main::RendererInspectorMainFirstDispatchGuard;
 use crate::native_bridge::{
     PendingRuntimeObservableConsoleSourceEvent, RuntimeObservableContextToken,
 };
@@ -922,6 +922,7 @@ impl RendererRuntimeCommandOutput {
     }
 
     #[doc(hidden)]
+    #[doc(hidden)]
     pub fn bind_renderer_agent_attachment(&mut self, id: RendererAgentAttachmentId) {
         match self.renderer_agent_attachment_id {
             Some(current) => assert_eq!(
@@ -1521,6 +1522,9 @@ pub struct RendererCommandTurnCompletion {
 }
 
 impl RendererCommandTurnCompletion {
+    pub fn native_response_was_published(&self) -> bool {
+        matches!(self.reply, RendererPageReply::NativeCommandPublished)
+    }
     pub fn reply(&self) -> &RendererPageReply {
         &self.reply
     }
@@ -1580,13 +1584,6 @@ impl RendererCommandTurnCompletion {
 pub struct RendererCommandTurnOutput {
     completion: RendererCommandTurnCompletion,
     renderer_output_predecessor: Option<RendererOutputFence>,
-    // A nested synchronous DevTools agent call must keep its per-session Main
-    // receiver slot until the protocol actor owns the settled result. This is
-    // deliberately distinct from a post-response continuation: dropping the
-    // result at the protocol handoff is enough to preserve receiver order,
-    // while waiting for the frontend response would deadlock multi-stage
-    // commands that need to enter the same receiver again.
-    protocol_handoff: Option<Box<RendererInspectorMainFirstDispatchGuard>>,
 }
 
 impl RendererCommandTurnOutput {
@@ -1595,7 +1592,7 @@ impl RendererCommandTurnOutput {
         page_state: Arc<RendererPageState>,
         runtime_command_output: RendererRuntimeCommandOutput,
         post_response_continuation: Option<RendererPageCommandPostResponseContinuation>,
-        renderer_output_predecessor: Option<RendererOutputFence>,
+        mut renderer_output_predecessor: Option<RendererOutputFence>,
     ) -> Result<Self> {
         let reply = match reply {
             RendererPageReply::RuntimeInspectorProtocolMessages(reply_messages) => {
@@ -1611,6 +1608,18 @@ impl RendererCommandTurnOutput {
                 reply
             }
         };
+        let reply = match reply {
+            RendererPageReply::NativeCommandReady(ready) => {
+                // Settlement has already published this turn's earlier facts.
+                // Publish the ready reply here, before a later Main command
+                // can append its output, regardless of adapter waiter polling.
+                ready
+                    .publish(&page_state)?
+                    .merge_into_same_stream_tail(&mut renderer_output_predecessor);
+                RendererPageReply::NativeCommandPublished
+            }
+            reply => reply,
+        };
         Ok(Self {
             completion: RendererCommandTurnCompletion {
                 reply,
@@ -1618,23 +1627,9 @@ impl RendererCommandTurnOutput {
                 post_response_continuation,
             },
             renderer_output_predecessor,
-            protocol_handoff: None,
         })
     }
 
-    pub(crate) fn hold_until_protocol_handoff(
-        mut self,
-        handoff: RendererInspectorMainFirstDispatchGuard,
-    ) -> Self {
-        debug_assert!(
-            self.protocol_handoff.is_none(),
-            "a renderer command turn may hold only one protocol handoff"
-        );
-        self.protocol_handoff = Some(Box::new(handoff));
-        self
-    }
-
-    #[doc(hidden)]
     pub fn bind_renderer_agent_attachment(&mut self, id: RendererAgentAttachmentId) {
         if let RendererPageReply::RuntimeInspectorProtocolMessages(output) =
             &mut self.completion.reply
@@ -1676,7 +1671,6 @@ impl RendererCommandTurnOutput {
         let Self {
             completion,
             renderer_output_predecessor,
-            protocol_handoff: _,
         } = self;
         (completion, renderer_output_predecessor)
     }
@@ -3044,40 +3038,19 @@ impl RendererRuntimeCommandOutputRecorder {
     }
 }
 
-struct RendererRuntimeInspectorResponseChannelState {
-    next_lease_id: u64,
-    active_lease_id: Option<u64>,
-    open: bool,
-    tx: Option<oneshot::Sender<RendererRuntimeInspectorAsyncCompletion>>,
-    session_response_settlement_tx:
-        Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>,
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererRuntimeInspectorResponseChannel {
     delivery: moli_page_types::RendererInspectorResponseDelivery,
-    state: Arc<Mutex<RendererRuntimeInspectorResponseChannelState>>,
+    authority: RendererCommandResponseAuthority<
+        RendererRuntimeInspectorAsyncCompletion,
+        RendererRuntimeInspectorSessionResponseSettlement,
+    >,
 }
 
-impl std::fmt::Debug for RendererRuntimeInspectorResponseChannel {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
-        formatter
-            .debug_struct("RendererRuntimeInspectorResponseChannel")
-            .field("delivery", &self.delivery)
-            .field("active_lease_id", &state.active_lease_id)
-            .field("has_receiver", &state.tx.is_some())
-            .finish()
-    }
-}
-
-impl PartialEq for RendererRuntimeInspectorResponseChannel {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.state, &other.state)
-    }
-}
-
-impl Eq for RendererRuntimeInspectorResponseChannel {}
+type RendererRuntimeInspectorResponseLease = RendererCommandResponseLease<
+    RendererRuntimeInspectorAsyncCompletion,
+    RendererRuntimeInspectorSessionResponseSettlement,
+>;
 
 impl RendererRuntimeInspectorResponseChannel {
     pub fn new() -> (
@@ -3088,13 +3061,7 @@ impl RendererRuntimeInspectorResponseChannel {
         (
             Self {
                 delivery: moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
-                state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
-                    next_lease_id: 1,
-                    active_lease_id: None,
-                    open: true,
-                    tx: Some(tx),
-                    session_response_settlement_tx: None,
-                })),
+                authority: RendererCommandResponseAuthority::adapter(tx),
             },
             rx,
         )
@@ -3114,13 +3081,7 @@ impl RendererRuntimeInspectorResponseChannel {
             moli_page_types::RendererInspectorResponseDelivery::SessionSink => (
                 Self {
                     delivery,
-                    state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
-                        next_lease_id: 1,
-                        active_lease_id: None,
-                        open: true,
-                        tx: None,
-                        session_response_settlement_tx: None,
-                    })),
+                    authority: RendererCommandResponseAuthority::session(),
                 },
                 None,
             ),
@@ -3141,19 +3102,7 @@ impl RendererRuntimeInspectorResponseChannel {
         call_id: i32,
         attachment_id: Option<RendererAgentAttachmentId>,
     ) -> Option<RendererRuntimeInspectorResponseSender> {
-        let lease_id = {
-            let mut state = self.state.lock();
-            if !state.open {
-                return None;
-            }
-            let lease_id = state.next_lease_id;
-            state.next_lease_id = lease_id
-                .checked_add(1)
-                .expect("renderer response lease id exhausted");
-            state.active_lease_id = Some(lease_id);
-            lease_id
-        };
-        let lease = RendererRuntimeInspectorResponseLease::new(lease_id, self.clone());
+        let lease = self.authority.activate()?;
         let destination = match self.delivery {
             moli_page_types::RendererInspectorResponseDelivery::AdapterReply => {
                 RendererRuntimeInspectorResponseDestination::AdapterReply(lease)
@@ -3176,133 +3125,11 @@ impl RendererRuntimeInspectorResponseChannel {
     /// publishing while the protocol session still owns terminal completion.
     /// A response that already claimed the channel wins and returns `false`.
     pub fn try_revoke_active_lease(&self) -> bool {
-        let mut state = self.state.lock();
-        if !state.open || state.active_lease_id.is_none() {
-            return false;
-        }
-        state.active_lease_id = None;
-        true
+        self.authority.try_revoke_active_lease()
     }
 
     pub fn cancel(&self) {
-        let mut state = self.state.lock();
-        state.open = false;
-        state.active_lease_id = None;
-        state.tx.take();
-        state.session_response_settlement_tx.take();
-    }
-
-    fn send(
-        &self,
-        lease_id: u64,
-        completion: RendererRuntimeInspectorAsyncCompletion,
-    ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
-        let tx = {
-            let mut state = self.state.lock();
-            if state.active_lease_id != Some(lease_id) {
-                return Err(completion);
-            }
-            state.open = false;
-            state.active_lease_id = None;
-            state.tx.take()
-        };
-        let Some(tx) = tx else {
-            return Err(completion);
-        };
-        tx.send(completion)
-    }
-
-    fn take_session_response_settlement_receiver(
-        &self,
-        lease_id: u64,
-    ) -> Option<oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>> {
-        let mut state = self.state.lock();
-        if !state.open
-            || state.active_lease_id != Some(lease_id)
-            || state.session_response_settlement_tx.is_some()
-        {
-            return None;
-        }
-        let (tx, rx) = oneshot::channel();
-        state.session_response_settlement_tx = Some(tx);
-        Some(rx)
-    }
-
-    fn cancel_lease(&self, lease_id: u64) -> bool {
-        let mut state = self.state.lock();
-        if !state.open || state.active_lease_id != Some(lease_id) {
-            return false;
-        }
-        state.open = false;
-        state.active_lease_id = None;
-        state.tx.take();
-        state.session_response_settlement_tx.take();
-        true
-    }
-
-    fn claim_session_lease(
-        &self,
-        lease_id: u64,
-    ) -> Result<Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>, ()>
-    {
-        let mut state = self.state.lock();
-        if !state.open || state.active_lease_id != Some(lease_id) {
-            return Err(());
-        }
-        state.open = false;
-        state.active_lease_id = None;
-        Ok(state.session_response_settlement_tx.take())
-    }
-}
-
-#[derive(Debug)]
-struct RendererRuntimeInspectorResponseLeaseLifetime {
-    lease_id: u64,
-    channel: RendererRuntimeInspectorResponseChannel,
-}
-
-impl Drop for RendererRuntimeInspectorResponseLeaseLifetime {
-    fn drop(&mut self) {
-        self.channel.cancel_lease(self.lease_id);
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RendererRuntimeInspectorResponseLease {
-    lifetime: Arc<RendererRuntimeInspectorResponseLeaseLifetime>,
-}
-
-impl RendererRuntimeInspectorResponseLease {
-    fn new(lease_id: u64, channel: RendererRuntimeInspectorResponseChannel) -> Self {
-        Self {
-            lifetime: Arc::new(RendererRuntimeInspectorResponseLeaseLifetime { lease_id, channel }),
-        }
-    }
-
-    fn send_adapter_reply(
-        self,
-        completion: RendererRuntimeInspectorAsyncCompletion,
-    ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
-        self.lifetime
-            .channel
-            .send(self.lifetime.lease_id, completion)
-    }
-
-    fn take_session_response_settlement_receiver(
-        &self,
-    ) -> Option<oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>> {
-        self.lifetime
-            .channel
-            .take_session_response_settlement_receiver(self.lifetime.lease_id)
-    }
-
-    fn claim_session(
-        &self,
-    ) -> Result<Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>, ()>
-    {
-        self.lifetime
-            .channel
-            .claim_session_lease(self.lifetime.lease_id)
+        self.authority.cancel();
     }
 }
 
@@ -3484,24 +3311,11 @@ impl std::fmt::Debug for RendererRuntimeInspectorResponseSender {
 
 impl RendererRuntimeInspectorResponseSender {
     pub fn new(call_id: i32, tx: oneshot::Sender<RendererRuntimeInspectorAsyncCompletion>) -> Self {
-        let channel = RendererRuntimeInspectorResponseChannel {
+        RendererRuntimeInspectorResponseChannel {
             delivery: moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
-            state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
-                next_lease_id: 2,
-                active_lease_id: Some(1),
-                open: true,
-                tx: Some(tx),
-                session_response_settlement_tx: None,
-            })),
-        };
-        Self {
-            call_id,
-            attachment_id: None,
-            destination: RendererRuntimeInspectorResponseDestination::AdapterReply(
-                RendererRuntimeInspectorResponseLease::new(1, channel),
-            ),
-            publication_boundary: RendererRuntimeInspectorResponsePublicationBoundary::Immediate,
+            authority: RendererCommandResponseAuthority::adapter(tx),
         }
+        .activate_sender(call_id, None)
     }
 
     pub fn call_id(&self) -> i32 {
@@ -4822,6 +4636,7 @@ pub(crate) enum RendererInspectorPageCommand {
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
+    Native(Box<RendererNativeCommand>),
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,
@@ -5194,6 +5009,7 @@ pub enum RendererPageCommand {
         options: RendererPageDumpOptions,
     },
     SerializeHtml,
+    SerializeDocument,
     LayoutMetrics,
     PublishLayout,
     CaptureScreenshot(RendererCaptureScreenshotRequest),
@@ -5677,12 +5493,25 @@ impl RendererPageCommand {
     }
 
     pub fn bind_inspector_attachment(&mut self, attachment: RendererAgentAttachmentId) {
+        if let Self::Native(command) = self {
+            command
+                .operation
+                .command
+                .bind_inspector_attachment(attachment);
+            return;
+        }
         if let Self::Inspector(envelope) = self {
             envelope.bind_attachment(attachment);
         }
     }
 
     pub(crate) fn interruptible_by_javascript_dialog(&self) -> bool {
+        if let Self::Native(command) = self {
+            return command
+                .operation
+                .command
+                .interruptible_by_javascript_dialog();
+        }
         #[cfg(test)]
         if matches!(self, Self::TakeDocumentLifecycleEvents) {
             return true;
@@ -5700,6 +5529,7 @@ impl RendererPageCommand {
 
     pub(crate) fn cdp_nav_timing_label(&self) -> Option<&'static str> {
         match self {
+            Self::Native(command) => command.operation.command.cdp_nav_timing_label(),
             Self::Inspector(envelope) => envelope.cdp_nav_timing_label(),
             Self::DocumentStorageKeySnapshot => Some("DocumentStorageKeySnapshot"),
             Self::CreateIsolatedWorldRuntimeActivity { .. } => {
@@ -5794,6 +5624,7 @@ impl RendererPageCommand {
             Self::OuterHtmlForBackendNodeId { .. } => Some("OuterHtmlForBackendNodeId"),
             Self::RenderPageDump { .. } => Some("RenderPageDump"),
             Self::SerializeHtml => Some("SerializeHtml"),
+            Self::SerializeDocument => Some("SerializeDocument"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::PublishLayout => Some("PublishLayout"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
@@ -6119,6 +5950,8 @@ pub enum RendererCaptureScreencastFrameReply {
 }
 
 pub enum RendererPageReply {
+    NativeCommandReady(Box<RendererNativeCommandReadyResponse>),
+    NativeCommandPublished,
     ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),
     ElementClickDispatch(Result<RendererInputDispatchOutcome, RendererElementClickError>),
     RuntimeEvaluationResult(RendererRuntimeEvaluationResult),
@@ -6188,6 +6021,10 @@ pub enum RendererPageReply {
     Bool(bool),
     OptionalBool(Option<bool>),
     OptionalString(Option<String>),
+    SerializedDocument {
+        url: String,
+        html: String,
+    },
     OptionalU64(Option<u64>),
     Usize(usize),
     CookieFacadeSnapshot(Box<RendererPageCookieFacadeSnapshotReply>),
@@ -6363,6 +6200,7 @@ impl RendererPageReply {
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
                 Some(outcome)
             }
+            Self::NativeCommandReady(ready) => ready.input_dispatch_outcome(),
             _ => None,
         }
     }
@@ -6374,6 +6212,7 @@ impl RendererPageReply {
             Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
                 Some(outcome)
             }
+            Self::NativeCommandReady(ready) => ready.input_dispatch_outcome_mut(),
             _ => None,
         }
     }

@@ -2586,6 +2586,290 @@ __lm_snapshot_revocable_array.revoke();
         .expect("unsupported globals snapshot test page should close");
 }
 #[tokio::test(flavor = "multi_thread")]
+async fn native_terminals_publish_before_waiters_are_polled() {
+    use super::{RendererNativeCommand, RendererNativeOperation, RendererNativeProtocolResponse};
+    use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId};
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/native-terminals").unwrap(),
+        "<!doctype html><title>Native terminals</title>",
+    )
+    .await;
+    output_rx.drain();
+    let attachment = RendererAgentAttachmentId::allocate();
+    let mut pending = Vec::new();
+    let mut guards = Vec::new();
+    for command_id in [100, 101, 102] {
+        let (command, guard) = RendererNativeCommand::new(
+            moli_page_types::FrontendCommandId::new(command_id),
+            DevToolsSessionKey::Attached("session-a".to_owned()),
+            attachment,
+            RendererNativeOperation::new(RendererPageCommand::ChildFrameTreeSnapshot, |reply| {
+                let RendererPageReply::ChildFrameTreeSnapshots(children) = reply.unwrap() else {
+                    panic!("child frame tree snapshot reply");
+                };
+                RendererNativeProtocolResponse::success(serde_json::json!({
+                    "childCount": children.len(),
+                }))
+            }),
+        );
+        if command_id == 100 {
+            // Cancellation precedes admission, so no scheduling race can
+            // decide whether this request may publish a terminal.
+            drop(guard);
+        } else {
+            guards.push(guard);
+        }
+        pending.push((
+            command_id,
+            page.enqueue_protocol_command_in_inspector_session(
+                RendererPageCommand::Native(Box::new(command)),
+                Some("session-a".to_owned()),
+            )
+            .expect("enqueue native terminal"),
+        ));
+    }
+    let later = page
+        .enqueue_protocol_command_in_inspector_session(
+            RendererPageCommand::EvaluateExpression {
+                expression: "42".to_owned(),
+                await_promise: false,
+            },
+            Some("session-a".to_owned()),
+        )
+        .expect("enqueue concrete same-session gate");
+    // Intentionally poll the last command before either native waiter. A
+    // receipt/decode handoff would deadlock here. The timeout only diagnoses
+    // a blocked gate; no ordering assertion depends on an elapsed interval.
+    let later = tokio::time::timeout(std::time::Duration::from_secs(3), later.wait())
+        .await
+        .expect("published terminals must not retain the Main lane")
+        .expect("later evaluation completes");
+    assert_eq!(
+        renderer_json_value(later.into_reply_and_state().0),
+        Some(serde_json::json!(42))
+    );
+    let terminals = output_rx
+        .drain()
+        .into_iter()
+        .flat_map(|publication| {
+            let cursor = publication.cursor();
+            publication
+                .into_records()
+                .into_iter()
+                .filter_map(move |record| match record.into_parts().1 {
+                    RendererOutputItem::NativeTerminal(terminal) => Some((cursor, terminal)),
+                    _ => None,
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        terminals
+            .iter()
+            .map(|(_, reply)| reply.command_id.get())
+            .collect::<Vec<_>>(),
+        [101, 102]
+    );
+    for ((cursor, terminal), guard) in terminals.iter().zip(guards) {
+        assert_eq!(terminal.attachment_id, attachment);
+        assert_eq!(terminal.session.wire_session_id(), Some("session-a"));
+        assert_eq!(
+            terminal.reply.result,
+            Ok(serde_json::json!({ "childCount": 0 })),
+        );
+        // Even if an adapter loses its value channel, a committed publication
+        // wins over cancellation and suppresses a second terminal error.
+        assert_eq!(
+            guard
+                .cancel_or_published()
+                .await
+                .expect("publication already committed")
+                .cursor(),
+            *cursor
+        );
+    }
+    // Decode in reverse order, with a scheduler yield between receives. It
+    // cannot change the producer order already observed on the journal.
+    while let Some((command_id, pending)) = pending.pop() {
+        tokio::task::yield_now().await;
+        if command_id == 100 {
+            let Err(error) = pending.wait().await else {
+                panic!("a canceled native response must not publish");
+            };
+            assert!(error.to_string().contains("native response was canceled"));
+            continue;
+        }
+        let reply = pending
+            .wait()
+            .await
+            .expect("receive native completion")
+            .into_reply_and_state()
+            .0;
+        assert!(matches!(reply, RendererPageReply::NativeCommandPublished));
+    }
+    page.close_async().await.expect("close page");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn projected_native_success_and_error_publish_without_adapter_receipt() {
+    use super::{RendererNativeCommand, RendererNativeOperation, RendererNativeProtocolResponse};
+    use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/native-projection").unwrap(),
+        "<!doctype html><title>Native projection</title>",
+    )
+    .await;
+    output_rx.drain();
+    let attachment = RendererAgentAttachmentId::allocate();
+    let mut waiters = Vec::new();
+    let mut guards = Vec::new();
+    for id in [1, 2] {
+        let (command, guard) = RendererNativeCommand::new(
+            FrontendCommandId::new(id),
+            DevToolsSessionKey::Attached("native".to_owned()),
+            attachment,
+            RendererNativeOperation::new(
+                RendererPageCommand::ComputedStylePropertiesForBackendNodeId {
+                    backend_node_id: u32::MAX,
+                },
+                move |reply| {
+                    assert!(matches!(
+                        reply.unwrap(),
+                        RendererPageReply::ComputedStyleProperties(None)
+                    ));
+                    if id == 1 {
+                        RendererNativeProtocolResponse::success(serde_json::json!({"found": false}))
+                    } else {
+                        RendererNativeProtocolResponse::error(
+                            -32000,
+                            "Could not find node with given id",
+                        )
+                    }
+                },
+            ),
+        );
+        guards.push(guard);
+        waiters.push(
+            page.enqueue_protocol_command_in_inspector_session(
+                RendererPageCommand::Native(Box::new(command)),
+                Some("native".to_owned()),
+            )
+            .unwrap(),
+        );
+    }
+    let gate = page
+        .enqueue_protocol_command_in_inspector_session(
+            RendererPageCommand::EvaluateExpression {
+                expression: "42".to_owned(),
+                await_promise: false,
+            },
+            Some("native".to_owned()),
+        )
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), gate.wait())
+        .await
+        .expect("native publication cannot wait for adapter receipt")
+        .unwrap();
+    let terminals = output_rx
+        .drain()
+        .into_iter()
+        .flat_map(|publication| publication.into_records())
+        .filter_map(|record| match record.into_parts().1 {
+            RendererOutputItem::NativeTerminal(terminal) => Some(terminal),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        terminals
+            .iter()
+            .map(|terminal| terminal.command_id.get())
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    let first = &terminals[0].reply;
+    assert_eq!(
+        first.result.as_ref().unwrap(),
+        &serde_json::json!({"found": false})
+    );
+    let second = &terminals[1].reply;
+    assert_eq!(second.result.as_ref().unwrap_err().code, -32000);
+    for guard in guards {
+        assert!(guard.cancel_or_published().await.is_some());
+    }
+    for waiter in waiters.into_iter().rev() {
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            waiter.wait().await.unwrap().into_reply_and_state().0,
+            RendererPageReply::NativeCommandPublished
+        ));
+    }
+    page.close_async().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unpolled_internal_reply_does_not_block_later_main_dispatch() {
+    let runtime = JsRuntime::initialize();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/main-reply-handoff").expect("page url"),
+        "<!doctype html><title>Main reply handoff</title>",
+    )
+    .await;
+
+    let snapshot = page
+        .enqueue_protocol_command_in_inspector_session(
+            RendererPageCommand::ChildFrameTreeSnapshot,
+            Some("session-a".to_owned()),
+        )
+        .expect("enqueue snapshot without polling its reply receiver");
+    let later = page
+        .enqueue_protocol_command_in_inspector_session(
+            RendererPageCommand::EvaluateExpression {
+                expression: "globalThis.handoffMarker = 42".to_owned(),
+                await_promise: false,
+            },
+            Some("session-a".to_owned()),
+        )
+        .expect("enqueue later command in the same session");
+
+    // Complete the later command without polling the earlier typed reply.
+    // The timeout diagnoses a receiver gate; it is not an ordering assertion.
+    let (later_reply, _) = tokio::time::timeout(std::time::Duration::from_secs(5), later.wait())
+        .await
+        .expect("internal reply polling must not gate Main dispatch")
+        .expect("later command")
+        .into_reply_and_state();
+    assert_eq!(
+        renderer_json_value(later_reply),
+        Some(serde_json::json!(42))
+    );
+    let snapshot = snapshot
+        .wait()
+        .await
+        .expect("receive retained snapshot reply");
+    let (snapshot_reply, _) = snapshot.into_reply_and_state();
+    assert!(matches!(
+        snapshot_reply,
+        RendererPageReply::ChildFrameTreeSnapshots(_)
+    ));
+    page.close_async().await.expect("close test page");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn protocol_turn_keeps_page_facts_current_and_marks_globals_snapshot_dirty() {
     let runtime = JsRuntime::initialize();
     let loader =

@@ -301,10 +301,6 @@ pub(crate) struct RendererInspectorIoFirstDispatchGuard {
     first_dispatch_tx: Option<RendererInspectorIoFirstDispatchSender>,
 }
 
-pub(crate) struct RendererInspectorIoPostDispatchWakeGuard {
-    ingress: Option<RendererInspectorIoIngress>,
-}
-
 impl Drop for RendererInspectorIoFirstDispatchGuard {
     fn drop(&mut self) {
         let has_ready = self.finish_task(RendererRuntimeInspectorIoCommandClaim::Canceled(
@@ -317,21 +313,13 @@ impl Drop for RendererInspectorIoFirstDispatchGuard {
 }
 
 impl RendererInspectorIoFirstDispatchGuard {
+    /// Release IO admission at backend entry. Wakes post owner work, queue a
+    /// V8 interrupt, or signal the pause loop; they do not dispatch inline.
+    /// The next IO command must not wait for this command's response.
     pub(crate) fn release(&mut self) {
         let has_ready = self.finish_task(RendererRuntimeInspectorIoCommandClaim::Dispatched);
         if has_ready {
             self.ingress.notify_execution_opportunities();
-        }
-    }
-
-    /// Releases the receiver slot and publishes first-dispatch immediately
-    /// before entering V8, but keeps the next execution wake behind the return
-    /// from this dispatch. V8 may enter a nested debugger loop before the call
-    /// returns, so the command's ingress lifecycle must already be settled.
-    pub(crate) fn release_for_dispatch(&mut self) -> RendererInspectorIoPostDispatchWakeGuard {
-        let has_ready = self.finish_task(RendererRuntimeInspectorIoCommandClaim::Dispatched);
-        RendererInspectorIoPostDispatchWakeGuard {
-            ingress: has_ready.then(|| self.ingress.clone()),
         }
     }
 
@@ -359,14 +347,6 @@ impl RendererInspectorIoFirstDispatchGuard {
             let _ = first_dispatch_tx.send(claim);
         }
         has_ready
-    }
-}
-
-impl Drop for RendererInspectorIoPostDispatchWakeGuard {
-    fn drop(&mut self) {
-        if let Some(ingress) = self.ingress.take() {
-            ingress.notify_execution_opportunities();
-        }
     }
 }
 

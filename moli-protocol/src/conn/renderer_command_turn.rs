@@ -2,7 +2,9 @@ use moli_core::page::{
     CompletedPageCommand, RendererCommandTurnCompletion, RendererCommandTurnOutput,
 };
 
-use super::{CdpConnection, CommandDispatchContext, TargetPageResidenceIdentity};
+use super::{
+    CdpConnection, CommandDispatchContext, CommandOwnerScope, TargetPageResidenceIdentity,
+};
 
 impl CdpConnection {
     /// Settles a renderer command turn against the Page residence that admitted it.
@@ -14,7 +16,6 @@ impl CdpConnection {
     /// into the replacement Page.
     pub(crate) fn settle_page_command_turn_for_owner(
         &mut self,
-        session_id: Option<&str>,
         owner: &TargetPageResidenceIdentity,
         completion: CompletedPageCommand,
     ) -> RendererCommandTurnOutput {
@@ -22,7 +23,11 @@ impl CdpConnection {
             return completion.into_output();
         }
 
-        if let Ok(page) = self.loaded_page_mut_for_interruptible_protocol_access(session_id) {
+        // The attachment check and the cache lookup must address the same
+        // frozen target. Resolving a missing session through the active Page
+        // here would install this result into a newly activated sibling.
+        let scope = CommandOwnerScope::for_page_residence(owner);
+        if let Ok(page) = self.loaded_page_mut_for_interruptible_protocol_access_for_owner(&scope) {
             return page.finish_page_command_turn(completion);
         }
 

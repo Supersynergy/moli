@@ -1892,14 +1892,6 @@ impl CdpConnection {
     /// boundary may use this access path. Ordinary protocol commands must use
     /// [`Self::loaded_page_mut_for_protocol_access`] so they wait for the
     /// replacement attachment instead of entering the old renderer.
-    pub(crate) fn loaded_page_mut_for_interruptible_protocol_access(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Result<&mut Page, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.loaded_page_mut_for_interruptible_protocol_access_for_owner(&owner)
-    }
-
     pub(crate) fn loaded_page_mut_for_interruptible_protocol_access_for_owner(
         &mut self,
         owner: &CommandOwnerScope,

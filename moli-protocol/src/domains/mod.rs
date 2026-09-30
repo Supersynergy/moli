@@ -22,6 +22,7 @@ pub mod inspector;
 pub mod io;
 pub mod log;
 pub(crate) mod log_output_state;
+pub(crate) mod native;
 pub mod network;
 pub(crate) mod observable_output;
 pub mod page;

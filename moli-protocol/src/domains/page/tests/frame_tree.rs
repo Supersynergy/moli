@@ -1,5 +1,144 @@
 use super::*;
 
+async fn assert_initial_document_frame_tree_waits_for_navigation(popup: bool) {
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    load_bc_with_target(&mut ctx, "BID-INITIAL-TREE", "TID-OPENER", "about:blank");
+    ctx.install_navigation_fixture_for_session_owner("about:blank", None)
+        .await;
+    ctx.process_async(json!({
+        "id": 2000,
+        "method": "Target.setAutoAttach",
+        "params": { "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true }
+    }))
+    .await;
+    ctx.take_all();
+    let url = "data:text/html,<title>initial-tree-committed</title>";
+    let create = if popup {
+        json!({
+            "id": 2001,
+            "method": "Runtime.evaluate",
+            "params": { "expression": format!("void window.open({})", json!(url)) }
+        })
+    } else {
+        json!({ "id": 2001, "method": "Target.createTarget", "params": { "url": url } })
+    };
+    ctx.process_async(create).await;
+    let created = ctx.take_all();
+    let attached = created
+        .iter()
+        .find(|message| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["url"] == url
+        })
+        .expect("initial target attachment");
+    assert_eq!(attached["params"]["waitingForDebugger"], true);
+    let session = attached["params"]["sessionId"].as_str().unwrap();
+    let target = attached["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap();
+    ctx.process_async(json!({ "id": 2002, "method": "Page.enable", "sessionId": session }))
+        .await;
+    ctx.take_all();
+
+    // Chromium's initial DocumentLoader URL serializes as ":", although the
+    // initial DOM document has location.href == "about:blank". Playwright
+    // uses this distinction to wait for the popup's first real commit.
+    let mut initial_loader = None;
+    for (id, method) in [(2003, "Page.getFrameTree"), (2004, "Page.getResourceTree")] {
+        let raw = json!({ "id": id, "method": method, "sessionId": session }).to_string();
+        let pending = ctx.conn.try_start_pending_command_dispatch(&raw).unwrap();
+        assert_eq!(pending.kind_name(), "Native");
+        let (messages, _) = ctx
+            .complete_command_task_step_for_test(crate::conn::CdpCommandTaskStep::Pending(
+                Box::new(pending),
+            ))
+            .await;
+        let reply = messages.iter().find(|message| message["id"] == id).unwrap();
+        let frame = &reply["result"]["frameTree"]["frame"];
+        assert_eq!(frame["id"], target);
+        assert_eq!(frame["url"], ":", "{method}: {reply}");
+        if let Some(loader) = &initial_loader {
+            assert_eq!(&frame["loaderId"], loader);
+        } else {
+            assert!(!frame["loaderId"].as_str().unwrap().is_empty());
+            initial_loader = Some(frame["loaderId"].clone());
+        }
+    }
+    ctx.process_async(json!({
+        "id": 2005, "method": "Runtime.evaluate", "sessionId": session,
+        "params": { "expression": "location.href", "returnByValue": true }
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 2005)["result"]["result"]["value"],
+        "about:blank"
+    );
+    ctx.process_async(json!({
+        "id": 2006, "method": "Runtime.runIfWaitingForDebugger", "sessionId": session
+    }))
+    .await;
+    let committed = ctx
+        .wait_for_scheduler_message("first target document commit", |message| {
+            message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == session
+                && message["params"]["frame"]["url"] == url
+        })
+        .await;
+    let committed_loader = committed["params"]["frame"]["loaderId"].clone();
+    assert_ne!(Some(&committed_loader), initial_loader.as_ref());
+    for (id, method) in [(2007, "Page.getFrameTree"), (2008, "Page.getResourceTree")] {
+        ctx.process_async(json!({ "id": id, "method": method, "sessionId": session }))
+            .await;
+        let reply = take_response_by_id(&mut ctx, id);
+        let frame = &reply["result"]["frameTree"]["frame"];
+        assert_eq!(frame["url"], url);
+        assert_eq!(frame["loaderId"], committed_loader);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_popup_frame_tree_distinguishes_initial_document_from_first_commit() {
+    tokio::task::LocalSet::new()
+        .run_until(assert_initial_document_frame_tree_waits_for_navigation(
+            true,
+        ))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_created_target_frame_tree_distinguishes_initial_document_from_first_commit() {
+    tokio::task::LocalSet::new()
+        .run_until(assert_initial_document_frame_tree_waits_for_navigation(
+            false,
+        ))
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initial_document_frame_tree_without_renderer_does_not_claim_the_destination_url() {
+    let mut ctx = TestContext::new();
+    load_bc_with_target(
+        &mut ctx,
+        "BID-INITIAL-TREE-METADATA",
+        "TID-INITIAL-TREE-METADATA",
+        "https://initial.test/not-committed",
+    );
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .begin_active_target_initial_empty_document("about:blank".to_owned());
+    for (id, method) in [(2010, "Page.getFrameTree"), (2011, "Page.getResourceTree")] {
+        ctx.process_async(json!({ "id": id, "method": method }))
+            .await;
+        let reply = take_response_by_id(&mut ctx, id);
+        let frame = &reply["result"]["frameTree"]["frame"];
+        assert_eq!(frame["url"], ":");
+        assert!(!frame["loaderId"].as_str().unwrap().is_empty());
+    }
+}
+
 async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
     let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
     let pending = ctx
@@ -486,7 +625,7 @@ async fn get_frame_tree_can_complete_through_pending_command_dispatch() {
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
+async fn completed_get_frame_tree_survives_page_unload_before_projection() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<iframe name='pending-child'></iframe>";
     load_bc_with_session(
@@ -519,6 +658,10 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("Page.getFrameTree should start as a pending command for loaded pages");
+    // The producer has committed a complete snapshot; protocol has not
+    // projected it yet. Removing the Page now must neither rewrite that
+    // result to an empty tree nor install its state onto a replacement Page.
+    let completed = pending.wait().await;
     ctx.conn
         .browser_context
         .as_mut()
@@ -527,8 +670,12 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         .runtime_slot
         .clear_loaded_page_for_test_fixture();
 
-    let (messages, scheduler_events) =
-        complete_pending_command_task_for_test(&mut ctx, pending).await;
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("a published frame tree must require no further renderer work");
+    };
+    let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
     assert!(
         scheduler_events.is_empty(),
         "Page.getFrameTree should not enqueue scheduler events: {scheduler_events:?}"
@@ -545,9 +692,21 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         response["result"]["frameTree"]["frame"]["id"],
         json!("TID-PENDING-FRAME-TREE-UNLOAD")
     );
-    assert!(
-        response["result"]["frameTree"].get("childFrames").is_none(),
-        "unloaded page should match the legacy empty child frame tree path: {response}"
+    assert_eq!(
+        response["result"]["frameTree"]["frame"]["url"],
+        json!(page_url)
+    );
+    assert_eq!(
+        response["result"]["frameTree"]["childFrames"][0]["frame"]["name"],
+        json!("pending-child")
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["id"] == json!(1206))
+            .count(),
+        1,
+        "a committed snapshot must have exactly one response: {messages:#?}"
     );
 }
 #[tokio::test(flavor = "multi_thread")]

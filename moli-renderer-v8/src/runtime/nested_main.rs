@@ -52,7 +52,7 @@ pub(super) fn bind_active_nested_main_page(entry: &mut LivePageEntry) -> ActiveN
 
 pub(crate) fn dispatch_nested_main_page_command(
     command: RendererPageCommand,
-    first_dispatch: RendererInspectorMainFirstDispatchGuard,
+    mut first_dispatch: RendererInspectorMainFirstDispatchGuard,
 ) -> Result<RendererCommandTurnOutput> {
     let active = ACTIVE_NESTED_MAIN_PAGE
         .try_with(|active| active.borrow().clone())
@@ -68,20 +68,31 @@ pub(crate) fn dispatch_nested_main_page_command(
     // the outer Page call.
     let page_vm = unsafe { active.page_vm.as_ptr().as_mut() }
         .ok_or_else(|| anyhow!("nested Main Page pointer was unexpectedly null"))?;
+    first_dispatch.release();
     let reply: RendererPageReply = page_vm.dispatch_renderer_page_command(command)?;
-    let page_state = active.entry_slot.active_page_state()?;
+    // The enclosing turn is suspended inside V8, so its owner-slot snapshot
+    // still describes the state before the pause. Capture the live VM for this
+    // nested handler without committing/replacing the enclosing owner turn.
+    let previous = active.entry_slot.active_page_state()?;
+    let capture = page_vm.capture_nested_page_state()?;
+    let page_state = super::RendererPageState::from_vm_state_capture(
+        previous.requested_url.clone(),
+        previous.navigation_initiator_url.clone(),
+        previous.navigation_redirected,
+        previous.navigation_redirect_count,
+        previous.status,
+        previous.headers.clone(),
+        capture,
+    );
+    let predecessor = page_vm.publish_nested_command_output_prefix();
     let output = RendererCommandTurnOutput::new(
         reply,
         page_state,
         RendererRuntimeCommandOutput::default(),
         None,
-        None,
+        predecessor,
     )?;
-    // Chromium's synchronous non-V8 agent dispatch sends its response before
-    // returning to the nested Main receiver. Moli decodes the typed reply in
-    // the protocol actor, so retain the receiver slot with the immutable
-    // result. Consuming or abandoning that result releases fail-open; the
-    // actor cannot observe a later renderer publication before it has handled
-    // this handoff.
-    Ok(output.hold_until_protocol_handoff(first_dispatch))
+    // Ready frontend output is already in the journal. A typed internal reply
+    // is only a Browser continuation value, so neither needs a receipt gate.
+    Ok(output)
 }

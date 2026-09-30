@@ -22,8 +22,11 @@ pub use moli_renderer_v8::ProcessEnvironmentOwner;
 pub use moli_renderer_v8::renderer_output_transport_channel;
 pub use moli_renderer_v8::{
     PageId, RendererBrowserContextRuntimeId, RendererDocumentLifecycleIdentity,
-    RendererDocumentTitleChanged, RendererOutputCursor, RendererOutputFence,
-    RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
+    RendererDocumentTitleChanged, RendererNativeCommand, RendererNativeCommandReadyResponse,
+    RendererNativeCommandResponseGuard, RendererNativeCommandTerminal, RendererNativeOperation,
+    RendererNativeOperationStep, RendererNativeProtocolError, RendererNativeProtocolNotification,
+    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererOutputCursor,
+    RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
     RendererOutputStreamIdentity, RendererOutputTransportDiagnostics,
@@ -33,4 +36,6 @@ pub use moli_renderer_v8::{
     RendererOwnerRuntimeActivitySource, RendererProtocolObservation,
     RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorAsyncCompletion,
     RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,
+    RendererRuntimeRemoteObjectResolution,
 };
+pub use moli_renderer_v8::{RendererPageCommand, RendererPageReply};
