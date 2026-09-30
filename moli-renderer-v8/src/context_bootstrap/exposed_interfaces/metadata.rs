@@ -36,6 +36,8 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "Headers",
     "Request",
     "Response",
+    "Cache",
+    "CacheStorage",
     "ProgressEvent",
     "XMLHttpRequestEventTarget",
     "XMLHttpRequestUpload",
@@ -136,13 +138,15 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
-    "MediaDeviceInfo",
-    "InputDeviceInfo",
+    "Cache",
+    "CacheStorage",
     "DeviceMotionEvent",
     "DeviceMotionEventAcceleration",
     "DeviceMotionEventRotationRate",
     "DeviceOrientationEvent",
     "MediaDevices",
+    "MediaDeviceInfo",
+    "InputDeviceInfo",
     "SubtleCrypto",
     "CryptoKey",
     "IdleDetector",
