@@ -206,8 +206,16 @@ async fn child_document_html_decodes_from_raw_response_bytes() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/encoding/child-shift-jis-document-parent"))
+        .await?;
+    // The decoded result arrives through a queued child message task.
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "document.body.hasAttribute('data-child-document-text')",
+            Duration::from_secs(5),
+        )
         .await?;
     let html = page.serialize_html_async().await.unwrap();
 
