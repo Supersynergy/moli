@@ -12,7 +12,6 @@ use crate::native_bridge::element::{
     run_document_copy_command, text_control_value,
 };
 use crate::{
-    context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     custom_elements,
     document_runtime::{DomHandle, EventTargetHandle},
     dom::native::{DocumentReadyState, NativeDom, Node, NodeData},
@@ -210,7 +209,6 @@ fn node_document_write_or_writeln_callback<'s>(
             return;
         }
         let entry_document = runtime.document_open_entry_document(scope);
-        clear_window_event_handlers(scope);
         JsContextHost::prepare_root_document_replacement(
             scope,
             runtime_ptr,
@@ -364,7 +362,6 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
             let entry_document = runtime.document_open_entry_document(scope);
-            clear_window_event_handlers(scope);
             JsContextHost::prepare_root_document_replacement(
                 scope,
                 runtime_ptr,
@@ -374,14 +371,6 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         }
     }
     rv.set(args.this().into());
-}
-
-fn clear_window_event_handlers(scope: &mut v8::PinScope<'_, '_>) {
-    let global = scope.get_current_context().global(scope);
-    let null = v8::null(scope).into();
-    for name in WINDOW_EVENT_HANDLER_PROPERTIES {
-        let _ = global.set(scope, v8str(scope, name).into(), null);
-    }
 }
 
 impl JsContextHost {
@@ -516,7 +505,6 @@ impl JsContextHost {
         html: &str,
     ) {
         let document_handle = unsafe { &*host_ptr }.document_handle();
-        clear_window_event_handlers(scope);
         Self::prepare_root_document_replacement(scope, host_ptr, document_handle, None);
         let _ = unsafe { &mut *host_ptr }.write_html(scope, host_ptr, document_handle, html);
         unsafe { &mut *host_ptr }.close_document(scope, host_ptr);
