@@ -18,7 +18,7 @@ from ..assertions import SmokeError, assert_equal, record_contract
 from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
 
 
-CHROMIUM_SOURCE = "Chromium 145.0.7632.116 raw CDP calibration, 2026-09-30"
+CHROMIUM_SOURCE = "Chromium 145.0.7632.116 raw CDP calibration, 2026-10-01"
 
 
 @dataclass
@@ -282,6 +282,42 @@ async def _normal_pause(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, A
     return {"nestedReplyIndexes": [wire.index(rid) for rid in ids], "outerReplyIndex": wire.index(outer)}
 
 
+async def _paused_dom_agent(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, Any]:
+    point = await wire.evaluate(page.session,
+        "(() => { const r = document.getElementById('probe').getBoundingClientRect();"
+        "return {x: Math.floor(r.left + r.width / 2), y: Math.floor(r.top + r.height / 2)}; })()")
+    node = await wire.call("DOM.describeNode", {"nodeId": page.node}, page.session)
+    outer = await _pause(wire, page)
+    commands = [
+        ("DOM.getNodeForLocation", point),
+        ("DOM.getNodeStackTraces", {"nodeId": page.node}),
+        ("DOM.setNodeStackTracesEnabled", {"enable": True}),
+        ("DOM.disable", {}),
+    ]
+    ids = [await wire.send(method, params, page.session) for method, params in commands]
+    replies = [await wire.response(rid) for rid in ids]
+    assert_equal(replies[0]["result"]["backendNodeId"], node["node"]["backendNodeId"],
+                 "paused hit test finds the fixture input")
+    assert_equal(replies[0]["result"]["frameId"], page.frame, "paused hit test frame")
+    for reply, (method, _params) in zip(replies[1:], commands[1:]):
+        assert_equal(reply["result"], {}, f"{method} completes during ordinary pause")
+    # Disabling must clear the old frontend bindings before acknowledging it.
+    stale = await wire.send("DOM.getAttributes", {"nodeId": page.node}, page.session)
+    stale_reply = await wire.response(stale, allow_error=True)
+    assert_equal(stale_reply.get("error", {}).get("code"), -32000,
+                 "DOM.disable invalidates the original frontend node while paused")
+    if wire.has_response(outer):
+        raise SmokeError("DOM agent inspection must leave the outer evaluation paused")
+    # All four actual SessionSink replies must arrive before the client even
+    # sends resume. A typed backend query would miss the native-wrapper bug.
+    resume_send_index = len(wire.trace)
+    await wire.call("Debugger.resume", session=page.session)
+    reply = await wire.response(outer)
+    assert_equal(reply["result"]["result"].get("value"), 42, "outer evaluation resumes once")
+    return {"pausedReplyIndexes": [wire.index(rid) for rid in ids],
+            "resumeSendTraceIndex": resume_send_index, "outerReplyIndex": wire.index(outer)}
+
+
 async def _instrumentation_pause(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, Any]:
     outer = await _pause(wire, page, instrumentation=True)
     query = await wire.send("Page.getFrameTree", session=page.session)
@@ -365,6 +401,7 @@ async def run_cdp_ordering_group(endpoint: str, fixture_url: str, results: list[
         ("isolated_world_notification_prefix", _world_prefix),
         ("deferred_reply_later_resolver", _deferred_reply),
         ("normal_pause_native_queries", _normal_pause),
+        ("normal_pause_dom_agent_commands", _paused_dom_agent),
         ("instrumentation_pause_io_only", _instrumentation_pause),
         ("native_focus_callback_reentry", _focus_reentry),
         ("paused_dom_attribute", _paused_mutation),

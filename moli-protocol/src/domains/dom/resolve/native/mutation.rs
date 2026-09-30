@@ -40,6 +40,9 @@ pub(super) fn prepare(
         DomAction::RemoveNode => {
             let params =
                 build_cdp_remove_node_command(conn, cmd)?.ok_or_else(StartError::invalid_params)?;
+            // The first step only resolves a native node binding, but removal
+            // enters V8. Keep the complete chain on its owner turn; agent-only
+            // operations below inherit their backend entry requirement.
             Ok(with_backend(session, params.reference, |backend_node_id| {
                 Operation::new(
                     Command::RemoveDocumentBackendNodeId { backend_node_id },
@@ -52,7 +55,8 @@ pub(super) fn prepare(
                         _ => unreachable!("DOM remove node reply"),
                     },
                 )
-            }))
+            })
+            .require_owner_turn())
         }
         DomAction::Focus => {
             let params: NodeReferenceParams = cmd
@@ -84,7 +88,8 @@ pub(super) fn prepare(
                         Command::FocusDocumentBackendNode { backend_node_id },
                         move |reply| focus(reply, missing),
                     )
-                }))
+                })
+                .require_owner_turn())
             }
         }
         DomAction::SetAttributeValue | DomAction::RemoveAttribute => {
@@ -125,7 +130,8 @@ pub(super) fn prepare(
                         attribute,
                     )
                 },
-            ))
+            )
+            .require_owner_turn())
         }
         DomAction::MoveTo
         | DomAction::SetAttributesAsText
@@ -168,7 +174,8 @@ pub(super) fn prepare(
                         },
                         scroll,
                     )
-                }))
+                })
+                .require_owner_turn())
             }
         }
         DomAction::GetNodeForLocation => {

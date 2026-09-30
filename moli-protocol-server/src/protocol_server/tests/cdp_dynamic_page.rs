@@ -888,6 +888,164 @@ async fn cdp_ordering_normal_pause_allows_nested_main() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cdp_ordering_dom_agent_frontend_commands_complete_before_resume() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new().route("/page", get(|| async {
+            axum::response::Html("<!doctype html><style>#probe {width:100px;height:100px}</style><div id=probe>probe</div>")
+        })),
+        "native-paused-dom-agent",
+    );
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut browser, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let context = cdp_create_browser_context(&mut browser, 1).await;
+    let target = cdp_create_attached_target(&mut browser, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    navigate_fixture_document(
+        &mut browser,
+        4,
+        &target,
+        &format!("http://{fixture_addr}/page"),
+    )
+    .await;
+    let document = send_cdp_command(&mut browser, 5, "DOM.getDocument", session, json!({})).await;
+    let query = send_cdp_command(
+        &mut browser,
+        6,
+        "DOM.querySelector",
+        session,
+        json!({
+            "nodeId": response_by_id(&document, 5)["result"]["root"]["nodeId"], "selector": "#probe"
+        }),
+    )
+    .await;
+    let node = response_by_id(&query, 6)["result"]["nodeId"]
+        .as_u64()
+        .unwrap();
+    let describe = send_cdp_command(
+        &mut browser,
+        7,
+        "DOM.describeNode",
+        session,
+        json!({"nodeId": node}),
+    )
+    .await;
+    let backend = response_by_id(&describe, 7)["result"]["node"]["backendNodeId"].clone();
+    let geometry = send_cdp_command(&mut browser, 8, "Runtime.evaluate", session, json!({
+        "expression": "(() => { const r = document.getElementById('probe').getBoundingClientRect(); return {x: Math.floor(r.left + r.width / 2), y: Math.floor(r.top + r.height / 2)}; })()",
+        "returnByValue": true
+    })).await;
+    let point = response_by_id(&geometry, 8)["result"]["result"]["value"].clone();
+    assert!(point["x"].is_number() && point["y"].is_number());
+    let enabled = send_cdp_command(&mut browser, 10, "Debugger.enable", session, json!({})).await;
+    assert!(response_by_id(&enabled, 10)["error"].is_null());
+    send_cdp_command_without_wait(
+        &mut browser,
+        12,
+        "Runtime.evaluate",
+        session,
+        json!({
+            "expression": "(() => { debugger; return 42; })()", "returnByValue": true
+        }),
+    )
+    .await;
+    let paused = recv_until_match(&mut browser, |message| {
+        message["sessionId"] == target.session_id && message["method"] == "Debugger.paused"
+    })
+    .await;
+    assert!(paused.iter().all(|message| message["id"] != 12));
+
+    // Exercise the frontend SessionSink wrappers: the typed backend commands
+    // were already PageAgent, while their native wrappers incorrectly waited
+    // for the suspended outer evaluation to return. Do not send resume until
+    // every one of these actual wire replies has arrived.
+    let commands = [
+        (100, "DOM.getNodeForLocation", point),
+        (101, "DOM.getNodeStackTraces", json!({"nodeId": node})),
+        (
+            102,
+            "DOM.setNodeStackTracesEnabled",
+            json!({"enable": true}),
+        ),
+        (103, "DOM.disable", json!({})),
+    ];
+    for (id, method, params) in &commands {
+        send_cdp_command_without_wait(&mut browser, *id, method, session, params.clone()).await;
+    }
+    let mut completed = std::collections::HashSet::new();
+    let inspected = recv_until_match(&mut browser, |message| {
+        if message["sessionId"] == target.session_id
+            && let Some(id) = message["id"].as_u64()
+        {
+            assert!(completed.insert(id), "duplicate terminal: {message}");
+        }
+        commands.iter().all(|(id, _, _)| completed.contains(id))
+    })
+    .await;
+    assert!(
+        inspected.iter().all(|message| message["id"] != 12
+            && !(message["sessionId"] == target.session_id
+                && message["method"] == "Debugger.resumed")),
+        "DOM inspection must retain the paused outer evaluation: {inspected:#?}"
+    );
+    for (id, method, _) in &commands {
+        let response = response_by_id(&inspected, *id);
+        assert_eq!(response["sessionId"], target.session_id);
+        assert!(response["error"].is_null(), "{method}: {response}");
+        if *id == 100 {
+            assert_eq!(response["result"]["backendNodeId"], backend);
+            assert_eq!(response["result"]["frameId"], target.target_id);
+        } else {
+            assert_eq!(response["result"], json!({}), "{method}");
+        }
+    }
+    let stale = send_cdp_command(
+        &mut browser,
+        14,
+        "DOM.getAttributes",
+        session,
+        json!({"nodeId": node}),
+    )
+    .await;
+    assert_eq!(
+        response_by_id(&stale, 14)["error"]["code"],
+        -32000,
+        "DOM.disable must invalidate the frontend node before acknowledging it"
+    );
+    assert!(stale.iter().all(|message| message["id"] != 12));
+    assert!(completed.insert(14));
+
+    send_cdp_command_without_wait(&mut browser, 15, "Debugger.resume", session, json!({})).await;
+    let resumed = recv_until_match(&mut browser, |message| {
+        if message["sessionId"] == target.session_id
+            && let Some(id) = message["id"].as_u64()
+        {
+            assert!(completed.insert(id), "duplicate terminal: {message}");
+        }
+        completed.contains(&12) && completed.contains(&15)
+    })
+    .await;
+    assert_eq!(
+        response_by_id(&resumed, 12)["result"]["result"]["value"],
+        42
+    );
+    assert!(response_by_id(&resumed, 15)["error"].is_null());
+    let follower =
+        send_cdp_command(&mut browser, 16, "Page.getFrameTree", session, json!({})).await;
+    assert!(
+        follower.iter().all(|message| message["id"]
+            .as_u64()
+            .is_none_or(|id| !completed.contains(&id))),
+        "duplicate terminal: {follower:?}"
+    );
+    assert!(response_by_id(&follower, 16)["error"].is_null());
+    browser.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cdp_ordering_instrumentation_pause_only_allows_io() {
     assert_pause_command_ordering(true).await;
 }
