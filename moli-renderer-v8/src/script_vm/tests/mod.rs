@@ -2168,5 +2168,6 @@ mod navigation_timing_inheritance;
 mod response_blob_mime;
 
 mod intersection_target_order;
+mod observer_element_arguments;
 
 mod media_device_interfaces;
