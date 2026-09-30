@@ -28,27 +28,7 @@ fn buffered_html_preload_scan_collects_future_external_scripts_without_importmap
         ]
     );
 }
-#[test]
-fn buffered_html_preload_scan_leaves_modulepreload_to_native_module_map() {
-    let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-    let requests = collect_preloadable_external_script_requests_from_html(
-        &final_url,
-        r#"
-                <link rel="dns-prefetch modulepreload" href="/entry.mjs">
-                <link rel="MODULEPRELOAD" href="/entry.mjs">
-                <link rel="preload" as="script" href="/classic.js">
-                <link rel="modulepreload" as="style" href="/theme.css">
-                <link rel="modulepreload" href="/theme.css?version=1">
-                <link rel="modulepreload" href="data:text/javascript,export%20default%201">
-            "#,
-    );
 
-    assert_eq!(
-        requests,
-        Vec::new(),
-        "modulepreload must not enter the legacy script-text preload cache; the parser publishes exact link candidates to the native module map"
-    );
-}
 #[test]
 fn incremental_html_preload_scanner_handles_split_script_tag_boundaries() {
     let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
@@ -430,5 +410,37 @@ fn full_body_phase_one_parks_async_subresource_terminal_for_page_owner() {
     run_phase_one_large_stack_test(
         "phase-one-async-subresource-before-source-park",
         full_body_phase_one_parks_async_subresource_terminal_for_page_owner_inner,
+    );
+}
+
+#[test]
+fn buffered_html_preload_scan_routes_script_like_modulepreloads_to_native_module_map() {
+    let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+    let requests = collect_preloadable_external_script_requests_from_html(
+        &final_url,
+        r#"
+                <link rel="dns-prefetch modulepreload" href="/entry.mjs">
+                <link rel="MODULEPRELOAD" href="/entry.mjs">
+                <link rel="preload" as="script" href="/classic.js">
+                <link rel="modulepreload" as="style" href="/theme.css">
+                <link rel="modulepreload" href="/theme.css?version=1">
+                <link rel="modulepreload" href="data:text/javascript,export%20default%201">
+            "#,
+    );
+
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.kind_hint == crate::types::ScriptKind::Module),
+        "scanner modulepreloads must take the native module-map admission path"
+    );
+    assert_eq!(
+        preload_request_urls(requests),
+        vec![
+            Url::parse("https://example.test/entry.mjs").expect("entry module URL"),
+            Url::parse("https://example.test/theme.css?version=1")
+                .expect("default script-like module URL"),
+        ],
+        "the scanner should dedupe script-like modulepreloads while leaving typed and data candidates to the parser"
     );
 }
