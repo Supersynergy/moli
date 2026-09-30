@@ -545,7 +545,16 @@ async fn pending_idle_override_response_does_not_replay_into_replacement_page() 
     else {
         panic!("the retired idle override should settle in one protocol phase");
     };
-    assert!(outcome.into_parts().0.iter().any(|message| {
+    let (mut messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    messages.extend(ctx.take_all());
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["id"] == json!(9_105))
+            .count(),
+        1
+    );
+    assert!(messages.iter().any(|message| {
         message["id"] == json!(9_105)
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
@@ -614,7 +623,16 @@ async fn admitted_idle_override_is_visible_to_concurrent_same_site_navigation() 
     else {
         panic!("the retired idle override should settle in one protocol phase");
     };
-    assert!(outcome.into_parts().0.iter().any(|message| {
+    let (mut messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    messages.extend(ctx.take_all());
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["id"] == json!(9_107))
+            .count(),
+        1
+    );
+    assert!(messages.iter().any(|message| {
         message["id"] == json!(9_107)
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
@@ -983,13 +1001,7 @@ async fn live_geolocation_override_uses_pending_command_dispatch() {
     let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
         panic!("loaded Emulation.setGeolocationOverride should update the live page");
     };
-    let completed = pending.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) =
-        ctx.conn.complete_pending_command_dispatch(completed).await
-    else {
-        panic!("geolocation override should complete in one renderer phase");
-    };
-    let messages = outcome.into_parts().0;
+    let messages = complete_pending_command_task_for_test(&mut ctx, *pending).await;
     assert!(messages.iter().any(|message| {
         message["id"] == json!(9127)
             && message["sessionId"] == json!("SID-1")
@@ -1039,7 +1051,15 @@ async fn device_metrics_completion_survives_initial_page_replacement() {
     else {
         panic!("device metrics completion should settle after Page replacement");
     };
-    let messages = outcome.into_parts().0;
+    let (mut messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    messages.extend(ctx.take_all());
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| message["id"] == json!(9128))
+            .count(),
+        1
+    );
     assert!(messages.iter().any(|message| {
         message["id"] == json!(9128)
             && message["sessionId"] == json!("SID-1")
