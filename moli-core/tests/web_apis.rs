@@ -1383,7 +1383,11 @@ async fn performance_measure_entries_are_observable_and_clearable() -> Result<()
     );
     assert_eq!(
         diagnostic_global(&page, "performanceMeasureObservedName"),
-        Some(&JsValueSnapshot::String("duration".to_owned()))
+        Some(&JsValueSnapshot::String("legacy-duration".to_owned()))
+    );
+    assert_eq!(
+        diagnostic_global(&page, "performanceMeasureObservedChronological"),
+        Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
         diagnostic_global(&page, "performanceMeasureObservedType"),
@@ -5698,7 +5702,7 @@ async fn intersection_observer_options_reflect_root_margin_and_thresholds() -> R
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionObserverThresholds"),
-        Some(&JsValueSnapshot::String("[0.25,0.75]".to_owned()))
+        Some(&JsValueSnapshot::String("[0.25,0.75,0.75]".to_owned()))
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionObserverEntryPrototypeShape"),
