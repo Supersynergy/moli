@@ -461,7 +461,7 @@ async fn top_frame_geometry_non_element_waits_for_renderer_completion() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("BiDi top-frame text node geometry should start a renderer command");
-    assert_eq!(pending.kind_name(), "DOM");
+    assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let response = messages
         .iter()
@@ -1041,7 +1041,7 @@ async fn get_box_model_rejects_non_element_nodes() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("non-element DOM.getBoxModel should start a renderer geometry command");
-    assert_eq!(pending.kind_name(), "DOM");
+    assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     let response = messages
         .iter()

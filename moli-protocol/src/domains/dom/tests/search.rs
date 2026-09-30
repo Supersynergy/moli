@@ -637,7 +637,7 @@ async fn perform_search_without_shadow_dom_uses_live_renderer_dispatch() {
         .conn
         .try_start_pending_command_dispatch(&perform_search_raw)
         .expect("DOM.performSearch should dispatch to renderer when a page is loaded");
-    assert_eq!(pending.kind_name(), "DOM");
+    assert_eq!(pending.kind_name(), "Native");
     let messages = complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert_eq!(
         messages[0]["result"],
@@ -1303,7 +1303,7 @@ async fn query_selector_document_root_uses_live_renderer_dispatch() {
         .conn
         .try_start_pending_command_dispatch(&query_raw)
         .expect("document-root DOM.querySelector should dispatch to renderer");
-    assert_eq!(query_pending.kind_name(), "DOM");
+    assert_eq!(query_pending.kind_name(), "Native");
     let query_messages = complete_pending_command_task_for_test(&mut ctx, query_pending).await;
     let query_response_position = query_messages
         .iter()
@@ -1332,7 +1332,7 @@ async fn query_selector_document_root_uses_live_renderer_dispatch() {
         .conn
         .try_start_pending_command_dispatch(&query_all_raw)
         .expect("document-root DOM.querySelectorAll should dispatch to renderer");
-    assert_eq!(query_all_pending.kind_name(), "DOM");
+    assert_eq!(query_all_pending.kind_name(), "Native");
     let query_all_messages =
         complete_pending_command_task_for_test(&mut ctx, query_all_pending).await;
     assert_eq!(

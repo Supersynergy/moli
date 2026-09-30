@@ -17,6 +17,7 @@ mod node_references;
 #[cfg(test)]
 mod patchright_shadow_tests;
 mod resolve;
+pub(crate) use resolve::native::try_start as try_start_native_command;
 mod search;
 mod set_file_input;
 mod stack_traces;

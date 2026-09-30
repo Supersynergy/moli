@@ -50,62 +50,9 @@ pub(crate) fn try_start_autofill_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> AutofillCommandTaskStep {
-    match cmd.parse_action::<AutofillAction>() {
-        Some(AutofillAction::Trigger) => {}
-        None => {
-            return AutofillCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32601,
-                "UnknownMethod",
-            ));
-        }
-    }
-    if let Err(message) = conn.ensure_document_accessible_for_session_owner(cmd.session_id) {
-        return AutofillCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-    }
-    let params = match cmd.get_params::<TriggerParams>() {
-        Ok(Some(params)) => params,
-        _ => {
-            return AutofillCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32602,
-                "Invalid parameters",
-            ));
-        }
-    };
-    let Ok(field_id) = u32::try_from(*params.field_id.inner()) else {
-        return AutofillCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32602,
-            "Invalid parameters",
-        ));
-    };
-    let top_frame_id = conn
-        .target_session_owner_frame_tree_identity(cmd.session_id)
-        .map(|(frame_id, _, _, _)| frame_id);
-    let frame_id = params
-        .frame_id
-        .map(String::from)
-        .filter(|frame_id| Some(frame_id) != top_frame_id.as_ref());
-    let card = params.card.map(|card| RendererAutofillCreditCard {
-        number: card.number,
-        name: card.name,
-        expiry_month: card.expiry_month,
-        expiry_year: card.expiry_year,
-        cvc: card.cvc,
-    });
-    let address = params.address.map(|address| {
-        address
-            .fields
-            .into_iter()
-            .map(|field| RendererAutofillAddressField {
-                name: field.name,
-                value: field.value,
-            })
-            .collect()
-    });
-    let request = RendererAutofillTriggerRequest {
-        frame_id,
-        field_id,
-        card,
-        address,
+    let request = match prepare_request(conn, cmd) {
+        Ok(request) => request,
+        Err(plan) => return AutofillCommandTaskStep::Complete(plan),
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
@@ -137,6 +84,10 @@ pub(crate) fn complete_pending_autofill_command(
                     .map_err(|error| error.to_string())
             })
     });
+    project_outcome(outcome)
+}
+
+fn project_outcome(outcome: Result<RendererAutofillTriggerOutcome, String>) -> CommandOutputPlan {
     match outcome {
         Ok(RendererAutofillTriggerOutcome::Applied { .. }) => CommandOutputPlan::success(),
         Ok(RendererAutofillTriggerOutcome::FieldNotFound) => {
@@ -156,6 +107,80 @@ pub(crate) fn complete_pending_autofill_command(
         }
         Err(message) => CommandOutputPlan::error(-32000, message),
     }
+}
+fn prepare_request(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+) -> Result<RendererAutofillTriggerRequest, CommandOutputPlan> {
+    match cmd.parse_action::<AutofillAction>() {
+        Some(AutofillAction::Trigger) => {}
+        None => {
+            return Err(CommandOutputPlan::error(-32601, "UnknownMethod"));
+        }
+    }
+    if let Err(message) = conn.ensure_document_accessible_for_session_owner(cmd.session_id) {
+        return Err(CommandOutputPlan::error(-32000, message));
+    }
+    let params = match cmd.get_params::<TriggerParams>() {
+        Ok(Some(params)) => params,
+        _ => {
+            return Err(CommandOutputPlan::error(-32602, "Invalid parameters"));
+        }
+    };
+    let Ok(field_id) = u32::try_from(*params.field_id.inner()) else {
+        return Err(CommandOutputPlan::error(-32602, "Invalid parameters"));
+    };
+    let top_frame_id = conn
+        .target_session_owner_frame_tree_identity(cmd.session_id)
+        .map(|(frame_id, _, _, _)| frame_id);
+    let frame_id = params
+        .frame_id
+        .map(String::from)
+        .filter(|frame_id| Some(frame_id) != top_frame_id.as_ref());
+    let card = params.card.map(|card| RendererAutofillCreditCard {
+        number: card.number,
+        name: card.name,
+        expiry_month: card.expiry_month,
+        expiry_year: card.expiry_year,
+        cvc: card.cvc,
+    });
+    let address = params.address.map(|address| {
+        address
+            .fields
+            .into_iter()
+            .map(|field| RendererAutofillAddressField {
+                name: field.name,
+                value: field.value,
+            })
+            .collect()
+    });
+    let request = RendererAutofillTriggerRequest {
+        frame_id,
+        field_id,
+        card,
+        address,
+    };
+    Ok(request)
+}
+
+pub(crate) fn try_start_native_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> Option<super::native::NativeCommandStep> {
+    use moli_core::{RendererPageCommand as Command, RendererPageReply as Reply};
+    Some(match prepare_request(conn, cmd) {
+        Ok(request) => {
+            super::native::start(conn, cmd, Command::TriggerAutofill(request), |reply| {
+                let outcome = match reply {
+                    Ok(Reply::AutofillTriggerOutcome(outcome)) => Ok(outcome),
+                    Err(error) => Err(error.to_string()),
+                    _ => unreachable!("Autofill trigger reply"),
+                };
+                project_outcome(outcome).into_native_response()
+            })
+        }
+        Err(plan) => super::native::NativeCommandStep::Complete(plan),
+    })
 }
 
 #[cfg(test)]
