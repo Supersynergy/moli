@@ -408,6 +408,11 @@ interfaces! {
     ResizeObserverSize;
     Response;
     SVGAElement: SVGGraphicsElement;
+    SVGAnimationElement: SVGElement;
+    SVGAnimateElement: SVGAnimationElement;
+    SVGAnimateMotionElement: SVGAnimationElement;
+    SVGAnimateTransformElement: SVGAnimationElement;
+    SVGSetElement: SVGAnimationElement;
     SVGAnimatedEnumeration;
     SVGAnimatedString;
     SVGAnimatedLength;

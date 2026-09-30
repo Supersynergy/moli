@@ -91,6 +91,9 @@ pub fn html_element_interface_name(local_name: &str) -> &'static str {
 pub fn svg_element_interface_name(local_name: &str) -> &'static str {
     match local_name {
         "a" => "SVGAElement",
+        "animate" => "SVGAnimateElement",
+        "animateMotion" => "SVGAnimateMotionElement",
+        "animateTransform" => "SVGAnimateTransformElement",
         "circle" => "SVGCircleElement",
         "clipPath" => "SVGClipPathElement",
         "defs" => "SVGDefsElement",
@@ -138,6 +141,7 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
         "radialGradient" => "SVGRadialGradientElement",
         "rect" => "SVGRectElement",
         "script" => "SVGScriptElement",
+        "set" => "SVGSetElement",
         "stop" => "SVGStopElement",
         "svg" => "SVGSVGElement",
         "style" => "SVGStyleElement",
