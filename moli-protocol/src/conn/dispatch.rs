@@ -33,6 +33,7 @@ impl CdpCommandTaskStep {
 }
 
 enum PendingCdpCommandDispatchKind {
+    Native(crate::domains::native::PendingNativeCommand),
     Runtime(Box<crate::domains::runtime::PendingRuntimeCommandDispatch>),
     Autofill(crate::domains::autofill::PendingAutofillCommandDispatch),
     Accessibility(crate::domains::accessibility::PendingAccessibilityCommandDispatch),
@@ -56,6 +57,7 @@ enum PendingCdpCommandDispatchKind {
 }
 
 enum CompletedCdpCommandDispatchKind {
+    Native(crate::domains::native::CompletedNativeCommand),
     Runtime(Box<crate::domains::runtime::CompletedRuntimeCommandDispatch>),
     Autofill(crate::domains::autofill::CompletedAutofillCommandDispatch),
     Accessibility(crate::domains::accessibility::CompletedAccessibilityCommandDispatch),
@@ -81,6 +83,7 @@ enum CompletedCdpCommandDispatchKind {
 impl PendingCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
+            Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
             Self::Autofill(_) => "Autofill",
             Self::Accessibility(_) => "Accessibility",
@@ -108,6 +111,7 @@ impl PendingCdpCommandDispatchKind {
 impl CompletedCdpCommandDispatchKind {
     fn name(&self) -> &'static str {
         match self {
+            Self::Native(_) => "Native",
             Self::Runtime(_) => "Runtime",
             Self::Autofill(_) => "Autofill",
             Self::Accessibility(_) => "Accessibility",
@@ -158,6 +162,7 @@ impl PendingCdpCommandDispatch {
 
     pub fn command_id(&self) -> Option<u64> {
         match &self.inner {
+            PendingCdpCommandDispatchKind::Native(pending) => Some(pending.command_id()),
             PendingCdpCommandDispatchKind::Runtime(pending) => pending.command_id(),
             _ => None,
         }
@@ -165,6 +170,7 @@ impl PendingCdpCommandDispatch {
 
     pub fn session_id(&self) -> Option<&str> {
         match &self.inner {
+            PendingCdpCommandDispatchKind::Native(pending) => pending.session_id(),
             PendingCdpCommandDispatchKind::Runtime(pending) => pending.session_id(),
             _ => None,
         }
@@ -266,6 +272,9 @@ impl PendingCdpCommandDispatch {
             );
         }
         let inner = match self.inner {
+            PendingCdpCommandDispatchKind::Native(pending) => {
+                CompletedCdpCommandDispatchKind::Native(pending.wait().await)
+            }
             PendingCdpCommandDispatchKind::Runtime(pending) => {
                 CompletedCdpCommandDispatchKind::Runtime(Box::new(Box::pin(pending.wait()).await))
             }
@@ -521,6 +530,16 @@ impl CdpConnection {
                 command_context.terminal_response_delivery_override(),
             );
         self.record_tracing_command(cmd.method, cmd.session_id);
+        if let Some(step) = crate::domains::native::try_start(self, &cmd) {
+            return match step {
+                crate::domains::native::NativeCommandStep::Pending(pending) => {
+                    self.pending_step(PendingCdpCommandDispatchKind::Native(pending))
+                }
+                crate::domains::native::NativeCommandStep::Complete(plan) => {
+                    self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
+                }
+            };
+        }
         let step = match domain {
             "Browser" => Some(
                 match crate::domains::browser::try_start_browser_command_dispatch(self, &cmd) {
@@ -894,6 +913,17 @@ impl CdpConnection {
     ) -> CdpCommandTaskStep {
         let mut out = Vec::new();
         match completed.inner {
+            CompletedCdpCommandDispatchKind::Native(completed) => {
+                let command_id = completed.command_id;
+                let session_id = completed.session_id().map(str::to_owned);
+                let plan = completed.complete(self, command_context).await;
+                return self.complete_with_output_plan(
+                    command_context,
+                    plan,
+                    Some(command_id),
+                    session_id.as_deref(),
+                );
+            }
             CompletedCdpCommandDispatchKind::Runtime(completed) => {
                 let completed = *completed;
                 let command_id = completed.command_id();

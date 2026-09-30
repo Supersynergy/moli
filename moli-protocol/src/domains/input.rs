@@ -1385,13 +1385,8 @@ async fn complete_pending_input_command(
             match completed_page_command_result(completed_operation) {
                 Err(error) => Err(error),
                 Ok(result) => {
-                    let completion = settle_completed_input_page_command(
-                        conn,
-                        session_id,
-                        &owner,
-                        result,
-                        command_context,
-                    );
+                    let completion =
+                        settle_completed_input_page_command(conn, &owner, result, command_context);
                     if matches!(kind, PendingInputCommandKind::PrepareElementClick) {
                         decode_element_click_preparation_completion(completion)
                             .map(DevToolsCommandResult::ElementClickPreparation)
@@ -1439,13 +1434,8 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
+            let completion =
+                settle_completed_input_page_command(conn, &owner, result, command_context);
             let operation = match kind {
                 PendingInputCommandKind::DispatchMouseEvent => "mouse event page command",
                 PendingInputCommandKind::DispatchTouchEvent
@@ -1496,13 +1486,8 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
+            let completion =
+                settle_completed_input_page_command(conn, &owner, result, command_context);
             let outcome =
                 decode_input_dispatch_outcome_completion(completion, "key event page command");
             match outcome {
@@ -1542,13 +1527,8 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
+            let completion =
+                settle_completed_input_page_command(conn, &owner, result, command_context);
             let result = decode_insert_text_completion(completion);
             match result {
                 Ok(_) => Ok(DevToolsCommandResult::Empty),
@@ -1569,12 +1549,11 @@ async fn complete_pending_input_command(
 
 fn settle_completed_input_page_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
     owner: &TargetPageResidenceIdentity,
     completion: CompletedPageCommand,
     command_context: &mut CommandDispatchContext,
 ) -> RendererCommandTurnCompletion {
-    let output = conn.settle_page_command_turn_for_owner(session_id, owner, completion);
+    let output = conn.settle_page_command_turn_for_owner(owner, completion);
     command_context.consume_renderer_command_turn_output(output)
 }
 

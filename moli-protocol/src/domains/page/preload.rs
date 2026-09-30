@@ -1,3 +1,5 @@
+pub(super) mod native;
+
 use crate::devtools_runtime::{
     DevToolsAddPreloadScriptCommand, DevToolsAddPreloadScriptResult, DevToolsCommand,
     DevToolsCommandResult, DevToolsError, DevToolsErrorKind, DevToolsPreloadScriptId,
@@ -1060,6 +1062,19 @@ fn start_devtools_remove_preload_script_command(
     command_session_id: Option<&str>,
     command: DevToolsRemovePreloadScriptCommand,
 ) -> PageCommandTaskStep {
+    match remove_preload_script_registration(conn, command_session_id, command) {
+        Ok(registry_key) => {
+            start_document_start_script_remove(conn, command_id, command_session_id, registry_key)
+        }
+        Err(plan) => PageCommandTaskStep::Complete(plan),
+    }
+}
+
+fn remove_preload_script_registration(
+    conn: &mut CdpConnection,
+    command_session_id: Option<&str>,
+    command: DevToolsRemovePreloadScriptCommand,
+) -> Result<Option<String>, CommandOutputPlan> {
     let protocol = command.context.protocol;
     let script_id = command.script_id.into_string();
     let renderer_inspector_session_id =
@@ -1086,12 +1101,9 @@ fn start_devtools_remove_preload_script_command(
         });
     let Some((mut removed, mut registry_key)) = remove_result else {
         if conn.browser_context.is_none() {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -31998,
-                "BrowserContextNotLoaded",
-            ));
+            return Err(CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"));
         }
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "TargetNotLoaded"));
+        return Err(CommandOutputPlan::error(-31998, "TargetNotLoaded"));
     };
     if !removed
         && let Some((browser_context_id, _)) = owner_identity.as_ref()
@@ -1107,9 +1119,9 @@ fn start_devtools_remove_preload_script_command(
             DevToolsProtocol::Cdp => "Script not found",
             DevToolsProtocol::WebDriverClassic | DevToolsProtocol::WebDriverBidi => "NoSuchScript",
         };
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        return Err(CommandOutputPlan::error(-32000, message));
     }
-    start_document_start_script_remove(conn, command_id, command_session_id, registry_key)
+    Ok(registry_key)
 }
 
 fn remove_stored_document_start_script_registry_key(

@@ -596,11 +596,9 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
             panic!("live Page.addScriptToEvaluateOnNewDocument should update the live page")
         }
     };
-    let add_step = ctx
-        .conn
-        .complete_pending_command_dispatch(add_pending.wait().await)
+    let (add_messages, _) = ctx
+        .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(add_pending))
         .await;
-    let (add_messages, _) = ctx.complete_command_task_step_for_test(add_step).await;
     assert_eq!(add_messages.len(), 1);
     assert_eq!(add_messages[0]["id"], json!(42));
     assert_eq!(add_messages[0]["sessionId"], json!("SID-page-preload-live"));
@@ -638,11 +636,9 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
             panic!("live Page.removeScriptToEvaluateOnNewDocument should update the live page")
         }
     };
-    let remove_step = ctx
-        .conn
-        .complete_pending_command_dispatch(remove_pending.wait().await)
+    let (remove_messages, _) = ctx
+        .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(remove_pending))
         .await;
-    let (remove_messages, _) = ctx.complete_command_task_step_for_test(remove_step).await;
     assert_eq!(
         remove_messages,
         vec![json!({

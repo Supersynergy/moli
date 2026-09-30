@@ -188,10 +188,17 @@ impl JsContextHost {
         let Some(output_journal) = self.output_journal.as_ref() else {
             return false;
         };
-        if let Some(recorder) = self.command_turn_output.as_ref() {
-            output_journal.append_records(recorder.drain_records());
-        }
+        self.append_live_turn_output_prefix();
         output_journal.publish_pending().is_some()
+    }
+
+    /// Move the completed prefix without ending the active command recorder.
+    /// A nested DevTools handler must also resolve DOM facts and Inspector
+    /// state before publishing that prefix with its terminal response.
+    pub(crate) fn append_live_turn_output_prefix(&self) {
+        if let (Some(journal), Some(recorder)) = (&self.output_journal, &self.command_turn_output) {
+            journal.append_records(recorder.drain_records());
+        }
     }
 
     pub(crate) fn begin_command_turn_output(

@@ -937,7 +937,13 @@ fn live_page_command_should_follow_pending_navigation(command: &RendererPageComm
 }
 
 fn live_page_command_requires_materialized_child_realms(command: &RendererPageCommand) -> bool {
-    matches!(command, RendererPageCommand::Inspector(envelope) if envelope.requires_materialized_child_realms())
+    match command {
+        RendererPageCommand::Native(command) => {
+            live_page_command_requires_materialized_child_realms(&command.operation.command)
+        }
+        RendererPageCommand::Inspector(envelope) => envelope.requires_materialized_child_realms(),
+        _ => false,
+    }
 }
 
 const fn page_creation_navigation_reply_policy(

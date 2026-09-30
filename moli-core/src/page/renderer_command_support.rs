@@ -1730,6 +1730,33 @@ impl Page {
         self.start_page_command(RendererPageCommand::ChildFrameTreeSnapshot)
     }
 
+    /// Admit a frontend terminal, distinct from an internal renderer query.
+    /// The returned guard must live with the adapter continuation until the
+    /// producer has settled; dropping it earlier cancels the publication.
+    pub fn start_native_frontend_command(
+        &self,
+        command_id: u64,
+        frontend_session_id: Option<&str>,
+        operation: crate::RendererNativeOperation,
+    ) -> Result<(
+        PendingPageCommand,
+        crate::RendererNativeCommandResponseGuard,
+    )> {
+        let attachment = self.renderer_agent_attachment_id.ok_or_else(|| {
+            anyhow::anyhow!("native frontend command requires a renderer attachment")
+        })?;
+        let (command, guard) = crate::RendererNativeCommand::new(
+            moli_page_types::FrontendCommandId::new(command_id),
+            moli_page_types::DevToolsSessionKey::from_wire_session_id(frontend_session_id),
+            attachment,
+            operation,
+        );
+        Ok((
+            self.start_page_command(RendererPageCommand::Native(Box::new(command)))?,
+            guard,
+        ))
+    }
+
     pub fn finish_child_frame_tree_snapshot(
         &mut self,
         completion: CompletedPageCommand,

@@ -258,7 +258,7 @@ async fn rust_cdp_chromiumoxide_loaded_target_replays_renderer_lifecycle_when_en
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_stream() {
+async fn internal_create_isolated_world_restart_does_not_inherit_the_stale_renderer_stream() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new_with_target_discovery(false);
     let target_id = create_target(&mut ctx, 2_600_070, None, "about:blank").await;
@@ -280,6 +280,11 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     }))
     .expect("createIsolatedWorld command should parse");
     let mut command_context = CommandDispatchContext::default();
+    // An internal composite query has no frontend terminal until its Browser
+    // continuation settles. Its stale attachment must still restart correctly.
+    command_context.set_terminal_response_delivery_override(
+        moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
+    );
     let CdpCommandTaskStep::Pending(first_pending) = ctx
         .conn
         .start_parsed_command_dispatch_with_context(&command, &mut command_context)
@@ -323,6 +328,63 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
         response(&messages, 2_600_072)["result"]["executionContextId"]
             .as_i64()
             .is_some()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn published_create_isolated_world_response_survives_navigation_without_restarting() {
+    let fixture = SmokeFixtureServer::start().await;
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    let target = create_target(&mut ctx, 2_600_080, None, "about:blank").await;
+    let session = attach_to_target(&mut ctx, 2_600_081, None, &target).await;
+    ctx.take_all();
+    let raw = json!({"id": 2_600_082, "sessionId": session, "method": "Page.createIsolatedWorld",
+        "params": {"frameId": target, "worldName": "published-world"}})
+    .to_string();
+    let pending = ctx.conn.try_start_pending_command_dispatch(&raw).unwrap();
+    assert_eq!(pending.kind_name(), "Native");
+    // Publication has won, but the adapter remains deliberately unprocessed.
+    let completed = pending.wait().await;
+    ctx.process_async(
+        json!({"id": 2_600_083, "sessionId": session, "method": "Page.navigate",
+        "params": {"url": fixture.url("/plain?replacement=published-world")}}),
+    )
+    .await;
+    let messages = ctx.take_all();
+    let terminals = messages
+        .iter()
+        .filter(|message| message["id"] == 2_600_082)
+        .collect::<Vec<_>>();
+    assert_eq!(terminals.len(), 1, "{messages:?}");
+    assert!(terminals[0]["result"]["executionContextId"].is_i64());
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("a published frontend response must never restart");
+    };
+    let (trailing, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    assert!(
+        trailing.iter().all(|message| message["id"] != 2_600_082),
+        "{trailing:?}"
+    );
+    ctx.process_async(
+        json!({"id": 2_600_084, "sessionId": session, "method": "Page.createIsolatedWorld",
+        "params": {"frameId": target, "worldName": "published-world"}}),
+    )
+    .await;
+    let current = take_response_by_id(&mut ctx, 2_600_084);
+    let context = current["result"]["executionContextId"].as_i64().unwrap();
+    // Numeric context ids belong to an isolate and can be reused by the new
+    // renderer. Verify that the world actually belongs to the new document.
+    ctx.process_async(json!({
+        "id": 2_600_085, "sessionId": session, "method": "Runtime.evaluate",
+        "params": {"contextId": context, "expression": "location.href", "returnByValue": true}
+    }))
+    .await;
+    let evaluation = take_response_by_id(&mut ctx, 2_600_085);
+    assert_eq!(
+        evaluation["result"]["result"]["value"],
+        fixture.url("/plain?replacement=published-world")
     );
 }
 

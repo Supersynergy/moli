@@ -51,6 +51,12 @@ impl<C> Default for RendererDevToolsSessionLane<C> {
 /// ends when a command first reaches the target agent; asynchronous response
 /// completion is deliberately outside that lifetime so a later resume command
 /// can enter a nested pause loop.
+///
+/// Native frontend responses and Inspector output are committed to the same
+/// renderer journal by their producer. Internal typed completions may be
+/// collected in any order by Browser continuations; their receiver polling
+/// never gates Main admission. Detach barriers remain attachment cleanup,
+/// independent from response delivery.
 pub(crate) struct RendererDevToolsSessionLanes<C> {
     sessions: BTreeMap<RendererDevToolsSessionLaneKey, RendererDevToolsSessionLane<C>>,
     ready_sessions: VecDeque<RendererDevToolsSessionLaneKey>,

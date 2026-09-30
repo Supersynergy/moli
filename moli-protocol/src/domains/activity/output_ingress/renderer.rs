@@ -122,6 +122,16 @@ async fn ingest_renderer_output_publication(
         // owner has since retired, the cursor is still admitted so response
         // fences cannot hang, but its historical records must not be projected
         // into a replacement target or browser context.
+        // Native terminals are replies to frozen frontend calls, not live
+        // Page observations. Retirement may discard historical events but
+        // must still settle replies committed before this stream closed.
+        for record in publication.into_records() {
+            if let RendererOutputItem::NativeTerminal(terminal) = record.into_parts().1 {
+                command_context.protocol_events_mut().extend(
+                    crate::domains::native::project_terminal_for_owner(conn, None, terminal),
+                );
+            }
+        }
         return;
     };
     let records = publication.into_records();
@@ -171,11 +181,28 @@ async fn project_renderer_output_records_for_owner(
     command_context: &mut CommandDispatchContext,
 ) {
     for record in records {
-        let (renderer_cause, mut item) = record.into_parts();
+        let (renderer_cause, item) = record.into_parts();
+        let mut item = match item {
+            RendererOutputItem::NativeTerminal(terminal) => {
+                command_context.protocol_events_mut().extend(
+                    crate::domains::native::project_terminal_for_owner(
+                        conn,
+                        (projection != RendererPublicationProjection::RetiringNetworkAndResponses)
+                            .then_some(owner),
+                        terminal,
+                    ),
+                );
+                continue;
+            }
+            item => item,
+        };
         if !projection.admit_record(&mut item) {
             continue;
         }
         match item {
+            RendererOutputItem::NativeTerminal(_) => {
+                unreachable!("terminals were projected in producer order above")
+            }
             RendererOutputItem::OwnerAction(action) => {
                 // A Page stream can remain bound to its implicit primary owner while a
                 // Runtime command arrives through an attached DevTools session. Owner

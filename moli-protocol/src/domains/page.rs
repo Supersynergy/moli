@@ -56,6 +56,7 @@ use javascript_dialog::*;
 mod capture;
 mod lifecycle;
 mod main_document_commit;
+pub(crate) mod native;
 mod navigation;
 mod output;
 use capture::*;

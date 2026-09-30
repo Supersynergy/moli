@@ -359,7 +359,7 @@ impl RendererInspectorSessionExecutorLocal {
         session
             .outbound
             .register_frontend_response_callback(response);
-        let _post_dispatch_wake = first_dispatch.release_for_dispatch();
+        first_dispatch.release();
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(raw_json.as_bytes()));
         self.target.pause_ref().record_v8_state_update(
             session.agent_token,
@@ -450,7 +450,7 @@ impl RendererInspectorSessionExecutorLocal {
                 .outbound
                 .register_frontend_response_callback(response);
         }
-        let _post_dispatch_wake = first_dispatch.release_for_dispatch();
+        first_dispatch.release();
         v8_session.dispatch_protocol_message(v8::inspector::StringView::from(
             command.raw_json().as_bytes(),
         ));

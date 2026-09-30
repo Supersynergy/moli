@@ -109,6 +109,7 @@ pub enum RendererProtocolObservation {
 pub enum RendererOutputItem {
     OwnerAction(RendererOwnerAction),
     Observation(RendererProtocolObservation),
+    NativeTerminal(super::RendererNativeCommandTerminal),
 }
 
 /// One record in exact producer append order.
@@ -204,7 +205,9 @@ impl PendingRendererOutputRecord {
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::DedicatedWorkerRuntimeInspector),
-            RendererOutputItem::OwnerAction(_) | RendererOutputItem::Observation(_) => None,
+            RendererOutputItem::OwnerAction(_)
+            | RendererOutputItem::Observation(_)
+            | RendererOutputItem::NativeTerminal(_) => None,
         }
     }
 

@@ -222,7 +222,7 @@ fn cached_dom_remote_object_node_for_owner(
         .cloned()
 }
 
-fn cache_dom_remote_object_node_for_owner(
+pub(in crate::domains) fn cache_dom_remote_object_node_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     object_id: String,

@@ -329,10 +329,6 @@ pub(crate) struct RendererInspectorMainFirstDispatchGuard {
     claim_tx: Option<tokio::sync::oneshot::Sender<RendererInspectorMainCommandClaim>>,
 }
 
-pub(crate) struct RendererInspectorMainPostDispatchWakeGuard {
-    ingress: Option<RendererInspectorMainIngress>,
-}
-
 pub(crate) struct RendererInspectorMainOwnerDispatch {
     page_token: RendererPageToken,
     capture_policy: RendererPageStateCapturePolicy,
@@ -375,18 +371,13 @@ impl Drop for RendererInspectorMainFirstDispatchGuard {
 }
 
 impl RendererInspectorMainFirstDispatchGuard {
+    /// Release Main admission at backend entry. A wake only queues an owner
+    /// turn or signals the pause loop; it cannot dispatch another command
+    /// inline, so no separate post-dispatch wake capability is needed.
     pub(crate) fn release(&mut self) {
         self.publish_first_dispatch();
         if self.release_lane() {
             self.ingress.notify_execution_opportunities();
-        }
-    }
-
-    pub(crate) fn release_for_dispatch(&mut self) -> RendererInspectorMainPostDispatchWakeGuard {
-        self.publish_first_dispatch();
-        let has_ready = self.release_lane();
-        RendererInspectorMainPostDispatchWakeGuard {
-            ingress: has_ready.then(|| self.ingress.clone()),
         }
     }
 
@@ -410,14 +401,6 @@ impl RendererInspectorMainFirstDispatchGuard {
             return false;
         };
         self.ingress.finish_first_dispatch(lane, command_id)
-    }
-}
-
-impl Drop for RendererInspectorMainPostDispatchWakeGuard {
-    fn drop(&mut self) {
-        if let Some(ingress) = self.ingress.take() {
-            ingress.notify_execution_opportunities();
-        }
     }
 }
 
@@ -1144,6 +1127,53 @@ mod tests {
     }
 
     #[test]
+    fn retained_internal_reply_does_not_block_queued_or_new_main_commands() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let _first = enqueue(
+            &ingress,
+            agent,
+            Some("session-a"),
+            r#"{"id":1,"method":"Runtime.getProperties"}"#,
+        );
+        let _queued = enqueue(
+            &ingress,
+            agent,
+            Some("session-a"),
+            r#"{"id":2,"method":"Runtime.getProperties"}"#,
+        );
+        let mut first = ingress.claim_for_owner().expect("claim first command");
+        ingress.first_dispatch_guard(&mut first).release();
+        let output = RendererCommandTurnOutput::new(
+            RendererPageReply::Unit,
+            page_state(),
+            RendererRuntimeCommandOutput::default(),
+            None,
+            None,
+        )
+        .expect("native reply");
+        let reply = RendererOwnerReply::AsyncPageCommandRan(Box::new(output));
+        let _new = enqueue(
+            &ingress,
+            agent,
+            Some("session-a"),
+            r#"{"id":3,"method":"Runtime.getProperties"}"#,
+        );
+        // The payload is deliberately still retained while subsequent Main
+        // dispatch proceeds. No receiver acknowledgement is an ingress barrier.
+        let mut queued = ingress.claim_for_owner().expect("queued command resumes");
+        assert!(queued.raw_json().contains(r#""id":2"#));
+        ingress.first_dispatch_guard(&mut queued).release();
+        let mut new = ingress
+            .claim_for_owner()
+            .expect("new command follows queued command");
+        assert!(new.raw_json().contains(r#""id":3"#));
+        ingress.first_dispatch_guard(&mut new).release();
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 0);
+        drop(reply);
+    }
+
+    #[test]
     fn mixed_v8_and_page_agents_share_one_main_session_lane() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
@@ -1152,7 +1182,7 @@ mod tests {
         let _page = ingress.enqueue_protocol_page_command(
             page_token,
             agent,
-            RendererPageCommand::PerformanceMetricSnapshot,
+            RendererPageCommand::ChildFrameTreeSnapshot,
             Some("session-a".to_owned()),
             RendererPageStateCapturePolicy::ProtocolTurn,
         );
@@ -1182,21 +1212,16 @@ mod tests {
             None,
             None,
         )
-        .expect("test Page-agent output")
-        .hold_until_protocol_handoff(ingress.first_dispatch_guard(&mut page));
-        assert!(
-            ingress.claim_for_pause().is_none(),
-            "settled Page output must retain the lane until protocol consumes it"
-        );
-
-        let (_completion, _predecessor) = output.into_completion_and_predecessor();
+        .expect("test Page-agent output");
+        ingress.first_dispatch_guard(&mut page).release();
         let v8 = ingress
             .claim_for_pause()
-            .expect("the V8 command should follow the Page protocol handoff");
+            .expect("the V8 command should follow Page dispatch while its reply is retained");
         assert_eq!(
             v8.nested_dispatch(),
             RendererDevToolsMainNestedDispatch::InspectorSession
         );
+        let (_completion, _predecessor) = output.into_completion_and_predecessor();
     }
 
     #[test]

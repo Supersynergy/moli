@@ -10,6 +10,9 @@ impl PageVm {
             self.flush_page_action_window(barrier)?;
         }
         match command {
+            RendererPageCommand::Native(command) => {
+                Ok(RendererPageReply::NativeCommandReady(Box::new(command.dispatch(self))))
+            }
             RendererPageCommand::Inspector(command) => {
                 self.dispatch_renderer_inspector_command(command)
             }
@@ -853,6 +856,14 @@ impl PageVm {
             RendererPageCommand::SerializeHtml => {
                 Ok(RendererPageReply::OptionalString(Some(self.serialize_html())))
             }
+            RendererPageCommand::SerializeDocument => {
+                // Capture both from the live document in this handler turn.
+                // Browser admission metadata may precede a queued history update.
+                Ok(RendererPageReply::SerializedDocument {
+                    url: self.vm().document_runtime.host_document().url().to_string(),
+                    html: self.serialize_html(),
+                })
+            }
             RendererPageCommand::LayoutMetrics => {
                 Ok(RendererPageReply::LayoutMetrics(self.layout_metrics()?))
             }
@@ -1398,6 +1409,9 @@ fn renderer_page_command_action_barrier(
     command: &RendererPageCommand,
 ) -> Option<moli_action_window::ActionBarrier> {
     match command {
+        // The underlying operation flushes its own barrier. Wrapping it must
+        // not turn a wheel event into an explicit action-window flush.
+        RendererPageCommand::Native(_) => None,
         RendererPageCommand::DispatchMouseEventAtPoint { event_name, .. }
             if event_name == "wheel" =>
         {

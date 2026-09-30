@@ -1,9 +1,15 @@
 mod fence;
 mod identity;
 mod item;
+mod native_response;
+mod response_authority;
 mod transport;
 mod transport_memory;
 mod turn_journal;
+
+pub(crate) use response_authority::{
+    RendererCommandResponseAuthority, RendererCommandResponseLease,
+};
 
 pub use fence::RendererOutputFence;
 pub use identity::{
@@ -15,6 +21,12 @@ pub(crate) use item::PendingRendererOutputRecord;
 pub use item::{
     RendererDocumentTitleChanged, RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
     RendererProtocolObservation,
+};
+pub use native_response::{
+    RendererNativeCommand, RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
+    RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
+    RendererNativeProtocolError, RendererNativeProtocolNotification,
+    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate,
 };
 pub use transport::{
     RendererOutputTransportDiagnostics, RendererOutputTransportMessage,

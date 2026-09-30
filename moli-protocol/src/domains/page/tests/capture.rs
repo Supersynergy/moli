@@ -7,6 +7,98 @@ use serde_json::Value;
 
 mod emulation;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn native_snapshot_reads_live_url_and_html_before_adapter_settlement() {
+    use moli_core::{RendererNativeOperation, RendererNativeProtocolResponse, RendererPageCommand};
+    let mut ctx = TestContext::new();
+    let original_url = "https://snapshot.test/start";
+    load_bc_with_target(&mut ctx, "BID-SNAPSHOT", "TID-SNAPSHOT", original_url);
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse(original_url).unwrap(),
+        "<!doctype html><body>original</body>".to_owned(),
+        None,
+    )
+    .await;
+    let (pending, guard) = ctx.conn.loaded_page_mut_for_protocol_access(None).unwrap()
+        .start_native_frontend_command(1200, None, RendererNativeOperation::new(
+            RendererPageCommand::EvaluateExpression {
+                expression: "history.replaceState(null, '', '#current'); document.body.innerHTML = '<p>snapshot current</p>'".to_owned(),
+                await_promise: false,
+            },
+            |reply| { reply.unwrap(); RendererNativeProtocolResponse::success(json!({})) },
+        )).unwrap();
+    // The renderer is done, but its adapter has not applied the new Page state.
+    // A later handler must capture live document metadata independently.
+    let held_completion = pending.wait().await.unwrap();
+    assert_eq!(
+        ctx.conn
+            .loaded_page_mut_for_protocol_access(None)
+            .unwrap()
+            .final_url()
+            .as_str(),
+        original_url
+    );
+    let commands = [
+        (1201, "Page.captureSnapshot"),
+        (1202, "Page.getFrameTree"),
+        (1203, "Page.getResourceTree"),
+    ]
+    .into_iter()
+    .map(|(id, method)| {
+        let raw = json!({"id": id, "method": method}).to_string();
+        let pending = ctx.conn.try_start_pending_command_dispatch(&raw).unwrap();
+        assert_eq!(pending.kind_name(), "Native");
+        pending
+    })
+    .collect::<Vec<_>>();
+    let mut commands = commands.into_iter();
+    let pending = commands.next().unwrap();
+    let (messages, _) = ctx
+        .complete_command_task_step_for_test(crate::conn::CdpCommandTaskStep::Pending(Box::new(
+            pending,
+        )))
+        .await;
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == 1201)
+        .unwrap();
+    let snapshot = response["result"]["data"].as_str().unwrap();
+    assert!(
+        snapshot.contains("Content-Location: https://snapshot.test/start#current\r\n"),
+        "{snapshot}"
+    );
+    let html = snapshot
+        .split("\r\n\r\n")
+        .nth(2)
+        .unwrap()
+        .split("\r\n--")
+        .next()
+        .unwrap();
+    let html = BASE64_STANDARD.decode(html).unwrap();
+    assert!(
+        String::from_utf8(html)
+            .unwrap()
+            .contains("<p>snapshot current</p>")
+    );
+    for (id, pending) in [1202, 1203].into_iter().zip(commands) {
+        let (messages, _) = ctx
+            .complete_command_task_step_for_test(crate::conn::CdpCommandTaskStep::Pending(
+                Box::new(pending),
+            ))
+            .await;
+        let response = messages.iter().find(|message| message["id"] == id).unwrap();
+        assert_eq!(
+            response["result"]["frameTree"]["frame"]["url"],
+            "https://snapshot.test/start#current"
+        );
+        if id == 1203 {
+            assert!(response["result"]["frameTree"]["resources"].is_array());
+        }
+    }
+    assert!(guard.cancel_or_published().await.is_some());
+    drop(held_completion);
+}
+
 /// cdp.page: captureScreenshot – invalid image format
 #[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_bad_format() {

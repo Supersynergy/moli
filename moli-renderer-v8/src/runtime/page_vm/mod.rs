@@ -1786,6 +1786,23 @@ impl PageVm {
         self.vm_mut().settle_renderer_output_publication()
     }
 
+    /// Nested Main dispatch cannot end the suspended outer command scope.
+    /// Drain its ready prefix, materialize native DOM facts, and use the same
+    /// Inspector-state resolution as ordinary owner settlement before replying.
+    pub(super) fn publish_nested_command_output_prefix(
+        &mut self,
+    ) -> Option<super::RendererOutputFence> {
+        self.vm().append_live_command_output_prefix();
+        self.absorb_pending_dom_mutations_into_output_journal();
+        self.record_document_title_change_if_needed();
+        let publication = self.vm_mut().settle_renderer_output_prefix()?;
+        let journal = self.vm().renderer_command_output_journal();
+        let cursor = publication.cursor();
+        journal
+            .publish_resolved_prefix(publication)
+            .then(|| journal.declare_fence(cursor))
+    }
+
     fn record_document_title_change_if_needed(&mut self) {
         // A PageVm can exist without a DevTools-facing Page residence in
         // standalone embeddings and owner-boundary unit tests. Lifecycle
@@ -3893,11 +3910,20 @@ impl PageVm {
             is_on_named_owner_execution_lane_for(&self.local_executor),
             "document URL refresh must execute on the matching named owner lane"
         );
+        self.refresh_document_url_from_location();
         self.capture_page_state_with_policy(capture_policy)
+    }
+
+    /// A debugger callback already holds the document isolate. The nested
+    /// handler can capture native metadata/reports, but must not read JS
+    /// location objects or snapshot globals through another isolate borrow.
+    pub(super) fn capture_nested_page_state(&mut self) -> Result<PageVmStateCapture> {
+        self.capture_page_state_with_policy(super::RendererPageStateCapturePolicy::ProtocolTurn)
     }
 
     #[cfg(test)]
     fn capture_page_state(&mut self) -> Result<PageVmStateCapture> {
+        self.refresh_document_url_from_location();
         self.capture_page_state_with_policy(super::RendererPageStateCapturePolicy::FullReport)
     }
 
@@ -3908,7 +3934,6 @@ impl PageVm {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
         self.absorb_parser_no_execution_runs();
-        self.refresh_document_url_from_location();
         let globals_started = profile_enabled.then(Instant::now);
         match capture_policy {
             super::RendererPageStateCapturePolicy::FullReport => {
