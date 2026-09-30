@@ -134,6 +134,7 @@ fn html_preload_scanner_stops_module_preloads_after_import_map() {
         r#"
                 <script type="module" src="/before.mjs"></script>
                 <script type="importmap">{"integrity": {}}</script>
+                <link rel="modulepreload" href="/after-preload.mjs">
                 <script type="module" src="/after.mjs"></script>
                 <script src="/classic.js"></script>
             "#,
@@ -1974,4 +1975,24 @@ fn buffered_preload_scanner_clears_nonnonceable_script_nonces() {
         vec![Some("abc"), None, None, None, None],
         "speculative requests must use the same nonceability gate as parser execution"
     );
+}
+
+#[test]
+fn html_preload_scanner_preserves_modulepreload_before_module_script() {
+    let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+    let requests = collect_preloadable_external_script_requests_from_html(
+        &final_url,
+        r#"
+                <link rel="modulepreload" href="/entry.mjs" integrity="sha384-invalid">
+                <script type="module" src="/entry.mjs"></script>
+            "#,
+    );
+
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].url, requests[1].url);
+    assert_eq!(
+        requests[0].fetch_metadata.integrity.as_deref(),
+        Some("sha384-invalid")
+    );
+    assert_eq!(requests[1].fetch_metadata.integrity, None);
 }
