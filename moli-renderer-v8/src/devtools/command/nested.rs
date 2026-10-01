@@ -39,6 +39,7 @@ impl RendererPageCommand {
             | Self::DocumentGeometryForNode { .. }
             | Self::DocumentHitTest { .. }
             | Self::NodeHasGeometryForBackendNodeId { .. }
+            | Self::DocumentNodeExistsForBackendNodeId { .. }
             | Self::DocumentNodeSnapshotForBackendNodeId { .. }
             | Self::DocumentNodeSnapshotForNodeInInspectorSession { .. }
             | Self::DocumentNodeSnapshotForDocument { .. }
@@ -150,11 +151,11 @@ impl RendererPageCommand {
             | Self::RuntimeCollectGarbage
             | Self::StopDocumentLifecycle
             | Self::SetInlineStyleSheetTextForStyleSheetId { .. }
-            | Self::ScrollBackendNodeIntoViewIfNeeded { .. }
-            | Self::RemoveDocumentBackendNodeId { .. }
-            | Self::MutateDocumentBackendNodeAttribute { .. }
+            | Self::ScrollNodeIntoViewIfNeeded { .. }
+            | Self::RemoveDocumentNode { .. }
+            | Self::MutateDocumentNodeAttribute { .. }
             | Self::EditDocumentNode { .. }
-            | Self::FocusDocumentBackendNode { .. }
+            | Self::FocusDocumentNode { .. }
             | Self::TriggerAutofill(..)
             | Self::ResetNavigationHistory
             | Self::SetFileInputFilesForBackendNodeId { .. }

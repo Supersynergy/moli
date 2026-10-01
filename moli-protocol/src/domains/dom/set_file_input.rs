@@ -11,7 +11,7 @@ use super::node_references::{NodeReferenceParams, devtools_node_reference_from_i
 use super::resolve::{
     DevToolsDomCommandTaskStep, DomCommandOutput, DomCommandTaskStep, PendingDomCommandDispatch,
     PendingDomCommandKind, PendingDomCommandStartError, devtools_dom_command_task_complete,
-    dom_object_reference_id_for_owner, start_document_node_snapshot_for_reference,
+    dom_object_reference_id_for_owner,
 };
 use crate::automation::{
     DevToolsDomNodeReference, DevToolsError, DevToolsErrorKind, DevToolsRemoteHandleId,
@@ -146,10 +146,10 @@ pub(super) fn complete_preflight(
         out.push_error(-32000, "Could not find node with given id");
         return DomCommandTaskStep::Complete;
     };
-    let preflight = page.finish_document_node_snapshot_for_backend_node_id(completion);
+    let preflight = page.finish_document_node_exists(completion);
     match preflight {
-        Ok(Some(_)) => {}
-        Ok(None) => {
+        Ok(true) => {}
+        Ok(false) => {
             out.push_error(-32000, "Could not find node with given id");
             return DomCommandTaskStep::Complete;
         }
@@ -472,10 +472,12 @@ fn start_set_file_input_files_preflight_dispatch(
     file_paths: Vec<String>,
     append: bool,
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
-    let DevToolsDomNodeReference::BackendNodeId(_) = reference else {
+    let DevToolsDomNodeReference::BackendNodeId(backend_node_id) = reference else {
         return Err(PendingDomCommandStartError::node_not_found());
     };
-    let pending = start_document_node_snapshot_for_reference(page, reference.clone(), 0, false)?;
+    let pending = page
+        .start_document_node_exists_for_backend_node_id(backend_node_id)
+        .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),

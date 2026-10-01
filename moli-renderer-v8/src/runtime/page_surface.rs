@@ -4830,8 +4830,8 @@ pub enum RendererPageCommand {
         style_sheet_id: String,
         text: String,
     },
-    ScrollBackendNodeIntoViewIfNeeded {
-        backend_node_id: u32,
+    ScrollNodeIntoViewIfNeeded {
+        reference: RendererDomNodeReference,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     },
     ClientRectForBackendNodeId {
@@ -4850,19 +4850,19 @@ pub enum RendererPageCommand {
     NodeHasGeometryForBackendNodeId {
         backend_node_id: u32,
     },
-    RemoveDocumentBackendNodeId {
-        backend_node_id: u32,
+    RemoveDocumentNode {
+        reference: RendererDomNodeReference,
     },
-    MutateDocumentBackendNodeAttribute {
-        backend_node_id: u32,
+    MutateDocumentNodeAttribute {
+        reference: RendererDomNodeReference,
         mutation: RendererDomAttributeMutation,
     },
     EditDocumentNode {
         inspector_session_id: Option<String>,
         edit: RendererDomEdit,
     },
-    FocusDocumentBackendNode {
-        backend_node_id: u32,
+    FocusDocumentNode {
+        reference: RendererDomNodeReference,
     },
     TriggerAutofill(RendererAutofillTriggerRequest),
     ResetNavigationHistory,
@@ -4870,6 +4870,9 @@ pub enum RendererPageCommand {
         backend_node_id: u32,
         files: Vec<crate::dom::native::SelectedFile>,
         append: bool,
+    },
+    DocumentNodeExistsForBackendNodeId {
+        backend_node_id: u32,
     },
     DocumentNodeSnapshotForBackendNodeId {
         backend_node_id: u32,
@@ -5568,6 +5571,9 @@ impl RendererPageCommand {
             Self::ChildFrameDocumentRootNodeReference { .. } => {
                 Some("ChildFrameDocumentRootNodeReference")
             }
+            Self::DocumentNodeExistsForBackendNodeId { .. } => {
+                Some("DocumentNodeExistsForBackendNodeId")
+            }
             Self::DocumentNodeSnapshotForBackendNodeId { .. } => {
                 Some("DocumentNodeSnapshotForBackendNodeId")
             }
@@ -5639,14 +5645,12 @@ impl RendererPageCommand {
             Self::PublishLayout => Some("PublishLayout"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
             Self::CaptureScreencastFrame(_) => Some("CaptureScreencastFrame"),
-            Self::ScrollBackendNodeIntoViewIfNeeded { .. } => {
-                Some("ScrollBackendNodeIntoViewIfNeeded")
-            }
+            Self::ScrollNodeIntoViewIfNeeded { .. } => Some("ScrollNodeIntoViewIfNeeded"),
             Self::ClientRectForBackendNodeId { .. } => Some("ClientRectForBackendNodeId"),
             Self::DocumentGeometryForNode { .. } => Some("DocumentGeometryForNode"),
             Self::DocumentHitTest { .. } => Some("DocumentHitTest"),
             Self::NodeHasGeometryForBackendNodeId { .. } => Some("NodeHasGeometryForBackendNodeId"),
-            Self::RemoveDocumentBackendNodeId { .. } => Some("RemoveDocumentBackendNodeId"),
+            Self::RemoveDocumentNode { .. } => Some("RemoveDocumentNode"),
             Self::EditDocumentNode { .. } => Some("EditDocumentNode"),
             Self::TriggerAutofill(_) => Some("TriggerAutofill"),
             Self::ComputedStyleProperties { .. } => Some("ComputedStyleProperties"),

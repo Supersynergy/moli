@@ -1920,6 +1920,23 @@ impl PageVm {
         Ok(snapshot)
     }
 
+    pub(crate) fn document_node_exists_for_backend_node_id(
+        &mut self,
+        backend_node_id: u32,
+    ) -> Result<bool> {
+        let Some(key) = self.current_renderer_backend_node_key_for_id(backend_node_id) else {
+            return Ok(false);
+        };
+        // The registry has validated physical node lifetime and document ownership.
+        // Inspector identities also need their generated representation to exist.
+        if key.inspector_identity.is_none() {
+            return Ok(true);
+        }
+        Ok(self
+            .document_node_snapshot_for_backend_node_id(backend_node_id, 0, false)?
+            .is_some())
+    }
+
     pub(crate) fn document_node_snapshot_for_backend_node_id(
         &mut self,
         backend_node_id: u32,
@@ -3560,12 +3577,12 @@ impl PageVm {
             .scroll_live_node_handle_into_view_if_needed(handle, rect)
     }
 
-    pub(crate) fn scroll_backend_node_into_view_if_needed(
+    pub(crate) fn scroll_node_into_view_if_needed(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     ) -> Result<RendererScrollIntoViewResult> {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return Ok(RendererScrollIntoViewResult::NodeNotFound);
         };
         self.vm_mut()
@@ -4035,19 +4052,26 @@ impl PageVm {
             .unwrap_or(false))
     }
 
-    pub(crate) fn remove_document_backend_node_id(&mut self, backend_node_id: u32) -> Result<bool> {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
-            return Ok(false);
+    pub(crate) fn remove_document_node(
+        &mut self,
+        reference: RendererDomNodeReference,
+    ) -> Result<Option<bool>> {
+        let Some(backend_node_id) = self.backend_node_id_for_document_node_reference(reference)
+        else {
+            return Ok(None);
         };
-        self.remove_document_node_id(handle)
+        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+            return Ok(Some(false));
+        };
+        self.remove_document_node_id(handle).map(Some)
     }
 
-    pub(crate) fn mutate_document_backend_node_attribute(
+    pub(crate) fn mutate_document_node_attribute(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         mutation: RendererDomAttributeMutation,
     ) -> Result<RendererDomAttributeMutationOutcome> {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return Ok(RendererDomAttributeMutationOutcome::NodeNotFound);
         };
         self.vm_mut()
@@ -4225,11 +4249,11 @@ impl PageVm {
         })
     }
 
-    pub(crate) fn focus_document_backend_node(
+    pub(crate) fn focus_document_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
     ) -> Result<RendererDomFocusOutcome> {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return Ok(RendererDomFocusOutcome::NodeNotFound);
         };
         self.vm_mut().focus_document_node(handle)

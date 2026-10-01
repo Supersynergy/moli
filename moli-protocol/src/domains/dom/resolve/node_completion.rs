@@ -38,15 +38,6 @@ pub(super) fn complete_pending_dom_command_result(
     let completion = *completed_work;
 
     let result = match completed.kind {
-        PendingDomCommandKind::ResolveFrontendNodeForRemoveNode { frontend_node_id } => {
-            return complete_frontend_node_binding_for_remove_node_result(
-                conn,
-                completed.command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-            );
-        }
         PendingDomCommandKind::ResolveFrontendNodeForResolveNode {
             frontend_node_id,
             requested_execution_context_id,
@@ -62,19 +53,6 @@ pub(super) fn complete_pending_dom_command_result(
                 requested_execution_context_id,
                 object_group,
                 top_frame_id,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForScrollIntoViewIfNeeded {
-            frontend_node_id,
-            rect,
-        } => {
-            return complete_frontend_node_binding_for_scroll_into_view_if_needed_result(
-                conn,
-                completed.command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                rect,
             );
         }
         PendingDomCommandKind::ResolveBidiNodeForSetFileInputFiles {
@@ -151,14 +129,14 @@ pub(super) fn complete_pending_dom_command_result(
             )
             .map(AutomationResult::DomGeometry)
         }
-        PendingDomCommandKind::RendererBackendNodeScrollIntoViewIfNeeded => {
+        PendingDomCommandKind::RendererNodeScrollIntoViewIfNeeded => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
                 return devtools_dom_command_task_complete(Err(DevToolsError::new(
                     DevToolsErrorKind::Internal,
                     "NoDocumentLoaded",
                 )));
             };
-            complete_renderer_backend_node_scroll_into_view_if_needed_result(page, completion)
+            complete_renderer_node_scroll_into_view_if_needed_result(page, completion)
                 .map(|()| AutomationResult::Empty)
         }
         PendingDomCommandKind::PushNodesByBackendIdsToFrontend {
@@ -234,6 +212,26 @@ pub(super) fn complete_pending_dom_command_result(
             };
             complete_query_selector_set_child_nodes_live_result(page, completion, multiple)
                 .map(AutomationResult::QuerySelector)
+        }
+        PendingDomCommandKind::RemoveNode => {
+            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
+                return devtools_dom_command_task_complete(Err(DevToolsError::new(
+                    DevToolsErrorKind::Internal,
+                    "NoDocumentLoaded",
+                )));
+            };
+            match page.finish_remove_document_node_reference(completion) {
+                Ok(Some(true)) => Ok(AutomationResult::Empty),
+                Ok(Some(false)) => Err(DevToolsError::new(
+                    DevToolsErrorKind::Internal,
+                    "Could not remove node",
+                )),
+                Ok(None) => Err(devtools_dom_node_not_found_error()),
+                Err(error) => Err(DevToolsError::new(
+                    DevToolsErrorKind::Internal,
+                    format!("Could not remove node: {error}"),
+                )),
+            }
         }
         PendingDomCommandKind::GetAttributesLive => {
             let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
@@ -809,91 +807,6 @@ where
     }
 }
 
-pub(super) fn complete_frontend_node_binding_for_remove_node(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    _frontend_node_id: u32,
-    out: &mut DomCommandOutput,
-) -> DomCommandTaskStep {
-    complete_frontend_node_binding_followup(
-        conn,
-        command_id,
-        owner,
-        completion,
-        out,
-        |page, reference| {
-            start_remove_document_node_for_reference(page, reference)
-                .map(|pending| (pending, PendingDomCommandKind::RemoveNode))
-        },
-    )
-}
-
-pub(super) fn complete_frontend_node_binding_for_remove_node_result(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    _frontend_node_id: u32,
-) -> DevToolsDomCommandTaskStep {
-    complete_frontend_node_binding_followup_result(
-        conn,
-        command_id,
-        owner,
-        completion,
-        |page, reference| {
-            start_remove_document_node_for_reference(page, reference)
-                .map(|pending| (pending, PendingDomCommandKind::RemoveNode))
-        },
-    )
-}
-
-pub(super) fn complete_frontend_node_binding_for_focus(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    _frontend_node_id: u32,
-    out: &mut DomCommandOutput,
-) -> DomCommandTaskStep {
-    complete_frontend_node_binding_followup(
-        conn,
-        command_id,
-        owner,
-        completion,
-        out,
-        |page, reference| {
-            start_focus_document_node_for_reference(page, reference).map(|pending| {
-                (
-                    pending,
-                    PendingDomCommandKind::Focus {
-                        missing_node_message: "Could not find node with given id",
-                    },
-                )
-            })
-        },
-    )
-}
-
-pub(super) fn complete_frontend_node_binding_for_mutate_attribute(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    mutation: RendererDomAttributeMutation,
-    out: &mut DomCommandOutput,
-) -> DomCommandTaskStep {
-    complete_frontend_node_binding_followup(
-        conn,
-        command_id,
-        owner,
-        completion,
-        out,
-        move |page, reference| start_mutate_document_node_for_reference(page, reference, mutation),
-    )
-}
-
 pub(super) fn start_resolve_node_for_bound_reference(
     page: &Page,
     renderer_inspector_session_id: Option<String>,
@@ -980,42 +893,6 @@ pub(super) fn complete_frontend_node_binding_for_resolve_node_result(
                 top_frame_id,
             )
         },
-    )
-}
-
-pub(super) fn complete_frontend_node_binding_for_scroll_into_view_if_needed(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    _frontend_node_id: u32,
-    rect: Option<DomScrollIntoViewRect>,
-    out: &mut DomCommandOutput,
-) -> DomCommandTaskStep {
-    complete_frontend_node_binding_followup(
-        conn,
-        command_id,
-        owner,
-        completion,
-        out,
-        |page, reference| start_scroll_into_view_for_reference(page, reference, rect),
-    )
-}
-
-pub(super) fn complete_frontend_node_binding_for_scroll_into_view_if_needed_result(
-    conn: &mut CdpConnection,
-    command_id: Option<u64>,
-    owner: &CommandOwnerScope,
-    completion: CompletedPageCommand,
-    _frontend_node_id: u32,
-    rect: Option<DomScrollIntoViewRect>,
-) -> DevToolsDomCommandTaskStep {
-    complete_frontend_node_binding_followup_result(
-        conn,
-        command_id,
-        owner,
-        completion,
-        |page, reference| start_scroll_into_view_for_reference(page, reference, rect),
     )
 }
 
@@ -1606,7 +1483,7 @@ pub(super) fn complete_scroll_into_view_if_needed_object_reference_result(
     complete_scroll_into_view_result(page.finish_scroll_node_into_view_if_needed(completion))
 }
 
-pub(super) fn complete_renderer_backend_node_scroll_into_view_if_needed(
+pub(super) fn complete_renderer_node_scroll_into_view_if_needed(
     page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
@@ -1627,7 +1504,7 @@ pub(super) fn complete_renderer_backend_node_scroll_into_view_if_needed(
     DomCommandTaskStep::Complete
 }
 
-pub(super) fn complete_renderer_backend_node_scroll_into_view_if_needed_result(
+pub(super) fn complete_renderer_node_scroll_into_view_if_needed_result(
     page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<(), DevToolsError> {

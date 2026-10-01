@@ -1,5 +1,5 @@
 //! Renderer-local DOM edits finish through the same channel as DOM queries.
-//! Node-id lookups are continuations of the handler, not Browser round trips.
+//! Scoped node references are resolved by the renderer operation before editing.
 
 use super::*;
 
@@ -20,22 +20,22 @@ pub(super) fn prepare(
         DomAction::RemoveNode => {
             let params =
                 build_cdp_remove_node_command(conn, cmd)?.ok_or_else(StartError::invalid_params)?;
-            // The first step only resolves a native node binding, but removal
-            // enters V8. Keep the complete chain on its owner turn; agent-only
-            // operations below inherit their backend entry requirement.
-            Ok(with_backend(session, params.reference, |backend_node_id| {
-                Operation::new(
-                    Command::RemoveDocumentBackendNodeId { backend_node_id },
-                    |reply| match reply {
-                        Ok(Reply::Bool(true)) => Response::success(json!({})),
-                        Ok(Reply::Bool(false)) => Response::error(-32000, "Could not remove node"),
-                        Err(error) => {
-                            Response::error(-32000, format!("Could not remove node: {error}"))
-                        }
-                        _ => unreachable!("DOM remove node reply"),
-                    },
-                )
-            }))
+            Ok(Operation::new(
+                Command::RemoveDocumentNode {
+                    reference: params.reference.into_renderer_reference(session),
+                },
+                |reply| match reply {
+                    Ok(Reply::OptionalBool(Some(true))) => Response::success(json!({})),
+                    Ok(Reply::OptionalBool(Some(false))) => {
+                        Response::error(-32000, "Could not remove node")
+                    }
+                    Ok(Reply::OptionalBool(None)) => node_not_found(),
+                    Err(error) => {
+                        Response::error(-32000, format!("Could not remove node: {error}"))
+                    }
+                    _ => unreachable!("DOM remove node reply"),
+                },
+            ))
         }
         DomAction::Focus => {
             let params: NodeReferenceParams = cmd
@@ -62,12 +62,12 @@ pub(super) fn prepare(
                 } else {
                     "No node found for given backend id"
                 };
-                Ok(with_backend(session, reference, move |backend_node_id| {
-                    Operation::new(
-                        Command::FocusDocumentBackendNode { backend_node_id },
-                        move |reply| focus(reply, missing),
-                    )
-                }))
+                Ok(Operation::new(
+                    Command::FocusDocumentNode {
+                        reference: reference.into_renderer_reference(session),
+                    },
+                    move |reply| focus(reply, missing),
+                ))
             }
         }
         DomAction::SetAttributeValue | DomAction::RemoveAttribute => {
@@ -96,18 +96,13 @@ pub(super) fn prepare(
                 )
             };
             let id = id.ok_or_else(StartError::invalid_params)?;
-            Ok(with_backend(
-                session,
-                DevToolsDomNodeReference::FrontendNodeId(id),
-                move |backend_node_id| {
-                    Operation::new(
-                        Command::MutateDocumentBackendNodeAttribute {
-                            backend_node_id,
-                            mutation,
-                        },
-                        attribute,
-                    )
+            Ok(Operation::new(
+                Command::MutateDocumentNodeAttribute {
+                    reference: DevToolsDomNodeReference::FrontendNodeId(id)
+                        .into_renderer_reference(session),
+                    mutation,
                 },
+                attribute,
             ))
         }
         DomAction::MoveTo
@@ -143,15 +138,13 @@ pub(super) fn prepare(
                     params.reference.backend_node_id,
                 )
                 .ok_or_else(StartError::node_not_found)?;
-                Ok(with_backend(session, reference, move |backend_node_id| {
-                    Operation::new(
-                        Command::ScrollBackendNodeIntoViewIfNeeded {
-                            backend_node_id,
-                            rect,
-                        },
-                        scroll,
-                    )
-                }))
+                Ok(Operation::new(
+                    Command::ScrollNodeIntoViewIfNeeded {
+                        reference: reference.into_renderer_reference(session),
+                        rect,
+                    },
+                    scroll,
+                ))
             }
         }
         DomAction::GetNodeForLocation => {

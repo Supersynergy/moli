@@ -51,36 +51,6 @@ pub(super) fn complete_pending_dom_command(
                 out,
             );
         }
-        PendingDomCommandKind::ResolveFrontendNodeForRemoveNode { frontend_node_id } => {
-            return complete_frontend_node_binding_for_remove_node(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForFocus { frontend_node_id } => {
-            return complete_frontend_node_binding_for_focus(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForMutateAttribute { mutation } => {
-            return complete_frontend_node_binding_for_mutate_attribute(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                mutation,
-                out,
-            );
-        }
         PendingDomCommandKind::ResolveFrontendNodeForResolveNode {
             frontend_node_id,
             requested_execution_context_id,
@@ -96,20 +66,6 @@ pub(super) fn complete_pending_dom_command(
                 requested_execution_context_id,
                 object_group,
                 top_frame_id,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForScrollIntoViewIfNeeded {
-            frontend_node_id,
-            rect,
-        } => {
-            return complete_frontend_node_binding_for_scroll_into_view_if_needed(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                rect,
                 out,
             );
         }
@@ -161,11 +117,14 @@ pub(super) fn complete_pending_dom_command(
                 }
             }
         }
-        PendingDomCommandKind::RemoveNode => match page.finish_remove_document_node(completion) {
-            Ok(true) => out.push_success(),
-            Ok(false) => out.push_error(-32000, "Could not remove node"),
-            Err(error) => out.push_error(-32000, format!("Could not remove node: {error}")),
-        },
+        PendingDomCommandKind::RemoveNode => {
+            match page.finish_remove_document_node_reference(completion) {
+                Ok(Some(true)) => out.push_success(),
+                Ok(Some(false)) => out.push_error(-32000, "Could not remove node"),
+                Ok(None) => out.push_error(-32000, "Could not find node with given id"),
+                Err(error) => out.push_error(-32000, format!("Could not remove node: {error}")),
+            }
+        }
         PendingDomCommandKind::SetFileInputFilesPreflight {
             reference,
             file_paths,
@@ -276,10 +235,8 @@ pub(super) fn complete_pending_dom_command(
                 Err(error) => out.push_error(-32000, error.message),
             }
         }
-        PendingDomCommandKind::RendererBackendNodeScrollIntoViewIfNeeded => {
-            return complete_renderer_backend_node_scroll_into_view_if_needed(
-                page, completion, out,
-            );
+        PendingDomCommandKind::RendererNodeScrollIntoViewIfNeeded => {
+            return complete_renderer_node_scroll_into_view_if_needed(page, completion, out);
         }
         PendingDomCommandKind::PushNodesByBackendIdsToFrontend {
             backend_node_ids,
@@ -552,11 +509,7 @@ pub(super) fn complete_pending_dom_command(
         | PendingDomCommandKind::DiscardSearchResultsLive
         | PendingDomCommandKind::SetNodeStackTracesEnabled
         | PendingDomCommandKind::GetNodeStackTraces
-        | PendingDomCommandKind::ResolveFrontendNodeForRemoveNode { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForFocus { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForMutateAttribute { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForResolveNode { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForScrollIntoViewIfNeeded { .. }
         | PendingDomCommandKind::ResolveBidiNodeForSetFileInputFiles { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForSetFileInputFiles { .. } => {
             unreachable!(
