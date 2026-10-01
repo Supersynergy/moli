@@ -2180,3 +2180,5 @@ mod response_blob_mime;
 mod intersection_target_order;
 
 mod media_device_interfaces;
+
+mod dom_rect_structured_clone;
