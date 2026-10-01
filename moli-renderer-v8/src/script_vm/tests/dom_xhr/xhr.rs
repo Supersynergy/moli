@@ -3451,6 +3451,96 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn window_xhr_borrowed_open_uses_object_document_base_url() {
+    let server = StaticHttpServer::spawn(4).await;
+    let base_url = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        base_url.join("page.html").unwrap().as_str(),
+        &loader,
+    );
+    vm.exec(
+        r#"
+const parentBase = document.head.appendChild(document.createElement('base'));
+parentBase.href = '/parent/';
+globalThis.xhrBaseFrame = document.createElement('iframe');
+xhrBaseFrame.srcdoc = '<!doctype html><head><base href="/child/"></head><body></body>';
+document.body.appendChild(xhrBaseFrame);
+"#,
+        None,
+    )
+    .expect("parent and child XHR base fixtures should be installed");
+    drain_pending_page_child_frame_work_for_test(&mut vm).await;
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("iframe should have a live realm");
+    vm.exec(
+        r#"
+const child = xhrBaseFrame.contentWindow;
+globalThis.parentXhrOpen = XMLHttpRequest.prototype.open;
+globalThis.childXhrOpen = child.XMLHttpRequest.prototype.open;
+globalThis.parentBaseXhr = new XMLHttpRequest();
+globalThis.childBaseXhr = new child.XMLHttpRequest();
+globalThis.xhrBaseLoads = [];
+globalThis.xhrBaseError = '';
+function sendBaseProbe(xhr, open, input) {
+  open.call(xhr, 'GET', input);
+  xhr.onload = () => xhrBaseLoads.push(input);
+  xhr.onerror = () => { xhrBaseError = input; };
+  xhr.send();
+}
+sendBaseProbe(childBaseXhr, parentXhrOpen, 'parent-caller');
+sendBaseProbe(parentBaseXhr, childXhrOpen, 'parent-caller');
+"#,
+        None,
+    )
+    .expect("parent caller should open XHRs with borrowed methods");
+    vm.eval_in_child_default_context(
+        child_context_id,
+        r#"
+const parent = window.parent;
+function sendChildBaseProbe(xhr, open) {
+  open.call(xhr, 'GET', 'child-caller');
+  xhr.onload = () => parent.xhrBaseLoads.push('child-caller');
+  xhr.onerror = () => { parent.xhrBaseError = 'child-caller'; };
+  xhr.send();
+}
+sendChildBaseProbe(new parent.XMLHttpRequest(), XMLHttpRequest.prototype.open);
+sendChildBaseProbe(new XMLHttpRequest(), parent.XMLHttpRequest.prototype.open);
+'started';
+"#,
+    )
+    .expect("child caller should open XHRs with borrowed methods");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "xhrBaseError || String(xhrBaseLoads.length)",
+        "4",
+        "XHR object document base probe",
+    )
+    .await;
+    let mut requests = server.finish().await;
+    requests.sort_by(|left, right| left.target.cmp(&right.target));
+    let targets: Vec<_> = requests
+        .iter()
+        .map(|request| request.target.as_str())
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            "/child/child-caller",
+            "/child/parent-caller",
+            "/parent/child-caller",
+            "/parent/parent-caller",
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
     let server = StaticHttpServer::spawn(1).await;
     let base_url = server.base_url();

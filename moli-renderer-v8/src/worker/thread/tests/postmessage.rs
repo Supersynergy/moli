@@ -1951,7 +1951,12 @@ async fn worker_origin_is_replaceable_across_worker_global_kinds() {
             "https://origin.test/worker.js",
             "https://origin.test",
         ),
-        (dedicated, "data:text/javascript,", "null"),
+        (dedicated.clone(), "data:text/javascript,", "null"),
+        (
+            dedicated,
+            "blob:https://origin.test/worker-script",
+            "https://origin.test",
+        ),
         (
             super::super::WorkerGlobalKind::Shared {
                 name: "origin".to_owned(),
@@ -1978,6 +1983,14 @@ async fn worker_origin_is_replaceable_across_worker_global_kinds() {
             try { callback(); } catch (error) { return error instanceof TypeError; }
             return false;
         }
+        function checkRequestReferrer() {
+            const allowed = 'https://origin.test/referrer';
+            const expected = expectedOrigin === 'null' ? 'about:client' : allowed;
+            check(new Request('https://origin.test/resource', {referrer: allowed}).referrer === expected,
+                  'Request referrer uses the internal worker origin');
+            check(new Request('https://origin.test/resource', {referrer: 'https://other.test/referrer'}).referrer === 'about:client',
+                  'Request rejects a cross-origin referrer');
+        }
         const descriptor = Object.getOwnPropertyDescriptor(WorkerGlobalScope.prototype, 'origin');
         check(typeof descriptor?.get === 'function' && typeof descriptor.set === 'function', 'prototype accessor');
         check(descriptor.enumerable && descriptor.configurable, 'accessor flags');
@@ -1985,6 +1998,7 @@ async fn worker_origin_is_replaceable_across_worker_global_kinds() {
         check(descriptor.get.name === 'get origin' && descriptor.set.name === 'set origin', 'accessor names');
         check(!Object.hasOwn(self, 'origin'), 'no initial own origin');
         check(self.origin === expectedOrigin && location.origin === expectedOrigin, 'initial origin');
+        checkRequestReferrer();
         check(descriptor.get.call(null) === expectedOrigin && descriptor.get.call(undefined) === expectedOrigin, 'default getter receiver');
 
         const replacement = { [Symbol.toPrimitive]() { throw new Error('must not convert'); } };
@@ -1992,6 +2006,10 @@ async fn worker_origin_is_replaceable_across_worker_global_kinds() {
         const own = Object.getOwnPropertyDescriptor(self, 'origin');
         check(own.value === replacement && own.writable && own.enumerable && own.configurable, 'replacement descriptor');
         check(descriptor.get.call(self) === expectedOrigin && location.origin === expectedOrigin, 'internal origin survives replacement');
+        checkRequestReferrer();
+        self.origin = 'https://other.test';
+        check(self.origin === 'https://other.test', 'replace with a different origin');
+        checkRequestReferrer();
         const symbol = Symbol('replacement');
         (() => { 'use strict'; self.origin = symbol; })();
         check(self.origin === symbol, 'strict assignment preserves value');
@@ -2021,6 +2039,7 @@ async fn worker_origin_is_replaceable_across_worker_global_kinds() {
         Object.defineProperty(self, 'origin', {value: 'locked', writable: false, enumerable: true, configurable: false});
         check(throwsTypeError(() => descriptor.set.call(self, 'new')), 'failed replacement throws');
         check(self.origin === 'locked' && descriptor.get.call(self) === expectedOrigin, 'failed replacement preserves values');
+        checkRequestReferrer();
     "#;
     for (kind, script_url, expected_origin) in cases {
         let (bootstrap_tx, mut bootstrap_rx) = tokio::sync::mpsc::unbounded_channel();
