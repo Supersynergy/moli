@@ -348,3 +348,36 @@ fn geometry_exposes_svg_point_as_a_legacy_window_alias() {
 "#).expect("SVGPoint should alias the native DOMPoint interface");
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn request_relative_urls_follow_live_document_base_urls() {
+    let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.createElement('html');
+  html.appendChild(document.createElement('head'));
+  html.appendChild(document.createElement('body'));
+  document.appendChild(html);
+  const base = document.createElement('base');
+  (document.head || document.documentElement).appendChild(base);
+  const checks = [];
+  for (const href of ['/first/', 'https://other.test/second/', '/third/']) {
+    base.href = href;
+    for (const input of ['item', '../item?q#f', '?q', '#f']) {
+      checks.push(new Request(input).url === new URL(input, document.baseURI).href);
+    }
+    checks.push(new Request('https://absolute.test/path').url === 'https://absolute.test/path');
+  }
+  base.remove();
+  checks.push(new Request('item').url === new URL('item', document.baseURI).href);
+  return JSON.stringify(checks);
+})()
+"#,
+        )
+        .expect("Request base URL probe should evaluate");
+    let checks: Vec<bool> = serde_json::from_str(&result).unwrap();
+    assert_eq!(checks.len(), 16);
+    assert!(checks.iter().all(|check| *check), "{result}");
+}

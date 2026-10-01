@@ -358,8 +358,12 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
                     .map(|(_, url)| url)
             })
             .unwrap_or_else(|| {
-                let (_, document_url, _) = effective_subresource_request_scope(scope, host, None);
-                document_url
+                let (_, base_url, owner) = effective_subresource_request_scope(scope, host, None);
+                if matches!(owner, crate::native_bridge::OwnerDispatchScope::Top) {
+                    host.document_base_url_for_handle(host.document_handle())
+                } else {
+                    base_url
+                }
             });
         resolve_context_url(&document_url, input, None)
             .map(|url| url.to_string())
