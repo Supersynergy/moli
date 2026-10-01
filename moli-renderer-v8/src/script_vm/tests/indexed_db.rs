@@ -5810,3 +5810,51 @@ fn indexed_db_key_path_reads_iterator_once() {
         "pass"
     );
 }
+
+#[test]
+fn indexed_db_roundtrips_image_data_with_graph_identity() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-image-data.test/");
+    vm.eval(
+        r#"
+(() => {
+  globalThis.imageDataStorageResult = 'pending';
+  const open = indexedDB.open(`image-data-${Math.random()}`, 1);
+  const fail = event => { imageDataStorageResult = 'error:' + event.target.error?.name; };
+  open.onerror = fail;
+  open.onupgradeneeded = () => open.result.createObjectStore('values');
+  open.onsuccess = () => {
+    const image = new ImageData(new Uint8ClampedArray([1,2,3,4,5,6,7,8]), 2, 1,
+                               {colorSpace: 'display-p3'});
+    image.expando = 'do not serialize';
+    const write = open.result.transaction('values', 'readwrite');
+    write.onerror = fail;
+    write.objectStore('values').put({image, alias: image}, 'value');
+    image.data[0] = 99;
+    write.oncomplete = () => {
+      const read = open.result.transaction('values').objectStore('values').get('value');
+      read.onerror = fail;
+      read.onsuccess = () => {
+        const row = read.result;
+        imageDataStorageResult = JSON.stringify([
+          Object.getPrototypeOf(row.image) === ImageData.prototype,
+          row.image !== image, row.image === row.alias,
+          row.image.width, row.image.height, row.image.colorSpace,
+          Array.from(row.image.data), row.image.data !== image.data,
+          row.image.expando === undefined
+        ]);
+        open.result.close();
+      };
+    };
+  };
+})()
+"#,
+    )
+    .expect("ImageData storage should schedule");
+    let result = vm
+        .eval_after_selected_page_tasks("String(imageDataStorageResult)")
+        .expect("ImageData storage result should be readable");
+    assert_eq!(
+        result,
+        r#"[true,true,true,2,1,"display-p3",[1,2,3,4,5,6,7,8],true,true]"#
+    );
+}
