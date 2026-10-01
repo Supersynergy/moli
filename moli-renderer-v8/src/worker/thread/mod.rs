@@ -2660,6 +2660,25 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(
+                WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+            )) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages.push_back(
+                        WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+                    );
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                super::global_scope::dispatch_worker_csp_violation_event_for_state(
+                    scope, &state, &violation,
+                );
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::NestedWorkerEvent {
                 worker_id,
                 message,
