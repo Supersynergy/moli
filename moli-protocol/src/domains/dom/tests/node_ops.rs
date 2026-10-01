@@ -3000,6 +3000,95 @@ async fn get_attributes_unknown_frontend_node_id_misses_after_renderer_lookup() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn text_and_property_reads_follow_renderer_node_binding_lifetime() {
+    let mut ctx = TestContext::new();
+    load_bc(&mut ctx, "BID-A");
+    navigate_to_data_html_async(
+        &mut ctx,
+        1,
+        "<!doctype html><html><body><section id='target'>real text</section></body></html>",
+    )
+    .await;
+    ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
+        .await;
+    let root = take_response_by_id(&mut ctx, 2)["result"]["root"]["nodeId"].clone();
+    ctx.process_async(json!({
+        "id": 3, "method": "DOM.querySelector",
+        "params": {"nodeId": root, "selector": "#target"}
+    }))
+    .await;
+    let node_id = take_response_by_id(&mut ctx, 3)["result"]["nodeId"]
+        .as_u64()
+        .unwrap() as u32;
+    ctx.process_async(json!({
+        "id": 4, "method": "DOM.describeNode", "params": {"nodeId": node_id}
+    }))
+    .await;
+    let backend_node_id = take_response_by_id(&mut ctx, 4)["result"]["node"]["backendNodeId"]
+        .as_u64()
+        .unwrap() as u32;
+    let context = AutomationContext {
+        protocol: FrontendProtocol::Cdp,
+        session_id: None,
+        target_id: None,
+        browser_context_id: None,
+    };
+    for retired in [false, true] {
+        if retired {
+            ctx.process_async(json!({"id": 5, "method": "DOM.disable"}))
+                .await;
+            ctx.expect_result(5, json!({}), None);
+        }
+        for (reference, found) in [
+            (DevToolsDomNodeReference::FrontendNodeId(node_id), !retired),
+            (
+                DevToolsDomNodeReference::BackendNodeId(backend_node_id),
+                true,
+            ),
+        ] {
+            let text = ctx
+                .conn
+                .execute_automation_command(AutomationCommand::GetText(DevToolsGetTextCommand {
+                    context: context.clone(),
+                    reference: reference.clone(),
+                }))
+                .await
+                .into_parts()
+                .0;
+            let property = ctx
+                .conn
+                .execute_automation_command(AutomationCommand::GetProperty(
+                    DevToolsGetPropertyCommand {
+                        context: context.clone(),
+                        reference,
+                        name: "id".to_owned(),
+                    },
+                ))
+                .await
+                .into_parts()
+                .0;
+            if found {
+                let AutomationResult::GetText(text) = text.expect("live text reference") else {
+                    panic!("expected text result");
+                };
+                let AutomationResult::GetProperty(property) =
+                    property.expect("live property reference")
+                else {
+                    panic!("expected property result");
+                };
+                assert_eq!(text.text, "real text");
+                assert_eq!(property.value, json!("target"));
+            } else {
+                for error in [text.unwrap_err(), property.unwrap_err()] {
+                    assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
+                    assert_eq!(error.message, "Could not find node with given id");
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn text_and_property_unknown_frontend_node_ids_miss_after_renderer_lookup() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");

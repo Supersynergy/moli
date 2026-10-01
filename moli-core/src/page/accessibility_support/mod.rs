@@ -1,6 +1,7 @@
 use super::{CompletedPageCommand, Page, PendingPageCommand};
 use crate::renderer::{
-    RendererAccessibilityPayloadsForObjectId, RendererPageCommand, RendererPageReply,
+    RendererAccessibilityPayloadsForObjectId, RendererDomNodeReference, RendererPageCommand,
+    RendererPageReply,
 };
 use serde_json::Value;
 
@@ -64,25 +65,50 @@ impl Page {
         )
     }
 
+    pub fn start_accessibility_tree_payloads_for_node(
+        &self,
+        reference: RendererDomNodeReference,
+        max_depth: Option<i32>,
+    ) -> anyhow::Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::AccessibilityTreePayloadsForNode {
+            reference,
+            max_depth,
+        })
+    }
+
     pub fn start_accessibility_tree_payloads_for_backend_node_id(
         &self,
         backend_node_id: u32,
         max_depth: Option<i32>,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::AccessibilityTreePayloadsForBackendNodeId {
-                backend_node_id,
-                max_depth,
-            },
+        self.start_accessibility_tree_payloads_for_node(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
+            max_depth,
         )
+    }
+
+    pub fn start_accessibility_node_payload_for_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> anyhow::Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::AccessibilityNodePayloadForNode { reference })
     }
 
     pub fn start_accessibility_node_payload_for_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> anyhow::Result<PendingPageCommand> {
+        self.start_accessibility_node_payload_for_node(RendererDomNodeReference::BackendNodeId(
+            backend_node_id,
+        ))
+    }
+
+    pub fn start_accessibility_node_and_ancestor_payloads_for_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> anyhow::Result<PendingPageCommand> {
         self.start_page_command(
-            RendererPageCommand::AccessibilityNodePayloadForBackendNodeId { backend_node_id },
+            RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForNode { reference },
         )
     }
 
@@ -90,19 +116,39 @@ impl Page {
         &self,
         backend_node_id: u32,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForBackendNodeId {
-                backend_node_id,
-            },
+        self.start_accessibility_node_and_ancestor_payloads_for_node(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
         )
+    }
+
+    pub fn start_accessibility_child_node_payloads_for_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> anyhow::Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::AccessibilityChildNodePayloadsForNode {
+            reference,
+        })
     }
 
     pub fn start_accessibility_child_node_payloads_for_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> anyhow::Result<PendingPageCommand> {
+        self.start_accessibility_child_node_payloads_for_node(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
+        )
+    }
+
+    pub fn start_accessibility_partial_tree_payloads_for_node(
+        &self,
+        reference: RendererDomNodeReference,
+        fetch_relatives: bool,
+    ) -> anyhow::Result<PendingPageCommand> {
         self.start_page_command(
-            RendererPageCommand::AccessibilityChildNodePayloadsForBackendNodeId { backend_node_id },
+            RendererPageCommand::AccessibilityPartialTreePayloadsForNode {
+                reference,
+                fetch_relatives,
+            },
         )
     }
 
@@ -111,11 +157,9 @@ impl Page {
         backend_node_id: u32,
         fetch_relatives: bool,
     ) -> anyhow::Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::AccessibilityPartialTreePayloadsForBackendNodeId {
-                backend_node_id,
-                fetch_relatives,
-            },
+        self.start_accessibility_partial_tree_payloads_for_node(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
+            fetch_relatives,
         )
     }
 

@@ -1523,11 +1523,11 @@ impl PageVm {
             .computed_style_properties_for_inspector_handle(handle))
     }
 
-    pub(crate) fn computed_style_properties_for_backend_node_id(
+    pub(crate) fn computed_style_properties_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
     ) -> Result<Option<Vec<(String, String)>>> {
-        let Some(node_id) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(node_id) = self.live_handle_for_document_node_reference(reference) else {
             return Ok(None);
         };
         self.computed_style_properties_for_live_handle(node_id)
@@ -1942,6 +1942,29 @@ impl PageVm {
         Ok(snapshot)
     }
 
+    pub(crate) fn document_node_snapshot_for_node_in_inspector_session(
+        &mut self,
+        inspector_session_id: Option<&str>,
+        include_whitespace: bool,
+        reference: RendererDomNodeReference,
+        depth: i32,
+        pierce: bool,
+    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
+        let Some(backend_node_id) = self.backend_node_id_for_document_node_reference(reference)
+        else {
+            return Ok(None);
+        };
+        self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
+        // Preserve the inspector identity on the backend key: snapshots also
+        // represent pseudo-elements and user-agent shadow nodes.
+        self.document_node_snapshot_for_backend_node_id_in_inspector_session(
+            inspector_session_id,
+            backend_node_id,
+            depth,
+            pierce,
+        )
+    }
+
     pub(crate) fn document_node_snapshot_for_backend_node_id_in_inspector_session(
         &mut self,
         inspector_session_id: Option<&str>,
@@ -2098,13 +2121,16 @@ impl PageVm {
         })
     }
 
-    pub(crate) fn document_child_node_snapshot_events_for_backend_node_id(
+    pub(crate) fn document_child_node_snapshot_events_for_node(
         &mut self,
         inspector_session_id: Option<&str>,
-        backend_node_id: u32,
+        include_whitespace: bool,
+        reference: RendererDomNodeReference,
         depth: i32,
         pierce: bool,
     ) -> Option<RendererDocumentChildNodeSnapshotEvents> {
+        let backend_node_id = self.backend_node_id_for_document_node_reference(reference)?;
+        self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
         let handle = self.live_handle_for_backend_node_id(backend_node_id)?;
         self.document_child_node_snapshot_events_for_live_handles(
             inspector_session_id,
@@ -2257,13 +2283,20 @@ impl PageVm {
             .collect()
     }
 
-    pub(crate) fn document_query_selector_for_backend_node_id(
+    pub(crate) fn document_query_selector_for_node(
         &mut self,
         inspector_session_id: Option<&str>,
-        root_backend_node_id: u32,
+        include_whitespace: bool,
+        reference: RendererDomNodeReference,
         selector: &str,
         multiple: bool,
     ) -> RendererDocumentQuerySelectorResolution {
+        let Some(root_backend_node_id) =
+            self.backend_node_id_for_document_node_reference(reference)
+        else {
+            return RendererDocumentQuerySelectorResolution::MissingRoot;
+        };
+        self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
         let Some(root) = self.live_handle_for_backend_node_id(root_backend_node_id) else {
             return RendererDocumentQuerySelectorResolution::MissingRoot;
         };
@@ -2275,14 +2308,21 @@ impl PageVm {
         )
     }
 
-    pub(crate) fn document_query_selector_for_child_frame_backend_node_id(
+    pub(crate) fn document_query_selector_for_child_frame_node(
         &mut self,
         inspector_session_id: Option<&str>,
+        include_whitespace: bool,
         frame_id: &str,
-        root_backend_node_id: u32,
+        reference: RendererDomNodeReference,
         selector: &str,
         multiple: bool,
     ) -> RendererDocumentQuerySelectorResolution {
+        let Some(root_backend_node_id) =
+            self.backend_node_id_for_document_node_reference(reference)
+        else {
+            return RendererDocumentQuerySelectorResolution::MissingRoot;
+        };
+        self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
         let Some(document_handle) = self
             .vm()
             .child_browsing_context_document_handle_by_frame_id(frame_id)
@@ -2340,13 +2380,23 @@ impl PageVm {
         }
     }
 
-    pub(crate) fn document_query_selector_with_child_node_snapshot_events_for_backend_node_id(
+    pub(crate) fn document_query_selector_with_child_node_snapshot_events_for_node(
         &mut self,
         inspector_session_id: Option<&str>,
-        root_backend_node_id: u32,
+        include_whitespace: bool,
+        reference: RendererDomNodeReference,
         selector: &str,
         multiple: bool,
     ) -> RendererDocumentQuerySelectorWithChildNodeSnapshotEvents {
+        let Some(root_backend_node_id) =
+            self.backend_node_id_for_document_node_reference(reference)
+        else {
+            return RendererDocumentQuerySelectorWithChildNodeSnapshotEvents {
+                child_node_snapshot_events: None,
+                query_selector_resolution: RendererDocumentQuerySelectorResolution::MissingRoot,
+            };
+        };
+        self.configure_document_dom_agent_session(inspector_session_id, include_whitespace);
         let Some(root) = self.live_handle_for_backend_node_id(root_backend_node_id) else {
             return RendererDocumentQuerySelectorWithChildNodeSnapshotEvents {
                 child_node_snapshot_events: None,
@@ -2727,10 +2777,10 @@ impl PageVm {
         }
     }
 
-    pub(crate) fn document_node_attributes(
+    pub(crate) fn backend_node_id_for_document_node_reference(
         &mut self,
         reference: RendererDomNodeReference,
-    ) -> RendererDocumentNodeAttributesResolution {
+    ) -> Option<u32> {
         let backend_node_id = match reference {
             RendererDomNodeReference::BackendNodeId(id) => id,
             RendererDomNodeReference::FrontendNodeId {
@@ -2741,11 +2791,26 @@ impl PageVm {
             {
                 RendererDomFrontendNodeBindingResolution::BackendNodeId(id) => id,
                 RendererDomFrontendNodeBindingResolution::NotFound => {
-                    return RendererDocumentNodeAttributesResolution::MissingNode;
+                    return None;
                 }
             },
         };
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        Some(backend_node_id)
+    }
+
+    pub(crate) fn live_handle_for_document_node_reference(
+        &mut self,
+        reference: RendererDomNodeReference,
+    ) -> Option<DomHandle> {
+        let backend_node_id = self.backend_node_id_for_document_node_reference(reference)?;
+        self.live_handle_for_backend_node_id(backend_node_id)
+    }
+
+    pub(crate) fn document_node_attributes(
+        &mut self,
+        reference: RendererDomNodeReference,
+    ) -> RendererDocumentNodeAttributesResolution {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return RendererDocumentNodeAttributesResolution::MissingNode;
         };
         let document = self.vm().document_runtime.dom_host().dom();
@@ -2774,11 +2839,11 @@ impl PageVm {
         }
     }
 
-    pub(crate) fn document_node_text_for_backend_node_id(
+    pub(crate) fn document_node_text(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
     ) -> RendererDocumentNodeTextResolution {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return RendererDocumentNodeTextResolution::MissingNode;
         };
         self.document_node_text_for_live_handle(handle)
@@ -2842,12 +2907,12 @@ impl PageVm {
         RendererDocumentNodePropertyResolution::Found(value)
     }
 
-    pub(crate) fn document_node_property_for_backend_node_id(
+    pub(crate) fn document_node_property(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         name: &str,
     ) -> RendererDocumentNodePropertyResolution {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return RendererDocumentNodePropertyResolution::MissingNode;
         };
         self.document_node_property_for_live_handle(handle, name)
@@ -2944,52 +3009,44 @@ impl PageVm {
         self.accessibility_node_payload_for_live_handle(node_id)
     }
 
-    pub(crate) fn accessibility_tree_payloads_for_backend_node_id(
+    pub(crate) fn accessibility_tree_payloads_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         max_depth: Option<i32>,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_backend_node_id(
-            backend_node_id,
-            |document, node_id, backend_node_ids| {
-                document.node(node_id)?;
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
-                    document,
-                    node_id,
-                    max_depth,
-                    &mut backend_node_id_for_node,
-                )
-            },
-        )
+        self.accessibility_payloads_for_node(reference, |document, node_id, backend_node_ids| {
+            document.node(node_id)?;
+            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
+            moli_dom::accessibility::accessibility_tree_payloads_for_document_with_backend_node_ids(
+                document,
+                node_id,
+                max_depth,
+                &mut backend_node_id_for_node,
+            )
+        })
     }
 
-    pub(crate) fn accessibility_node_payload_for_backend_node_id(
+    pub(crate) fn accessibility_node_payload_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_backend_node_id(
-            backend_node_id,
-            |document, node_id, backend_node_ids| {
-                let mut backend_node_id_for_node =
-                    |node_id| backend_node_ids.get(&node_id).copied();
-                moli_dom::accessibility::accessibility_node_payload_for_document_with_backend_node_ids(
-                    document,
-                    node_id,
-                    &mut backend_node_id_for_node,
-                )
-                .map(|payload| vec![payload])
-            },
-        )
+        self.accessibility_payloads_for_node(reference, |document, node_id, backend_node_ids| {
+            let mut backend_node_id_for_node = |node_id| backend_node_ids.get(&node_id).copied();
+            moli_dom::accessibility::accessibility_node_payload_for_document_with_backend_node_ids(
+                document,
+                node_id,
+                &mut backend_node_id_for_node,
+            )
+            .map(|payload| vec![payload])
+        })
     }
 
-    pub(crate) fn accessibility_node_and_ancestor_payloads_for_backend_node_id(
+    pub(crate) fn accessibility_node_and_ancestor_payloads_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_backend_node_id(
-            backend_node_id,
+        self.accessibility_payloads_for_node(
+            reference,
             |document, node_id, backend_node_ids| {
                 document.node(node_id)?;
                 let mut backend_node_id_for_node =
@@ -3003,12 +3060,12 @@ impl PageVm {
         )
     }
 
-    pub(crate) fn accessibility_child_node_payloads_for_backend_node_id(
+    pub(crate) fn accessibility_child_node_payloads_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_backend_node_id(
-            backend_node_id,
+        self.accessibility_payloads_for_node(
+            reference,
             |document, node_id, backend_node_ids| {
                 document.node(node_id)?;
                 let mut backend_node_id_for_node =
@@ -3022,13 +3079,13 @@ impl PageVm {
         )
     }
 
-    pub(crate) fn accessibility_partial_tree_payloads_for_backend_node_id(
+    pub(crate) fn accessibility_partial_tree_payloads_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         fetch_relatives: bool,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        self.accessibility_payloads_for_backend_node_id(
-            backend_node_id,
+        self.accessibility_payloads_for_node(
+            reference,
             |document, node_id, backend_node_ids| {
                 let mut backend_node_id_for_node =
                     |node_id| backend_node_ids.get(&node_id).copied();
@@ -3042,16 +3099,16 @@ impl PageVm {
         )
     }
 
-    fn accessibility_payloads_for_backend_node_id(
+    fn accessibility_payloads_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         build_payloads: impl FnOnce(
             &crate::dom::native::NativeDom,
             DomHandle,
             &HashMap<DomHandle, u32>,
         ) -> Option<Vec<serde_json::Value>>,
     ) -> Option<RendererAccessibilityPayloadsForObjectId> {
-        let handle = self.live_handle_for_backend_node_id(backend_node_id)?;
+        let handle = self.live_handle_for_document_node_reference(reference)?;
         self.accessibility_payloads_for_live_handle(handle, build_payloads)
     }
 
@@ -3227,12 +3284,12 @@ impl PageVm {
         Ok(self.outer_html_for_live_handle(handle, include_shadow_dom))
     }
 
-    pub(crate) fn outer_html_for_backend_node_id(
+    pub(crate) fn outer_html_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         include_shadow_dom: bool,
     ) -> Result<Option<String>> {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return Ok(None);
         };
         Ok(self.outer_html_for_live_handle(handle, include_shadow_dom))
@@ -3299,11 +3356,11 @@ impl PageVm {
             .map(Some)
     }
 
-    pub(crate) fn document_geometry_for_backend_node_id(
+    pub(crate) fn document_geometry_for_node(
         &mut self,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
     ) -> Result<Option<RendererDocumentNodeGeometry>> {
-        let Some(handle) = self.live_handle_for_backend_node_id(backend_node_id) else {
+        let Some(handle) = self.live_handle_for_document_node_reference(reference) else {
             return Ok(None);
         };
         self.document_geometry_for_live_node_handle(handle)

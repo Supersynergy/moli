@@ -4822,8 +4822,8 @@ pub enum RendererPageCommand {
     #[cfg(test)]
     TakeDocumentLifecycleEvents,
     StopDocumentLifecycle,
-    ComputedStylePropertiesForBackendNodeId {
-        backend_node_id: u32,
+    ComputedStyleProperties {
+        reference: RendererDomNodeReference,
     },
     SetInlineStyleSheetTextForStyleSheetId {
         inspector_session_id: Option<String>,
@@ -4837,8 +4837,8 @@ pub enum RendererPageCommand {
     ClientRectForBackendNodeId {
         backend_node_id: u32,
     },
-    DocumentGeometryForBackendNodeId {
-        backend_node_id: u32,
+    DocumentGeometryForNode {
+        reference: RendererDomNodeReference,
     },
     DocumentHitTest {
         inspector_session_id: Option<String>,
@@ -4876,10 +4876,10 @@ pub enum RendererPageCommand {
         depth: i32,
         pierce: bool,
     },
-    DocumentNodeSnapshotForBackendNodeIdInInspectorSession {
+    DocumentNodeSnapshotForNodeInInspectorSession {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         depth: i32,
         pierce: bool,
     },
@@ -4896,10 +4896,10 @@ pub enum RendererPageCommand {
         top_frame_id: String,
         options: RendererDomSnapshotCaptureOptions,
     },
-    DocumentChildNodeSnapshotEventsForBackendNodeId {
+    DocumentChildNodeSnapshotEventsForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         depth: i32,
         pierce: bool,
     },
@@ -4909,25 +4909,25 @@ pub enum RendererPageCommand {
         selector: String,
         multiple: bool,
     },
-    DocumentQuerySelectorForChildFrameBackendNodeId {
+    DocumentQuerySelectorForChildFrameNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
         frame_id: String,
-        root_backend_node_id: u32,
+        root: RendererDomNodeReference,
         selector: String,
         multiple: bool,
     },
-    DocumentQuerySelectorForBackendNodeId {
+    DocumentQuerySelectorForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        root_backend_node_id: u32,
+        root: RendererDomNodeReference,
         selector: String,
         multiple: bool,
     },
-    DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
+    DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        root_backend_node_id: u32,
+        root: RendererDomNodeReference,
         selector: String,
         multiple: bool,
     },
@@ -4975,32 +4975,32 @@ pub enum RendererPageCommand {
     DocumentNodeAttributes {
         reference: RendererDomNodeReference,
     },
-    DocumentNodeTextForBackendNodeId {
-        backend_node_id: u32,
+    DocumentNodeText {
+        reference: RendererDomNodeReference,
     },
-    DocumentNodePropertyForBackendNodeId {
-        backend_node_id: u32,
+    DocumentNodeProperty {
+        reference: RendererDomNodeReference,
         name: String,
     },
     AccessibilityTreePayloadsForDocument {
         max_depth: Option<i32>,
     },
     AccessibilityNodePayloadForDocument,
-    AccessibilityTreePayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityTreePayloadsForNode {
+        reference: RendererDomNodeReference,
         max_depth: Option<i32>,
     },
-    AccessibilityNodePayloadForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityNodePayloadForNode {
+        reference: RendererDomNodeReference,
     },
-    AccessibilityNodeAndAncestorPayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityNodeAndAncestorPayloadsForNode {
+        reference: RendererDomNodeReference,
     },
-    AccessibilityChildNodePayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityChildNodePayloadsForNode {
+        reference: RendererDomNodeReference,
     },
-    AccessibilityPartialTreePayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityPartialTreePayloadsForNode {
+        reference: RendererDomNodeReference,
         fetch_relatives: bool,
     },
     AccessibilityTreePayloadsForChildFrame {
@@ -5023,8 +5023,8 @@ pub enum RendererPageCommand {
     OuterHtmlForDocument {
         include_shadow_dom: bool,
     },
-    OuterHtmlForBackendNodeId {
-        backend_node_id: u32,
+    OuterHtmlForNode {
+        reference: RendererDomNodeReference,
         include_shadow_dom: bool,
     },
     RenderPageDump {
@@ -5571,26 +5571,24 @@ impl RendererPageCommand {
             Self::DocumentNodeSnapshotForBackendNodeId { .. } => {
                 Some("DocumentNodeSnapshotForBackendNodeId")
             }
-            Self::DocumentNodeSnapshotForBackendNodeIdInInspectorSession { .. } => {
-                Some("DocumentNodeSnapshotForBackendNodeIdInInspectorSession")
+            Self::DocumentNodeSnapshotForNodeInInspectorSession { .. } => {
+                Some("DocumentNodeSnapshotForNodeInInspectorSession")
             }
             Self::DocumentNodeSnapshotForDocument { .. } => Some("DocumentNodeSnapshotForDocument"),
             Self::DiscardDomAgentFrontendBindings { .. } => Some("DiscardDomAgentFrontendBindings"),
             Self::DomSnapshotCapture { .. } => Some("DomSnapshotCapture"),
-            Self::DocumentChildNodeSnapshotEventsForBackendNodeId { .. } => {
-                Some("DocumentChildNodeSnapshotEventsForBackendNodeId")
+            Self::DocumentChildNodeSnapshotEventsForNode { .. } => {
+                Some("DocumentChildNodeSnapshotEventsForNode")
             }
             Self::DocumentQuerySelectorForDocument { .. } => {
                 Some("DocumentQuerySelectorForDocument")
             }
-            Self::DocumentQuerySelectorForChildFrameBackendNodeId { .. } => {
-                Some("DocumentQuerySelectorForChildFrameBackendNodeId")
+            Self::DocumentQuerySelectorForChildFrameNode { .. } => {
+                Some("DocumentQuerySelectorForChildFrameNode")
             }
-            Self::DocumentQuerySelectorForBackendNodeId { .. } => {
-                Some("DocumentQuerySelectorForBackendNodeId")
-            }
-            Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId { .. } => {
-                Some("DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId")
+            Self::DocumentQuerySelectorForNode { .. } => Some("DocumentQuerySelectorForNode"),
+            Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode { .. } => {
+                Some("DocumentQuerySelectorWithChildNodeSnapshotEventsForNode")
             }
             Self::DocumentPerformSearch { .. } => Some("DocumentPerformSearch"),
             Self::DocumentGetSearchResults { .. } => Some("DocumentGetSearchResults"),
@@ -5606,32 +5604,26 @@ impl RendererPageCommand {
                 Some("DocumentBidiNodeSharedIdForBackendNodeId")
             }
             Self::DocumentNodeAttributes { .. } => Some("DocumentNodeAttributes"),
-            Self::DocumentNodeTextForBackendNodeId { .. } => {
-                Some("DocumentNodeTextForBackendNodeId")
-            }
-            Self::DocumentNodePropertyForBackendNodeId { .. } => {
-                Some("DocumentNodePropertyForBackendNodeId")
-            }
+            Self::DocumentNodeText { .. } => Some("DocumentNodeText"),
+            Self::DocumentNodeProperty { .. } => Some("DocumentNodeProperty"),
             Self::AccessibilityTreePayloadsForDocument { .. } => {
                 Some("AccessibilityTreePayloadsForDocument")
             }
             Self::AccessibilityNodePayloadForDocument => {
                 Some("AccessibilityNodePayloadForDocument")
             }
-            Self::AccessibilityTreePayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityTreePayloadsForBackendNodeId")
+            Self::AccessibilityTreePayloadsForNode { .. } => {
+                Some("AccessibilityTreePayloadsForNode")
             }
-            Self::AccessibilityNodePayloadForBackendNodeId { .. } => {
-                Some("AccessibilityNodePayloadForBackendNodeId")
+            Self::AccessibilityNodePayloadForNode { .. } => Some("AccessibilityNodePayloadForNode"),
+            Self::AccessibilityNodeAndAncestorPayloadsForNode { .. } => {
+                Some("AccessibilityNodeAndAncestorPayloadsForNode")
             }
-            Self::AccessibilityNodeAndAncestorPayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityNodeAndAncestorPayloadsForBackendNodeId")
+            Self::AccessibilityChildNodePayloadsForNode { .. } => {
+                Some("AccessibilityChildNodePayloadsForNode")
             }
-            Self::AccessibilityChildNodePayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityChildNodePayloadsForBackendNodeId")
-            }
-            Self::AccessibilityPartialTreePayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityPartialTreePayloadsForBackendNodeId")
+            Self::AccessibilityPartialTreePayloadsForNode { .. } => {
+                Some("AccessibilityPartialTreePayloadsForNode")
             }
             Self::AccessibilityTreePayloadsForChildFrame { .. } => {
                 Some("AccessibilityTreePayloadsForChildFrame")
@@ -5640,7 +5632,7 @@ impl RendererPageCommand {
                 Some("AccessibilityNodePayloadForChildFrame")
             }
             Self::OuterHtmlForDocument { .. } => Some("OuterHtmlForDocument"),
-            Self::OuterHtmlForBackendNodeId { .. } => Some("OuterHtmlForBackendNodeId"),
+            Self::OuterHtmlForNode { .. } => Some("OuterHtmlForNode"),
             Self::RenderPageDump { .. } => Some("RenderPageDump"),
             Self::SerializeDocument => Some("SerializeDocument"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
@@ -5651,17 +5643,13 @@ impl RendererPageCommand {
                 Some("ScrollBackendNodeIntoViewIfNeeded")
             }
             Self::ClientRectForBackendNodeId { .. } => Some("ClientRectForBackendNodeId"),
-            Self::DocumentGeometryForBackendNodeId { .. } => {
-                Some("DocumentGeometryForBackendNodeId")
-            }
+            Self::DocumentGeometryForNode { .. } => Some("DocumentGeometryForNode"),
             Self::DocumentHitTest { .. } => Some("DocumentHitTest"),
             Self::NodeHasGeometryForBackendNodeId { .. } => Some("NodeHasGeometryForBackendNodeId"),
             Self::RemoveDocumentBackendNodeId { .. } => Some("RemoveDocumentBackendNodeId"),
             Self::EditDocumentNode { .. } => Some("EditDocumentNode"),
             Self::TriggerAutofill(_) => Some("TriggerAutofill"),
-            Self::ComputedStylePropertiesForBackendNodeId { .. } => {
-                Some("ComputedStylePropertiesForBackendNodeId")
-            }
+            Self::ComputedStyleProperties { .. } => Some("ComputedStyleProperties"),
             Self::SetFileInputFilesForBackendNodeId { .. } => {
                 Some("SetFileInputFilesForBackendNodeId")
             }

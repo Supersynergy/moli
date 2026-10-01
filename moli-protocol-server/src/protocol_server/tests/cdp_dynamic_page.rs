@@ -724,7 +724,7 @@ async fn assert_pause_command_ordering(instrumentation: bool) {
         "Runtime.evaluate",
         session,
         json!({
-            "expression": if instrumentation { "21 * 2" } else { "(() => { history.replaceState(null, '', '#paused'); document.body.setAttribute('data-paused', 'ready'); debugger; return 42; })()" },
+            "expression": if instrumentation { "21 * 2" } else { "(() => { history.replaceState(null, '', '#paused'); document.body.setAttribute('data-paused', 'ready'); document.body.setAttribute('style', 'width: 12px'); debugger; return 42; })()" },
             "returnByValue": true
         }),
     )
@@ -770,6 +770,24 @@ async fn assert_pause_command_ordering(instrumentation: bool) {
         );
     }
     if !instrumentation {
+        for (id, method) in [
+            (20, "CSS.getInlineStylesForNode"),
+            (21, "CSS.getMatchedStylesForNode"),
+        ] {
+            let styles =
+                send_cdp_command(&mut browser, id, method, session, json!({"nodeId": body})).await;
+            assert!(styles.iter().all(|message| message["id"] != 12));
+            let response = response_by_id(&styles, id);
+            assert!(response.get("error").is_none(), "{response}");
+            let properties = response["result"]["inlineStyle"]["cssProperties"]
+                .as_array()
+                .expect("inline properties must be readable before resume");
+            assert!(
+                properties
+                    .iter()
+                    .any(|property| { property["name"] == "width" && property["value"] == "12px" })
+            );
+        }
         // Native wrapping must preserve the isolate-entry constraint of both
         // an opaque node-resolution chain and a world-creation handler.
         send_cdp_command_without_wait(

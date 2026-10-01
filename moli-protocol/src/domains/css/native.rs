@@ -1,6 +1,6 @@
 use super::*;
 use crate::automation::DevToolsDomNodeReference;
-use crate::domains::native::{self, NativeCommandStep, NodeLookupExecution};
+use crate::domains::native::{self, NativeCommandStep};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
     RendererPageCommand as Command, RendererPageReply as Reply,
@@ -126,20 +126,31 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                     ),
                     move |reply| project_style(reply, query),
                 )
-            } else if let Some(frontend_node_id) = params.node_id {
-                native::with_backend_node(
-                    inspector_session_id,
-                    DevToolsDomNodeReference::FrontendNodeId(frontend_node_id),
-                    NodeLookupExecution::NestedMain,
-                    move |id| backend_style_operation(id, query),
-                )
-            } else if let Some(backend_node_id) = params.backend_node_id {
-                backend_style_operation(backend_node_id, query)
             } else {
-                return Some(NativeCommandStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "Could not find node with given id",
-                )));
+                let reference = if let Some(id) = params.node_id {
+                    DevToolsDomNodeReference::FrontendNodeId(id)
+                } else if let Some(id) = params.backend_node_id {
+                    DevToolsDomNodeReference::BackendNodeId(id)
+                } else {
+                    return Some(NativeCommandStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        "Could not find node with given id",
+                    )));
+                };
+                match query {
+                    StyleQuery::Inline(_) => Operation::new(
+                        Command::DocumentNodeAttributes {
+                            reference: reference.into_renderer_reference(inspector_session_id),
+                        },
+                        move |reply| project_style(reply, query),
+                    ),
+                    StyleQuery::Computed => Operation::new(
+                        Command::ComputedStyleProperties {
+                            reference: reference.into_renderer_reference(inspector_session_id),
+                        },
+                        move |reply| project_style(reply, query),
+                    ),
+                }
             }
         }
     };
@@ -150,18 +161,6 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
 enum StyleQuery {
     Computed,
     Inline(InlineStyleQueryKind),
-}
-
-fn backend_style_operation(backend_node_id: u32, query: StyleQuery) -> Operation {
-    let command = match query {
-        StyleQuery::Computed => {
-            Command::ComputedStylePropertiesForBackendNodeId { backend_node_id }
-        }
-        StyleQuery::Inline(_) => Command::DocumentNodeAttributes {
-            reference: moli_core::page::RendererDomNodeReference::BackendNodeId(backend_node_id),
-        },
-    };
-    Operation::new(command, move |reply| project_style(reply, query))
 }
 
 fn project_style(reply: anyhow::Result<Reply>, query: StyleQuery) -> Response {
