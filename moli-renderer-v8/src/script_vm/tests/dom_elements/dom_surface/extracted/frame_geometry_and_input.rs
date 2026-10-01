@@ -292,6 +292,41 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     );
 }
 #[test]
+fn inline_wrapped_whitespace_preserves_sibling_spacing() {
+    for doctype in [
+        "",
+        r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">"#,
+        "<!doctype html>",
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://inline-wrapped-whitespace.test/",
+            &format!(
+                r#"{doctype}<style>.line{{font:50px/80px monospace;width:300px}}.atom{{display:inline-block;width:10px;height:20px}}</style>
+                <div id=plain class=line><i class=atom></i> <i class=atom></i></div>
+                <div id=wrapped class=line><i class=atom></i><span> </span><i class=atom></i></div>
+                <div id=nested class=line><i class=atom></i><span><span> </span></span><i class=atom></i></div>
+                <div id=edges class=line><span> </span><i class=atom></i><span> </span></div>"#
+            ),
+        );
+        let query = r#"JSON.stringify([
+            ...['plain','wrapped','nested'].map(id => {
+                const atoms = document.getElementById(id).querySelectorAll('.atom');
+                return atoms[1].getBoundingClientRect().left - atoms[0].getBoundingClientRect().right;
+            }),
+            edges.querySelector('.atom').getBoundingClientRect().left - edges.getBoundingClientRect().left
+        ])"#;
+        let result = vm.eval(query).unwrap();
+        let gaps: Vec<f64> = serde_json::from_str(&result).unwrap();
+        assert!(gaps[0] > 0.0, "{doctype}: {result}");
+        assert_eq!(gaps[1], gaps[0], "a wrapper must retain the space");
+        assert_eq!(gaps[2], gaps[0], "nested wrappers must retain the space");
+        assert_eq!(gaps[3], 0.0, "a leading wrapped space still collapses");
+        publish_layout_for_test(&mut vm);
+        assert_eq!(vm.eval(query).unwrap(), result, "paint: {doctype}");
+    }
+}
+
+#[test]
 fn iframe_scrolling_attribute_suppresses_only_viewport_scrollbars() {
     for (scrolling, suppressed) in [
         ("no", true),
