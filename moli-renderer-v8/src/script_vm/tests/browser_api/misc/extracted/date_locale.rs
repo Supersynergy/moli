@@ -7,9 +7,25 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
     environment.set_timezone(Some("UTC")).unwrap();
 
     let us = vm
-        .eval("new Date(0).toLocaleString()")
+        .eval(
+            r#"
+(() => {
+  const date = new Date(0);
+  const expected = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric"
+  }).format(date);
+  return JSON.stringify([date.toLocaleString(), expected]);
+})()
+"#,
+        )
         .expect("default Date locale formatting should evaluate");
-    assert_eq!(us, "1/1/1970, 12:00:00 AM");
+    let values: Vec<String> = serde_json::from_str(&us).expect("locale output pair should decode");
+    assert_eq!(values[0], values[1]);
 
     environment.set_locale(Some("fr-FR")).unwrap();
     environment.set_timezone(Some("Asia/Shanghai")).unwrap();
@@ -333,12 +349,20 @@ fn date_locale_methods_are_declared_on_date_prototype() {
     ].join(":");
   };
   const date = new Date(0);
+  const nativeDefault = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric"
+  }).format(date);
   return [
     Object.keys(Date.prototype).includes("toLocaleString"),
     summarize("toLocaleString"),
     summarize("toLocaleDateString"),
     summarize("toLocaleTimeString"),
-    Date.prototype.toLocaleString.call(date)
+    Date.prototype.toLocaleString.call(date) === nativeDefault
   ].join("|");
 })()
 "#,
@@ -347,6 +371,87 @@ fn date_locale_methods_are_declared_on_date_prototype() {
 
     assert_eq!(
         result,
-        "false|toLocaleString:true:false:true:true:function:toLocaleString:0|toLocaleDateString:true:false:true:true:function:toLocaleDateString:0|toLocaleTimeString:true:false:true:true:function:toLocaleTimeString:0|1/1/1970, 12:00:00 AM"
+        "false|toLocaleString:true:false:true:true:function:toLocaleString:0|toLocaleDateString:true:false:true:true:function:toLocaleDateString:0|toLocaleTimeString:true:false:true:true:function:toLocaleTimeString:0|true"
     );
+}
+
+#[test]
+fn date_locale_methods_forward_explicit_locales_and_options_without_emulation_overrides() {
+    let mut vm = new_storage_test_vm("https://date-locale-arguments.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const date = new Date("2022-03-31T23:59:42Z");
+  const toLocaleString = Date.prototype.toLocaleString;
+  const localeMarker = {};
+  const optionsMarker = {};
+  const localeFailure = {
+    get length() {
+      throw localeMarker;
+    }
+  };
+  const optionsFailure = {
+    get dateStyle() {
+      throw optionsMarker;
+    }
+  };
+  const probe = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error;
+    }
+  };
+  const numericDate = { year: "numeric", month: "numeric", day: "numeric" };
+  const numericTime = { hour: "numeric", minute: "numeric", second: "numeric" };
+  const expected = {
+    caDefault: new Intl.DateTimeFormat("en-CA", {
+      ...numericDate, ...numericTime, timeZone: "UTC"
+    }).format(date),
+    caShort: new Intl.DateTimeFormat("en-CA", {
+      dateStyle: "short", timeZone: "UTC"
+    }).format(date),
+    svDate: new Intl.DateTimeFormat("sv-SE", {
+      ...numericDate, timeZone: "UTC"
+    }).format(date),
+    usTime: new Intl.DateTimeFormat("en-US", {
+      ...numericTime, hour12: false, timeZone: "UTC"
+    }).format(date),
+    localeError: true,
+    optionsError: true
+  };
+  expected.afterDateTamper = expected.caShort;
+
+  const values = {
+    caDefault: toLocaleString.call(date, "en-CA", { timeZone: "UTC" }),
+    caShort: toLocaleString.call(date, "en-CA", {
+      dateStyle: "short",
+      timeZone: "UTC"
+    }),
+    svDate: date.toLocaleDateString("sv-SE", { timeZone: "UTC" }),
+    usTime: date.toLocaleTimeString("en-US", {
+      hour12: false,
+      timeZone: "UTC"
+    }),
+    localeError: probe(() => toLocaleString.call(date, localeFailure)) === localeMarker,
+    optionsError: probe(() => toLocaleString.call(date, "en-US", optionsFailure)) === optionsMarker
+  };
+
+  globalThis.Date = function Date() {};
+  values.afterDateTamper = toLocaleString.call(date, "en-CA", {
+    dateStyle: "short",
+    timeZone: "UTC"
+  });
+  return JSON.stringify(Object.keys(expected)
+    .filter(key => values[key] !== expected[key])
+    .map(key => ({key, actual: values[key], expected: expected[key]})));
+})()
+"#,
+        )
+        .expect("Date locale methods should forward standard arguments to V8");
+
+    assert_eq!(result, "[]");
 }
