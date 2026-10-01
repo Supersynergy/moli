@@ -535,6 +535,8 @@ enum PageOutputProjectionStep {
     JavascriptDialog,
     WindowOpen,
     Popup,
+    CloseAuxiliaryWindow,
+    NavigateAuxiliaryWindow,
     DocumentTitleChanged,
     DocumentLifecycle,
     ChildFrameActivity,
@@ -549,6 +551,8 @@ pub(crate) struct PagePreparedOutputs {
     javascript_dialogs: Vec<javascript_dialog::PreparedJavaScriptDialog>,
     window_open_events: Vec<popup::PagePreparedWindowOpenEvent>,
     popup_activations: Vec<popup::PagePreparedPopupActivation>,
+    auxiliary_window_closes: Vec<(String, moli_core::page::RendererAuxiliaryWindow)>,
+    auxiliary_window_navigations: Vec<prepared_navigation::PagePreparedAuxiliaryWindowNavigation>,
     document_title_changes: Vec<RendererDocumentTitleChanged>,
     document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
     child_frame_activities: Vec<PagePreparedChildFrameActivity>,
@@ -1355,6 +1359,22 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
         navigation.request_body(),
         navigation.request_headers(),
         navigation.browser_navigation_kind(),
+        Some(match navigation.browser_navigation_kind() {
+            moli_fetch::BrowserNavigationRequestKind::Reload => {
+                moli_core::page::RendererAuxiliaryNavigationKind::Reload
+            }
+            moli_fetch::BrowserNavigationRequestKind::Navigate => {
+                match navigation.history_mutation() {
+                    moli_page_types::NavigationHistoryMutation::Push => {
+                        moli_core::page::RendererAuxiliaryNavigationKind::Assign
+                    }
+                    moli_page_types::NavigationHistoryMutation::Replace => {
+                        moli_core::page::RendererAuxiliaryNavigationKind::Replace
+                    }
+                }
+            }
+        }),
+        None,
     )
     .await;
 }
@@ -1365,6 +1385,18 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
     owner: &CommandOwnerScope,
     url: &str,
 ) {
+    let document_response = conn
+        .target_owner_identity_for_owner(owner)
+        .and_then(|(context_id, target_id)| {
+            let target_id = target_id?;
+            conn.browser_context_by_id_mut(&context_id)?
+                .page_target_mut(&target_id)?
+                .owner_state
+                .pending_popup_document_response
+                .take()
+        })
+        .filter(|(requested, _)| requested == url)
+        .map(|(_, response)| response);
     navigate_command_owner_from_renderer_request_background_events_async(
         conn,
         out,
@@ -1374,11 +1406,13 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
         None,
         &[],
         moli_fetch::BrowserNavigationRequestKind::Navigate,
+        None,
+        document_response,
     )
     .await;
 }
 
-async fn navigate_command_owner_from_renderer_request_background_events_async(
+pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: CommandOwnerScope,
@@ -1387,6 +1421,8 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
+    document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
 ) {
     let start = navigation::start_session_owner_navigation_from_renderer(
         conn,
@@ -1396,6 +1432,8 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
         request_body,
         request_headers,
         browser_navigation_kind,
+        auxiliary_navigation,
+        document_response,
     );
     let step =
         navigation::finish_started_navigation_command_for_parts(conn, None, owner, start, &[]);
