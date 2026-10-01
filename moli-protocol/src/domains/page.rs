@@ -1375,6 +1375,8 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
             }
         }),
         None,
+        None,
+        None,
     )
     .await;
 }
@@ -1385,18 +1387,20 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
     owner: &CommandOwnerScope,
     url: &str,
 ) {
-    let document_response = conn
+    let pending_navigation = conn
         .target_owner_identity_for_owner(owner)
         .and_then(|(context_id, target_id)| {
             let target_id = target_id?;
             conn.browser_context_by_id_mut(&context_id)?
                 .page_target_mut(&target_id)?
                 .owner_state
-                .pending_popup_document_response
+                .pending_popup_navigation
                 .take()
         })
-        .filter(|(requested, _)| requested == url)
-        .map(|(_, response)| response);
+        .filter(|pending| pending.url == url);
+    let (document_response, navigation_initiator) = pending_navigation
+        .map(|pending| (pending.response, pending.initiator))
+        .unwrap_or_default();
     navigate_command_owner_from_renderer_request_background_events_async(
         conn,
         out,
@@ -1408,6 +1412,8 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
         moli_fetch::BrowserNavigationRequestKind::Navigate,
         None,
         document_response,
+        None,
+        navigation_initiator,
     )
     .await;
 }
@@ -1423,6 +1429,8 @@ pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_bac
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
     auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) {
     let start = navigation::start_session_owner_navigation_from_renderer(
         conn,
@@ -1434,6 +1442,8 @@ pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_bac
         browser_navigation_kind,
         auxiliary_navigation,
         document_response,
+        initial_document_environment,
+        navigation_initiator,
     );
     let step =
         navigation::finish_started_navigation_command_for_parts(conn, None, owner, start, &[]);
