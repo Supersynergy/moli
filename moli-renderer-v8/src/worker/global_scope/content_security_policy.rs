@@ -32,8 +32,8 @@ use moli_fetch::{
 };
 
 use super::{
-    PendingWorkerCspReport, WORKER_GLOBAL_LISTENERS_SLOT, WorkerGlobalState, next_fetch_id,
-    record_worker_subresource_failure_with_handle, request_body_text,
+    PendingWorkerCspReport, WORKER_GLOBAL_LISTENERS_SLOT, WorkerGlobalState, get_worker_state,
+    next_fetch_id, record_worker_subresource_failure_with_handle, request_body_text,
 };
 
 pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
@@ -959,4 +959,53 @@ pub(super) fn worker_content_security_policy_error_message(
         "{operation}: blocked by Content Security Policy for `{}`.",
         violation.blocked_uri
     )
+}
+
+pub(in crate::worker) fn dispatch_worker_csp_violation_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    loader: &crate::network::context::WorkerResourceLoader,
+    violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+) {
+    self::dispatch_worker_content_security_policy_violation_event(scope, loader, violation);
+}
+
+pub(crate) fn worker_allows_trusted_type_policy_name(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+) -> Option<bool> {
+    Some(
+        crate::content_security_policy::content_security_policy_allows_trusted_type_policy_name(
+            &get_worker_state(scope)?.borrow().content_security_policies,
+            name,
+        ),
+    )
+}
+
+pub(crate) fn worker_requires_trusted_types_for_script(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    Some(
+        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+            &get_worker_state(scope)?.borrow().content_security_policies,
+        ),
+    )
+}
+
+pub(crate) fn worker_allows_trusted_types_eval(scope: &mut v8::PinScope<'_, '_>) -> Option<bool> {
+    Some(
+        crate::content_security_policy::content_security_policy_allows_trusted_types_eval(
+            &get_worker_state(scope)?.borrow().content_security_policies,
+        ),
+    )
+}
+
+pub(crate) fn dispatch_worker_trusted_types_sink_violation_event(
+    scope: &mut v8::PinScope<'_, '_>,
+    sink: &str,
+    sample: &str,
+) {
+    let Some(state) = get_worker_state(scope) else {
+        return;
+    };
+    self::dispatch_worker_trusted_types_sink_violation_event_for_state(scope, &state, sink, sample);
 }
