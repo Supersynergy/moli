@@ -503,11 +503,29 @@ async fn page_navigate_network_failure_commits_error_document() {
             .is_some_and(|message| !message.is_empty()),
         "failed navigation should return the browser network error: {navigate:?}"
     );
-    wait_until_message(
+    // The outgoing Document can still finish loading before the error Document
+    // commits. This fixture can also reuse its loader id, so match the load
+    // after the concrete error-page commit instead of accepting either page.
+    wait_until_messages(
         &mut ctx,
         Some("SID-1"),
-        "network error Document load",
-        |message| message["method"] == json!("Page.loadEventFired"),
+        "network error Document load after its commit",
+        |messages| {
+            let Some(commit_index) = messages.iter().position(|message| {
+                message["method"] == json!("Page.frameNavigated")
+                    && message["sessionId"] == json!("SID-1")
+                    && message["params"]["frame"]["url"] == NETWORK_ERROR_PAGE_URL
+                    && message["params"]["frame"]["loaderId"] == navigate["result"]["loaderId"]
+            }) else {
+                return false;
+            };
+            messages[commit_index + 1..].iter().any(|message| {
+                message["method"] == json!("Page.lifecycleEvent")
+                    && message["sessionId"] == json!("SID-1")
+                    && message["params"]["loaderId"] == navigate["result"]["loaderId"]
+                    && message["params"]["name"] == json!("load")
+            })
+        },
     )
     .await;
     assert!(
@@ -518,11 +536,17 @@ async fn page_navigate_network_failure_commits_error_document() {
         "failed navigation should emit a document loadingFailed event: {:?}",
         ctx.sent
     );
-    let frame_navigated = ctx
+    let commit_index = ctx
         .sent
         .iter()
-        .find(|message| message["method"] == json!("Page.frameNavigated"))
+        .position(|message| {
+            message["method"] == json!("Page.frameNavigated")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["frame"]["url"] == NETWORK_ERROR_PAGE_URL
+                && message["params"]["frame"]["loaderId"] == navigate["result"]["loaderId"]
+        })
         .unwrap_or_else(|| panic!("missing error Document frame commit: {:?}", ctx.sent));
+    let frame_navigated = &ctx.sent[commit_index];
     assert_eq!(
         frame_navigated["params"]["frame"]["url"],
         NETWORK_ERROR_PAGE_URL
@@ -545,14 +569,26 @@ async fn page_navigate_network_failure_commits_error_document() {
         message["method"] == json!("Runtime.executionContextCreated")
             && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
     }));
-    assert!(ctx.sent.iter().any(|message| {
-        message["method"] == json!("Page.lifecycleEvent")
-            && message["params"]["name"] == json!("DOMContentLoaded")
+    let error_document_events = &ctx.sent[commit_index + 1..];
+    assert!(error_document_events.iter().any(|message| {
+        message["method"] == json!("Page.loadEventFired") && message["sessionId"] == json!("SID-1")
     }));
-    assert!(ctx.sent.iter().any(|message| {
-        message["method"] == json!("Page.lifecycleEvent")
-            && message["params"]["name"] == json!("load")
-    }));
+    let lifecycle_names: Vec<_> = error_document_events
+        .iter()
+        .filter(|message| {
+            message["method"] == json!("Page.lifecycleEvent")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["loaderId"] == navigate["result"]["loaderId"]
+        })
+        .filter_map(|message| message["params"]["name"].as_str())
+        .filter(|name| matches!(*name, "DOMContentLoaded" | "load"))
+        .collect();
+    assert_eq!(
+        lifecycle_names,
+        ["DOMContentLoaded", "load"],
+        "{:#?}",
+        ctx.sent
+    );
 
     ctx.sent.clear();
     ctx.process_async(json!({
