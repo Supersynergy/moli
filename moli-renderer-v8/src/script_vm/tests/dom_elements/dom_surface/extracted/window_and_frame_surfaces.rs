@@ -727,12 +727,12 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
   globalThis.__windowLifecycleEvents = [];
   addEventListener('load', event => {
     __windowLifecycleEvents.push(
-      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}`
+      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   addEventListener('pageshow', event => {
     __windowLifecycleEvents.push(
-      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}`
+      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   delete globalThis.Event;
@@ -748,7 +748,7 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
     assert_eq!(
         vm.eval("__windowLifecycleEvents.join('|')")
             .expect("window lifecycle results should evaluate"),
-        "load:true:true:true|pageshow:true:false"
+        "load:true:true:true:true:false:false|pageshow:true:false:true:true:true"
     );
 }
 #[tokio::test]
