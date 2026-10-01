@@ -2733,7 +2733,7 @@ async fn native_terminals_publish_before_waiters_are_polled() {
         pending.push((
             command_id,
             page.enqueue_protocol_command_in_inspector_session(
-                RendererPageCommand::Native(Box::new(command)),
+                RendererPageCommand::Native(command),
                 Some("session-a".to_owned()),
             )
             .expect("enqueue native terminal"),
@@ -2883,7 +2883,7 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
         guards.push(guard);
         waiters.push(
             page.enqueue_protocol_command_in_inspector_session(
-                RendererPageCommand::Native(Box::new(command)),
+                RendererPageCommand::Native(command),
                 Some("native".to_owned()),
             )
             .unwrap(),

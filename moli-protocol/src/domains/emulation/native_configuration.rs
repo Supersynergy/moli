@@ -83,9 +83,5 @@ pub(super) fn try_start_surface(
 }
 
 pub(super) fn unit(command: Command) -> Operation {
-    Operation::new(command, |reply| match reply {
-        Ok(Reply::Unit) => Response::success(json!({})),
-        Err(error) => Response::error(-32000, error.to_string()),
-        _ => unreachable!("configuration acknowledgement"),
-    })
+    Operation::new(command, native::unit_response)
 }

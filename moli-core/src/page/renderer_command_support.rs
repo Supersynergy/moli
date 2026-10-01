@@ -1760,7 +1760,7 @@ impl Page {
             operation,
         );
         Ok((
-            self.start_page_command(RendererPageCommand::Native(Box::new(command)))?,
+            self.start_page_command(RendererPageCommand::Native(command))?,
             guard,
         ))
     }

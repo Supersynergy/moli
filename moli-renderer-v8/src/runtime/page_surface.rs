@@ -4657,7 +4657,8 @@ pub(crate) enum RendererInspectorPageCommand {
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
-    Native(Box<RendererCdpCall>),
+    // The call fits inline; its operation boxes the recursively contained page command.
+    Native(RendererCdpCall),
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,

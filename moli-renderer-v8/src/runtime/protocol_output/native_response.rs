@@ -233,6 +233,7 @@ impl RendererNativeCommandReadyResponse {
 /// inside the same renderer turn; only the terminal projection can publish a
 /// frontend response. These continuations never await Browser state or I/O.
 pub struct RendererNativeOperation {
+    // Breaks the Native call -> operation -> page command type cycle.
     pub(crate) command: Box<RendererPageCommand>,
     completion: NativeOperationCompletion,
     nested_main: bool,

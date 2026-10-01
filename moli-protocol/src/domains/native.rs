@@ -19,6 +19,16 @@ use crate::conn::{
     TargetPageResidenceIdentity,
 };
 
+pub(crate) fn unit_response(
+    reply: anyhow::Result<RendererPageReply>,
+) -> RendererNativeProtocolResponse {
+    match reply {
+        Ok(RendererPageReply::Unit) => RendererNativeProtocolResponse::success(json!({})),
+        Err(error) => RendererNativeProtocolResponse::error(-32000, error.to_string()),
+        _ => unreachable!("native Unit command reply"),
+    }
+}
+
 pub(crate) enum NativeCommandStep {
     Pending(PendingNativeCommand),
     Complete(CommandOutputPlan),
