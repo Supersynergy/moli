@@ -94,7 +94,14 @@ fn loader_clones_share_one_resource_disk_pool() {
 fn loader_clones_share_one_parkable_image_manager() {
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
     let clone = loader.clone();
-    let runner = crate::network::RendererResourceTaskRunner::for_test();
+    // Test shared ownership without a concurrent sweep temporarily retaining
+    // the image. Background scheduling has its own live-runtime coverage.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("image-manager ownership test runtime");
+    let runner =
+        crate::network::RendererResourceTaskRunner::from_tokio_handle(runtime.handle().clone());
     let image = loader
         .parkable_image_manager(&runner)
         .from_frozen_bytes(vec![7; 2 * 1024]);
