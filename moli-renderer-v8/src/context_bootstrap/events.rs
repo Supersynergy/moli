@@ -31,6 +31,10 @@ const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
 #[webapi(plain)]
 struct PageTransitionEventInitDeclaration {
     #[webapi(data_property, enumerable)]
+    bubbles: bool,
+    #[webapi(data_property, enumerable)]
+    cancelable: bool,
+    #[webapi(data_property, enumerable)]
     persisted: bool,
 }
 
@@ -67,11 +71,13 @@ pub(crate) fn construct_original_event<'s>(
     let event_ctor =
         super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "Event").ok()?;
     let event_type = v8_string(scope, event_type)?;
-    {
+    let event = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let scope = try_catch.init();
         event_ctor.new_instance(&scope, &[event_type.into()])
-    }
+    }?;
+    mark_event_trusted(scope, event);
+    Some(event)
 }
 
 pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
@@ -111,14 +117,16 @@ pub(crate) fn construct_original_page_transition_event<'s>(
     )
     .ok()?;
     let event_type = v8_string(scope, event_type)?;
-    let init = PageTransitionEventInitDeclaration::new(persisted)
+    let init = PageTransitionEventInitDeclaration::new(true, true, persisted)
         .bind(scope)
         .expect("PageTransitionEvent init declaration should bind");
-    {
+    let event = {
         let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
         let scope = try_catch.init();
         event_ctor.new_instance(&scope, &[event_type.into(), init.into()])
-    }
+    }?;
+    mark_event_trusted(scope, event);
+    Some(event)
 }
 
 pub(crate) fn construct_original_storage_event_utf16<'s>(

@@ -1964,7 +1964,14 @@ fn window_pageshow_uses_original_page_transition_event() {
     throw new Error("page replacement should not be invoked");
   };
   addEventListener("pageshow", event => {
-    __pageshowShape = `${event.type}:${event.persisted === false}:${'persisted' in event}`;
+    __pageshowShape = [
+      event.type,
+      event.persisted === false,
+      'persisted' in event,
+      event.bubbles,
+      event.cancelable,
+      event.isTrusted
+    ].join(':');
   });
   return "ready";
 })()
@@ -1977,7 +1984,7 @@ fn window_pageshow_uses_original_page_transition_event() {
     let shape = vm
         .eval("globalThis.__pageshowShape")
         .expect("pageshow shape should evaluate");
-    assert_eq!(shape, "pageshow:true:true");
+    assert_eq!(shape, "pageshow:true:true:true:true:true");
 }
 #[tokio::test]
 async fn detached_frame_tree_snapshot_reuses_each_child_document_scripting_policy() {
