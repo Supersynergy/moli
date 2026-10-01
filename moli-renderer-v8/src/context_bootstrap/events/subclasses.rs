@@ -1,4 +1,4 @@
-use super::base::{define_event_property, event_type_argument, initialize_event_object};
+use super::base::{define_event_property, event_type_argument, initialize_event_object_with_type};
 use super::init::{
     init_bool_property, init_number_property, init_string_property, init_value_property,
     init_window_view_property, read_event_init,
