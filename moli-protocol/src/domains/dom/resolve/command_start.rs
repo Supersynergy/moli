@@ -359,41 +359,25 @@ pub(super) fn start_cdp_dom_focus_command(
 
     let reference = devtools_node_reference_from_ids(params.node_id, params.backend_node_id)
         .ok_or_else(PendingDomCommandStartError::invalid_params)?;
-    if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference {
-        return start_document_frontend_node_binding_command(
-            conn,
-            cmd.id,
-            &owner,
-            frontend_node_id,
-            PendingDomCommandKind::ResolveFrontendNodeForFocus { frontend_node_id },
-        )?
-        .ok_or_else(PendingDomCommandStartError::node_not_found);
-    }
+    let missing_node_message = if matches!(reference, DevToolsDomNodeReference::FrontendNodeId(_)) {
+        "Could not find node with given id"
+    } else {
+        "No node found for given backend id"
+    };
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let page = loaded_page_mut_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_focus_document_node_for_reference(page, reference)?;
+    let pending = page
+        .start_focus_document_node(reference.into_renderer_reference(session))
+        .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(PendingDomCommandDispatch {
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::Focus {
-            missing_node_message: "No node found for given backend id",
+            missing_node_message,
         },
         pending,
     })
-}
-
-pub(super) fn start_focus_document_node_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    match reference {
-        DevToolsDomNodeReference::FrontendNodeId(_) => {
-            Err(PendingDomCommandStartError::node_not_found())
-        }
-        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => page
-            .start_focus_document_backend_node_id(backend_node_id)
-            .map_err(PendingDomCommandStartError::renderer_error),
-    }
 }
 
 pub(super) fn start_cdp_dom_attribute_mutation_command(
@@ -435,14 +419,20 @@ pub(super) fn start_cdp_dom_attribute_mutation_command(
         _ => unreachable!("attribute mutation command requires an attribute mutation action"),
     };
 
-    start_document_frontend_node_binding_command(
-        conn,
-        cmd.id,
-        &owner,
-        frontend_node_id,
-        PendingDomCommandKind::ResolveFrontendNodeForMutateAttribute { mutation },
-    )?
-    .ok_or_else(PendingDomCommandStartError::node_not_found)
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
+    let page = loaded_page_mut_for_owner(conn, &owner)
+        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
+    let reference =
+        DevToolsDomNodeReference::FrontendNodeId(frontend_node_id).into_renderer_reference(session);
+    let pending = page
+        .start_mutate_document_node_attribute(reference, mutation)
+        .map_err(PendingDomCommandStartError::renderer_error)?;
+    Ok(PendingDomCommandDispatch {
+        command_id: cmd.id,
+        owner_scope: owner,
+        kind: PendingDomCommandKind::MutateAttribute,
+        pending,
+    })
 }
 
 pub(super) fn start_cdp_dom_edit_command(
@@ -465,36 +455,6 @@ pub(super) fn start_cdp_dom_edit_command(
         kind: PendingDomCommandKind::EditDocumentNode,
         pending,
     })
-}
-
-pub(super) fn start_mutate_document_node_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-    mutation: RendererDomAttributeMutation,
-) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
-    match reference {
-        DevToolsDomNodeReference::FrontendNodeId(_) => {
-            Err(PendingDomCommandStartError::node_not_found())
-        }
-        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => page
-            .start_mutate_document_backend_node_attribute(backend_node_id, mutation)
-            .map(|pending| (pending, PendingDomCommandKind::MutateAttribute))
-            .map_err(PendingDomCommandStartError::renderer_error),
-    }
-}
-
-pub(super) fn start_remove_document_node_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    match reference {
-        DevToolsDomNodeReference::FrontendNodeId(_) => {
-            Err(PendingDomCommandStartError::node_not_found())
-        }
-        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => page
-            .start_remove_document_backend_node_id(backend_node_id)
-            .map_err(PendingDomCommandStartError::renderer_error),
-    }
 }
 
 pub(super) fn build_cdp_remove_node_command(
@@ -526,18 +486,12 @@ pub(super) fn start_devtools_remove_node_command(
     owner: &CommandOwnerScope,
     command: DevToolsRemoveNodeCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = command.reference {
-        return start_document_frontend_node_binding_command(
-            conn,
-            command_id,
-            owner,
-            frontend_node_id,
-            PendingDomCommandKind::ResolveFrontendNodeForRemoveNode { frontend_node_id },
-        );
-    }
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_remove_document_node_for_reference(page, command.reference)?;
+    let pending = page
+        .start_remove_document_node(command.reference.into_renderer_reference(session))
+        .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),

@@ -194,7 +194,7 @@ pub(super) enum PendingDomCommandKind {
     GetNodeForLocation {
         top_frame_id: String,
     },
-    RendererBackendNodeScrollIntoViewIfNeeded,
+    RendererNodeScrollIntoViewIfNeeded,
     PushNodesByBackendIdsToFrontend {
         backend_node_ids: Vec<u32>,
         node_ids: Vec<u32>,
@@ -206,24 +206,11 @@ pub(super) enum PendingDomCommandKind {
     QuerySelectorLive {
         multiple: bool,
     },
-    ResolveFrontendNodeForRemoveNode {
-        frontend_node_id: u32,
-    },
-    ResolveFrontendNodeForFocus {
-        frontend_node_id: u32,
-    },
-    ResolveFrontendNodeForMutateAttribute {
-        mutation: RendererDomAttributeMutation,
-    },
     ResolveFrontendNodeForResolveNode {
         frontend_node_id: u32,
         requested_execution_context_id: Option<i64>,
         object_group: Option<String>,
         top_frame_id: Option<String>,
-    },
-    ResolveFrontendNodeForScrollIntoViewIfNeeded {
-        frontend_node_id: u32,
-        rect: Option<DomScrollIntoViewRect>,
     },
     ResolveBidiNodeForSetFileInputFiles {
         object_id: DevToolsRemoteHandleId,
@@ -461,32 +448,6 @@ fn required_backend_node_id_for_reference(
             Err(PendingDomCommandStartError::node_not_found())
         }
     }
-}
-
-pub(super) fn start_document_node_snapshot_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-    depth: i32,
-    pierce: bool,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
-        .map_err(PendingDomCommandStartError::renderer_error)
-}
-
-fn start_scroll_into_view_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-    rect: Option<DomScrollIntoViewRect>,
-) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
-        .start_scroll_backend_node_into_view_if_needed(backend_node_id, rect)
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    Ok((
-        pending,
-        PendingDomCommandKind::RendererBackendNodeScrollIntoViewIfNeeded,
-    ))
 }
 
 fn optional_i64_to_i32(value: Option<i64>) -> Option<Option<i32>> {

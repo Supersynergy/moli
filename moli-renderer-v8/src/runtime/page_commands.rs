@@ -153,11 +153,11 @@ impl PageVm {
                 self.clear_active_drag_data_transfer()?;
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::MutateDocumentBackendNodeAttribute {
-                backend_node_id,
+            RendererPageCommand::MutateDocumentNodeAttribute {
+                reference,
                 mutation,
             } => self
-                .mutate_document_backend_node_attribute(backend_node_id, mutation)
+                .mutate_document_node_attribute(reference, mutation)
                 .map(RendererPageReply::DomAttributeMutationOutcome),
             RendererPageCommand::EditDocumentNode {
                 inspector_session_id,
@@ -165,8 +165,8 @@ impl PageVm {
             } => self
                 .edit_document_node(inspector_session_id.as_deref(), edit)
                 .map(RendererPageReply::DomEditOutcome),
-            RendererPageCommand::FocusDocumentBackendNode { backend_node_id } => self
-                .focus_document_backend_node(backend_node_id)
+            RendererPageCommand::FocusDocumentNode { reference } => self
+                .focus_document_node(reference)
                 .map(RendererPageReply::DomFocusOutcome),
             RendererPageCommand::TriggerAutofill(request) => self
                 .trigger_autofill(request)
@@ -456,11 +456,11 @@ impl PageVm {
                     &text,
                 )
                 .map(RendererPageReply::Bool),
-            RendererPageCommand::ScrollBackendNodeIntoViewIfNeeded {
-                backend_node_id,
+            RendererPageCommand::ScrollNodeIntoViewIfNeeded {
+                reference,
                 rect,
             } => self
-                .scroll_backend_node_into_view_if_needed(backend_node_id, rect)
+                .scroll_node_into_view_if_needed(reference, rect)
                 .map(RendererPageReply::ScrollIntoViewResult),
             RendererPageCommand::ClientRectForBackendNodeId { backend_node_id } => Ok(
                 RendererPageReply::OptionalDocumentNodeClientRect(
@@ -492,9 +492,10 @@ impl PageVm {
                     self.node_has_geometry_for_backend_node_id(backend_node_id)?,
                 ))
             }
-            RendererPageCommand::RemoveDocumentBackendNodeId { backend_node_id } => self
-                .remove_document_backend_node_id(backend_node_id)
-                .map(RendererPageReply::Bool),
+            RendererPageCommand::RemoveDocumentNode { reference } => self
+                .remove_document_node(reference)
+                .map(RendererPageReply::OptionalBool),
+            RendererPageCommand::DocumentNodeExistsForBackendNodeId { backend_node_id } => self.document_node_exists_for_backend_node_id(backend_node_id).map(RendererPageReply::Bool),
             RendererPageCommand::DocumentNodeSnapshotForBackendNodeId {
                 backend_node_id,
                 depth,

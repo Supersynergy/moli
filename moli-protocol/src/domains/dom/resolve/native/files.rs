@@ -35,28 +35,20 @@ pub(super) fn prepare(conn: &CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, 
     .ok_or_else(StartError::invalid_params)?;
     Ok(with_backend(session, reference, move |backend_node_id| {
         Operation::then(
-            Command::DocumentNodeSnapshotForBackendNodeId {
-                backend_node_id,
-                depth: 0,
-                pierce: false,
-            },
+            Command::DocumentNodeExistsForBackendNodeId { backend_node_id },
             move |reply| match reply {
-                Ok(Reply::OptionalDocumentNodeObjectSnapshot(snapshot)) if snapshot.is_some() => {
-                    match files {
-                        Ok(files) => Step::Continue(Operation::new(
-                            Command::SetFileInputFilesForBackendNodeId {
-                                backend_node_id,
-                                files,
-                                append: false,
-                            },
-                            project,
-                        )),
-                        Err(error) => Step::Complete(Response::error(error.code, error.message)),
-                    }
-                }
-                Ok(Reply::OptionalDocumentNodeObjectSnapshot(_)) => {
-                    Step::Complete(node_not_found())
-                }
+                Ok(Reply::Bool(true)) => match files {
+                    Ok(files) => Step::Continue(Operation::new(
+                        Command::SetFileInputFilesForBackendNodeId {
+                            backend_node_id,
+                            files,
+                            append: false,
+                        },
+                        project,
+                    )),
+                    Err(error) => Step::Complete(Response::error(error.code, error.message)),
+                },
+                Ok(Reply::Bool(false)) => Step::Complete(node_not_found()),
                 Err(error) => Step::Complete(Response::error(
                     -32000,
                     format!("Could not preflight file input node: {error}"),

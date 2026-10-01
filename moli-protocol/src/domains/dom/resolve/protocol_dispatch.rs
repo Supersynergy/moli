@@ -536,21 +536,16 @@ pub(super) fn start_devtools_scroll_into_view_if_needed_command(
     let Some(reference) = command.reference else {
         return Err(PendingDomCommandStartError::node_not_found());
     };
-    if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference {
-        return start_document_frontend_node_binding_command(
-            conn,
-            command_id,
-            owner,
-            frontend_node_id,
-            PendingDomCommandKind::ResolveFrontendNodeForScrollIntoViewIfNeeded {
-                frontend_node_id,
-                rect: command.rect,
-            },
-        );
-    }
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let (pending, kind) = start_scroll_into_view_for_reference(page, reference, command.rect)?;
+    let pending = page
+        .start_scroll_node_into_view_if_needed(
+            reference.into_renderer_reference(session),
+            command.rect,
+        )
+        .map_err(PendingDomCommandStartError::renderer_error)?;
+    let kind = PendingDomCommandKind::RendererNodeScrollIntoViewIfNeeded;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),

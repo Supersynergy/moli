@@ -1436,3 +1436,104 @@ fn cdp_set_file_input_files_node_reference_falls_back_to_pending_node_reference_
         panic!("setFileInputFiles without objectId should use node-reference pending path");
     };
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn typed_child_capture_and_removal_use_scoped_node_references() {
+    use crate::automation::{AutomationContext, AutomationResult, DevToolsError};
+    use crate::testing::TestContext;
+
+    async fn execute(
+        conn: &mut CdpConnection,
+        command: AutomationCommand,
+    ) -> Result<AutomationResult, DevToolsError> {
+        let pending = start_devtools_dom_command(conn, None, None, command)?
+            .expect("DOM operation must start in the renderer");
+        super::await_pending_devtools_dom_command_result(conn, pending).await
+    }
+
+    let mut ctx = TestContext::new();
+    ctx.process_async(
+        json!({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}}),
+    )
+    .await;
+    ctx.take_response_by_id(1);
+    ctx.process_async(json!({"id": 10, "method": "Page.navigate", "params": {"url": "data:text/html,<!doctype html><html><body><section id='front'><span>one</span></section><section id='back'><span>two</span></section></body></html>"}})).await;
+    let navigation = ctx.take_response_by_id(10);
+    let frame_id = navigation["result"]["frameId"].as_str().unwrap();
+    let loader_id = navigation["result"]["loaderId"].as_str().unwrap();
+    crate::testing::wait_until_renderer_document_load(&mut ctx, None, frame_id, loader_id).await;
+    ctx.process_async(json!({"id": 2, "method": "DOM.getDocument"}))
+        .await;
+    let root = ctx.take_response_by_id(2)["result"]["root"]["nodeId"].clone();
+    let context = AutomationContext {
+        protocol: FrontendProtocol::Cdp,
+        session_id: None,
+        target_id: None,
+        browser_context_id: None,
+    };
+    for (index, selector) in ["#front", "#back"].into_iter().enumerate() {
+        ctx.process_async(json!({"id": 3, "method": "DOM.querySelector", "params": {"nodeId": root, "selector": selector}})).await;
+        let frontend_node_id = ctx.take_response_by_id(3)["result"]["nodeId"]
+            .as_u64()
+            .unwrap() as u32;
+        ctx.process_async(
+            json!({"id": 4, "method": "DOM.describeNode", "params": {"nodeId": frontend_node_id}}),
+        )
+        .await;
+        let backend_node_id = ctx.take_response_by_id(4)["result"]["node"]["backendNodeId"]
+            .as_u64()
+            .unwrap() as u32;
+        let reference = if index == 0 {
+            DevToolsDomNodeReference::FrontendNodeId(frontend_node_id)
+        } else {
+            DevToolsDomNodeReference::BackendNodeId(backend_node_id)
+        };
+        let capture = execute(
+            &mut ctx.conn,
+            AutomationCommand::RequestChildNodes(
+                crate::automation::DevToolsRequestChildNodesCommand {
+                    context: context.clone(),
+                    reference: reference.clone(),
+                    depth: 1,
+                    pierce: false,
+                },
+            ),
+        )
+        .await
+        .expect("typed child capture should complete");
+        assert!(matches!(capture, AutomationResult::Empty));
+        let removed = execute(
+            &mut ctx.conn,
+            AutomationCommand::RemoveNode(crate::automation::DevToolsRemoveNodeCommand {
+                context: context.clone(),
+                reference,
+            }),
+        )
+        .await
+        .expect("typed removal should complete");
+        assert!(matches!(removed, AutomationResult::Empty));
+        ctx.process_async(json!({"id": 5, "method": "DOM.querySelector", "params": {"nodeId": root, "selector": selector}})).await;
+        assert_eq!(
+            ctx.take_response_by_id(5)["result"]["nodeId"],
+            0,
+            "removal must change the live document"
+        );
+    }
+    let missing = DevToolsDomNodeReference::FrontendNodeId(u32::MAX);
+    for command in [
+        AutomationCommand::RequestChildNodes(crate::automation::DevToolsRequestChildNodesCommand {
+            context: context.clone(),
+            reference: missing.clone(),
+            depth: 1,
+            pierce: false,
+        }),
+        AutomationCommand::RemoveNode(crate::automation::DevToolsRemoveNodeCommand {
+            context,
+            reference: missing,
+        }),
+    ] {
+        let error = execute(&mut ctx.conn, command).await.unwrap_err();
+        assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
+        assert_eq!(error.message, "Could not find node with given id");
+    }
+}

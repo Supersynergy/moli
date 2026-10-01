@@ -409,15 +409,23 @@ impl Page {
         ))
     }
 
+    pub fn start_scroll_node_into_view_if_needed(
+        &self,
+        reference: RendererDomNodeReference,
+        rect: Option<moli_page_types::DomScrollIntoViewRect>,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::ScrollNodeIntoViewIfNeeded { reference, rect })
+    }
+
     pub fn start_scroll_backend_node_into_view_if_needed(
         &self,
         backend_node_id: u32,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ScrollBackendNodeIntoViewIfNeeded {
-            backend_node_id,
+        self.start_scroll_node_into_view_if_needed(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
             rect,
-        })
+        )
     }
 
     pub fn finish_node_has_geometry_for_object_id(
@@ -624,26 +632,50 @@ impl Page {
         )
     }
 
+    pub fn start_remove_document_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::RemoveDocumentNode { reference })
+    }
+
     pub fn start_remove_document_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RemoveDocumentBackendNodeId {
-            backend_node_id,
-        })
+        self.start_remove_document_node(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
     pub fn finish_remove_document_node(
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<bool> {
+        self.finish_remove_document_node_reference(completion)
+            .map(|removed| removed.unwrap_or(false))
+    }
+
+    pub fn finish_remove_document_node_reference(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Option<bool>> {
         let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
             "remove document node page command",
-            "a bool reply",
-            RendererPageReply::Bool(value) => Ok(value),
+            "an optional bool reply",
+            RendererPageReply::OptionalBool(value) => Ok(value),
         )
+    }
+
+    pub fn start_mutate_document_node_attribute(
+        &self,
+        reference: RendererDomNodeReference,
+        mutation: RendererDomAttributeMutation,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::MutateDocumentNodeAttribute {
+            reference,
+            mutation,
+        })
     }
 
     pub fn start_mutate_document_backend_node_attribute(
@@ -651,10 +683,10 @@ impl Page {
         backend_node_id: u32,
         mutation: RendererDomAttributeMutation,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::MutateDocumentBackendNodeAttribute {
-            backend_node_id,
+        self.start_mutate_document_node_attribute(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
             mutation,
-        })
+        )
     }
 
     pub fn finish_mutate_document_node_attribute(
@@ -694,11 +726,18 @@ impl Page {
         )
     }
 
+    pub fn start_focus_document_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::FocusDocumentNode { reference })
+    }
+
     pub fn start_focus_document_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::FocusDocumentBackendNode { backend_node_id })
+        self.start_focus_document_node(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
     pub fn finish_focus_document_node_id(
@@ -827,6 +866,23 @@ impl Page {
             "an optional document node object snapshot reply",
             RendererPageReply::OptionalDocumentNodeObjectSnapshot(snapshot) => Ok(*snapshot),
         )
+    }
+
+    pub fn start_document_node_exists_for_backend_node_id(
+        &self,
+        backend_node_id: u32,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentNodeExistsForBackendNodeId {
+            backend_node_id,
+        })
+    }
+
+    pub fn finish_document_node_exists(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<bool> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(reply, "document node presence page command", "a bool reply", RendererPageReply::Bool(exists) => Ok(exists),)
     }
 
     pub fn start_document_node_snapshot_for_backend_node_id(
