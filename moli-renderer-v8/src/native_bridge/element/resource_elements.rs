@@ -1930,6 +1930,13 @@ pub(super) struct HtmlEmbedElementUrlPrototypeDeclaration {
         setter_data = DomStringReflection::EmbedType
     )]
     r#type: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = frame_owner_content_document_getter_function,
+        receiver = web_api_interfaces::HTMLEmbedElement::is_instance
+    )]
+    get_svg_document: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -2106,6 +2113,13 @@ pub(super) struct HtmlIFrameElementPrototypeDeclaration {
         receiver = web_api_interfaces::HTMLIFrameElement::is_instance
     )]
     content_window: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = frame_owner_content_document_getter_function,
+        receiver = web_api_interfaces::HTMLIFrameElement::is_instance
+    )]
+    get_svg_document: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

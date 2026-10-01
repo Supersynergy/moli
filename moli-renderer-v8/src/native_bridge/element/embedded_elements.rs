@@ -168,6 +168,13 @@ pub(super) struct HtmlObjectElementPrototypeDeclaration {
     )]
     content_window: (),
     #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = object_content_document_getter_function,
+        receiver = web_api_interfaces::HTMLObjectElement::is_instance
+    )]
+    get_svg_document: (),
+    #[webapi(
         accessor_property,
         getter = html_border_getter_function,
         setter = null_to_empty_dom_string_reflection_setter_function,
