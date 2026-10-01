@@ -747,9 +747,21 @@ where
             if has_inline {
                 return Ok(children);
             }
+            // A structural inline shares its parent's formatting context.
+            // Its nonempty whitespace can survive between outside siblings;
+            // leave collapsing to the complete inline normalization pass.
+            // Empty generated text still does not create a text child.
+            let preserve_whitespace = parent_style.display().is_inline_flow();
             return Ok(children
                 .into_iter()
-                .filter(|id| !self.is_ignorable_whitespace_text(world, *id))
+                .filter(|id| {
+                    !self.is_ignorable_whitespace_text(world, *id)
+                        || (preserve_whitespace
+                            && world.boxes[id.index()]
+                                .text
+                                .as_deref()
+                                .is_some_and(|text| !text.is_empty()))
+                })
                 .collect());
         }
         if !has_inline {
