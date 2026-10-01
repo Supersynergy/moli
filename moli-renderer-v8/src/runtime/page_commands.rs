@@ -440,9 +440,9 @@ impl PageVm {
                     is_regex,
                 )?,
             )),
-            RendererPageCommand::ComputedStylePropertiesForBackendNodeId { backend_node_id } => {
+            RendererPageCommand::ComputedStyleProperties { reference } => {
                 Ok(RendererPageReply::ComputedStyleProperties(
-                    self.computed_style_properties_for_backend_node_id(backend_node_id)?,
+                    self.computed_style_properties_for_node(reference)?,
                 ))
             }
             RendererPageCommand::SetInlineStyleSheetTextForStyleSheetId {
@@ -467,9 +467,9 @@ impl PageVm {
                     self.client_rect_for_backend_node_id(backend_node_id)?,
                 ),
             ),
-            RendererPageCommand::DocumentGeometryForBackendNodeId { backend_node_id } => Ok(
+            RendererPageCommand::DocumentGeometryForNode { reference } => Ok(
                 RendererPageReply::OptionalDocumentNodeGeometry(
-                    self.document_geometry_for_backend_node_id(backend_node_id)?,
+                    self.document_geometry_for_node(reference)?,
                 ),
             ),
             RendererPageCommand::DocumentHitTest {
@@ -502,28 +502,17 @@ impl PageVm {
             } => Ok(RendererPageReply::OptionalDocumentNodeObjectSnapshot(Box::new(
                 self.document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)?,
             ))),
-            RendererPageCommand::DocumentNodeSnapshotForBackendNodeIdInInspectorSession {
+            RendererPageCommand::DocumentNodeSnapshotForNodeInInspectorSession {
                 inspector_session_id,
                 include_whitespace,
-                backend_node_id,
+                reference,
                 depth,
                 pierce,
-            } => {
-                self.configure_document_dom_agent_session(
-                    inspector_session_id.as_deref(),
-                    include_whitespace,
-                );
-                Ok(RendererPageReply::OptionalDocumentNodeObjectSnapshot(
-                    Box::new(
-                        self.document_node_snapshot_for_backend_node_id_in_inspector_session(
-                            inspector_session_id.as_deref(),
-                            backend_node_id,
-                            depth,
-                            pierce,
-                        )?,
-                    ),
-                ))
-            }
+            } => Ok(RendererPageReply::OptionalDocumentNodeObjectSnapshot(
+                Box::new(self.document_node_snapshot_for_node_in_inspector_session(
+                    inspector_session_id.as_deref(), include_whitespace, reference, depth, pierce,
+                )?),
+            )),
             RendererPageCommand::DocumentNodeSnapshotForDocument {
                 inspector_session_id,
                 include_whitespace,
@@ -559,21 +548,18 @@ impl PageVm {
             } => Ok(RendererPageReply::OptionalDomSnapshotCapturePayload(
                 self.dom_snapshot_capture_payload(&top_frame_id, options),
             )),
-            RendererPageCommand::DocumentChildNodeSnapshotEventsForBackendNodeId {
+            RendererPageCommand::DocumentChildNodeSnapshotEventsForNode {
                 inspector_session_id,
                 include_whitespace,
-                backend_node_id,
+                reference,
                 depth,
                 pierce,
             } => {
-                self.configure_document_dom_agent_session(
-                    inspector_session_id.as_deref(),
-                    include_whitespace,
-                );
                 Ok(RendererPageReply::OptionalDocumentChildNodeSnapshotEvents(
-                    self.document_child_node_snapshot_events_for_backend_node_id(
+                    self.document_child_node_snapshot_events_for_node(
                         inspector_session_id.as_deref(),
-                        backend_node_id,
+                        include_whitespace,
+                        reference,
                         depth,
                         pierce,
                     ),
@@ -597,63 +583,54 @@ impl PageVm {
                     ),
                 ))
             }
-            RendererPageCommand::DocumentQuerySelectorForChildFrameBackendNodeId {
+            RendererPageCommand::DocumentQuerySelectorForChildFrameNode {
                 inspector_session_id,
                 include_whitespace,
                 frame_id,
-                root_backend_node_id,
+                root,
                 selector,
                 multiple,
             } => {
-                self.configure_document_dom_agent_session(
-                    inspector_session_id.as_deref(),
-                    include_whitespace,
-                );
                 Ok(RendererPageReply::DocumentQuerySelectorResolution(
-                    self.document_query_selector_for_child_frame_backend_node_id(
+                    self.document_query_selector_for_child_frame_node(
                         inspector_session_id.as_deref(),
+                        include_whitespace,
                         &frame_id,
-                        root_backend_node_id,
+                        root,
                         &selector,
                         multiple,
                     ),
                 ))
             }
-            RendererPageCommand::DocumentQuerySelectorForBackendNodeId {
+            RendererPageCommand::DocumentQuerySelectorForNode {
                 inspector_session_id,
                 include_whitespace,
-                root_backend_node_id,
+                root,
                 selector,
                 multiple,
             } => {
-                self.configure_document_dom_agent_session(
-                    inspector_session_id.as_deref(),
-                    include_whitespace,
-                );
                 Ok(RendererPageReply::DocumentQuerySelectorResolution(
-                    self.document_query_selector_for_backend_node_id(
+                    self.document_query_selector_for_node(
                         inspector_session_id.as_deref(),
-                        root_backend_node_id,
+                        include_whitespace,
+                        root,
                         &selector,
                         multiple,
                     ),
                 ))
             }
-            RendererPageCommand::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
+            RendererPageCommand::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
                 inspector_session_id,
                 include_whitespace,
-                root_backend_node_id,
+                root,
                 selector,
                 multiple,
             } => {
-                self.configure_document_dom_agent_session(
-                    inspector_session_id.as_deref(),
-                    include_whitespace,
-                );
                 Ok(RendererPageReply::DocumentQuerySelectorWithChildNodeSnapshotEvents(
-                    self.document_query_selector_with_child_node_snapshot_events_for_backend_node_id(
+                    self.document_query_selector_with_child_node_snapshot_events_for_node(
                         inspector_session_id.as_deref(),
-                        root_backend_node_id,
+                        include_whitespace,
+                        root,
                         &selector,
                         multiple,
                     ),
@@ -757,16 +734,16 @@ impl PageVm {
                     self.document_node_attributes(reference),
                 ))
             }
-            RendererPageCommand::DocumentNodeTextForBackendNodeId { backend_node_id } => {
+            RendererPageCommand::DocumentNodeText { reference } => {
                 Ok(RendererPageReply::DocumentNodeTextResolution(
-                    self.document_node_text_for_backend_node_id(backend_node_id),
+                    self.document_node_text(reference),
                 ))
             }
-            RendererPageCommand::DocumentNodePropertyForBackendNodeId {
-                backend_node_id,
+            RendererPageCommand::DocumentNodeProperty {
+                reference,
                 name,
             } => Ok(RendererPageReply::DocumentNodePropertyResolution(
-                self.document_node_property_for_backend_node_id(backend_node_id, &name),
+                self.document_node_property(reference, &name),
             )),
             RendererPageCommand::AccessibilityTreePayloadsForDocument { max_depth } => Ok(
                 RendererPageReply::OptionalAccessibilityPayloads(
@@ -778,33 +755,33 @@ impl PageVm {
                     self.accessibility_node_payload_for_document(),
                 ),
             ),
-            RendererPageCommand::AccessibilityTreePayloadsForBackendNodeId {
-                backend_node_id,
+            RendererPageCommand::AccessibilityTreePayloadsForNode {
+                reference,
                 max_depth,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                self.accessibility_tree_payloads_for_backend_node_id(backend_node_id, max_depth),
+                self.accessibility_tree_payloads_for_node(reference, max_depth),
             )),
-            RendererPageCommand::AccessibilityNodePayloadForBackendNodeId { backend_node_id } => {
+            RendererPageCommand::AccessibilityNodePayloadForNode { reference } => {
                 Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                    self.accessibility_node_payload_for_backend_node_id(backend_node_id),
+                    self.accessibility_node_payload_for_node(reference),
                 ))
             }
-            RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForBackendNodeId {
-                backend_node_id,
+            RendererPageCommand::AccessibilityNodeAndAncestorPayloadsForNode {
+                reference,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                self.accessibility_node_and_ancestor_payloads_for_backend_node_id(backend_node_id),
+                self.accessibility_node_and_ancestor_payloads_for_node(reference),
             )),
-            RendererPageCommand::AccessibilityChildNodePayloadsForBackendNodeId {
-                backend_node_id,
+            RendererPageCommand::AccessibilityChildNodePayloadsForNode {
+                reference,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                self.accessibility_child_node_payloads_for_backend_node_id(backend_node_id),
+                self.accessibility_child_node_payloads_for_node(reference),
             )),
-            RendererPageCommand::AccessibilityPartialTreePayloadsForBackendNodeId {
-                backend_node_id,
+            RendererPageCommand::AccessibilityPartialTreePayloadsForNode {
+                reference,
                 fetch_relatives,
             } => Ok(RendererPageReply::OptionalAccessibilityPayloadsForObjectId(
-                self.accessibility_partial_tree_payloads_for_backend_node_id(
-                    backend_node_id,
+                self.accessibility_partial_tree_payloads_for_node(
+                    reference,
                     fetch_relatives,
                 ),
             )),
@@ -844,11 +821,11 @@ impl PageVm {
                     self.outer_html_for_document(include_shadow_dom),
                 ))
             }
-            RendererPageCommand::OuterHtmlForBackendNodeId {
-                backend_node_id,
+            RendererPageCommand::OuterHtmlForNode {
+                reference,
                 include_shadow_dom,
             } => Ok(RendererPageReply::OptionalString(
-                self.outer_html_for_backend_node_id(backend_node_id, include_shadow_dom)?,
+                self.outer_html_for_node(reference, include_shadow_dom)?,
             )),
             RendererPageCommand::RenderPageDump { options } => Ok(RendererPageReply::OptionalString(
                 Some(self.render_page_dump(options)),

@@ -166,6 +166,9 @@ async def _native_prefix(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, 
         ("Accessibility.getFullAXTree", {}),
         ("DOM.resolveNode", {"nodeId": page.node, "objectGroup": "cdp-ordering"}),
         ("DOM.getAttributes", {"nodeId": page.node}),
+        ("CSS.getInlineStylesForNode", {"nodeId": page.node}),
+        ("CSS.getMatchedStylesForNode", {"nodeId": page.node}),
+        ("DOM.getOuterHTML", {"nodeId": page.node}),
         ("DOM.describeNode", {"backendNodeId": 2147483647}),
     ]
     ids = [await wire.send(method, params, session) for method, params in commands]
@@ -202,6 +205,9 @@ async def _native_prefix(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, 
     assert_equal(color, "rgb(255, 0, 0)", "native computed style")
     assert_equal(replies[ids[8]]["result"]["attributes"], ["id", "probe"],
                  "native attributes share the renderer query and its ordered terminal")
+    html = replies[ids[11]]["result"]["outerHTML"]
+    if '<input' not in html or 'id="probe"' not in html:
+        raise SmokeError(f"native outer HTML did not serialize the selected node: {html!r}")
     object_id = replies[ids[7]]["result"]["object"]["objectId"]
     resolved = await wire.call("Runtime.callFunctionOn", {
         "objectId": object_id, "functionDeclaration": "function() { return this.id; }",
@@ -271,14 +277,27 @@ async def _pause(wire: _Wire, page: _Page, *, instrumentation: bool = False) -> 
 
 
 async def _normal_pause(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, Any]:
+    await wire.evaluate(page.session,
+        "document.getElementById('probe').setAttribute('style', 'outline-width: 3px'); void 0")
     outer = await _pause(wire, page)
     commands = [("Page.getFrameTree", {}), ("DOM.describeNode", {"nodeId": page.node}),
                 ("CSS.getComputedStyleForNode", {"nodeId": page.node}),
-                ("DOM.getAttributes", {"nodeId": page.node})]
+                ("DOM.getAttributes", {"nodeId": page.node}),
+                ("CSS.getInlineStylesForNode", {"nodeId": page.node}),
+                ("CSS.getMatchedStylesForNode", {"nodeId": page.node}),
+                ("DOM.getOuterHTML", {"nodeId": page.node})]
     ids = [await wire.send(method, params, page.session) for method, params in commands]
     replies = {rid: await wire.response(rid) for rid in reversed(ids)}
-    assert_equal(replies[ids[-1]]["result"]["attributes"], ["id", "probe"],
+    assert_equal(replies[ids[3]]["result"]["attributes"],
+                 ["id", "probe", "style", "outline-width: 3px"],
                  "native attributes resolve the frontend node while paused")
+    for rid in ids[4:6]:
+        properties = replies[rid]["result"]["inlineStyle"]["cssProperties"]
+        width = next(p["value"] for p in properties if p["name"] == "outline-width")
+        assert_equal(width, "3px", "inline style resolves the frontend node while paused")
+    html = replies[ids[6]]["result"]["outerHTML"]
+    if 'id="probe"' not in html or 'outline-width: 3px' not in html:
+        raise SmokeError(f"paused outer HTML did not serialize the live node: {html!r}")
     if wire.has_response(outer):
         raise SmokeError("native queries must leave the outer evaluation paused")
     await wire.call("Debugger.resume", session=page.session)

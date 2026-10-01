@@ -34,21 +34,21 @@ impl RendererPageCommand {
             | Self::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | Self::DomDebuggerConfigureXhrBreakpoint { .. }
             | Self::DomDebuggerConfigureDomBreakpoint { .. }
-            | Self::ComputedStylePropertiesForBackendNodeId { .. }
+            | Self::ComputedStyleProperties { .. }
             | Self::ClientRectForBackendNodeId { .. }
-            | Self::DocumentGeometryForBackendNodeId { .. }
+            | Self::DocumentGeometryForNode { .. }
             | Self::DocumentHitTest { .. }
             | Self::NodeHasGeometryForBackendNodeId { .. }
             | Self::DocumentNodeSnapshotForBackendNodeId { .. }
-            | Self::DocumentNodeSnapshotForBackendNodeIdInInspectorSession { .. }
+            | Self::DocumentNodeSnapshotForNodeInInspectorSession { .. }
             | Self::DocumentNodeSnapshotForDocument { .. }
             | Self::DiscardDomAgentFrontendBindings { .. }
             | Self::DomSnapshotCapture { .. }
-            | Self::DocumentChildNodeSnapshotEventsForBackendNodeId { .. }
+            | Self::DocumentChildNodeSnapshotEventsForNode { .. }
             | Self::DocumentQuerySelectorForDocument { .. }
-            | Self::DocumentQuerySelectorForChildFrameBackendNodeId { .. }
-            | Self::DocumentQuerySelectorForBackendNodeId { .. }
-            | Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId { .. }
+            | Self::DocumentQuerySelectorForChildFrameNode { .. }
+            | Self::DocumentQuerySelectorForNode { .. }
+            | Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode { .. }
             | Self::DocumentPerformSearch { .. }
             | Self::DocumentGetSearchResults { .. }
             | Self::DocumentDiscardSearchResults { .. }
@@ -59,22 +59,22 @@ impl RendererPageCommand {
             | Self::DocumentBidiNodeBinding { .. }
             | Self::DocumentBidiNodeSharedIdForBackendNodeId { .. }
             | Self::DocumentNodeAttributes { .. }
-            | Self::DocumentNodeTextForBackendNodeId { .. }
-            | Self::DocumentNodePropertyForBackendNodeId { .. }
+            | Self::DocumentNodeText { .. }
+            | Self::DocumentNodeProperty { .. }
             | Self::AccessibilityTreePayloadsForDocument { .. }
             | Self::AccessibilityNodePayloadForDocument
-            | Self::AccessibilityTreePayloadsForBackendNodeId { .. }
-            | Self::AccessibilityNodePayloadForBackendNodeId { .. }
-            | Self::AccessibilityNodeAndAncestorPayloadsForBackendNodeId { .. }
-            | Self::AccessibilityChildNodePayloadsForBackendNodeId { .. }
-            | Self::AccessibilityPartialTreePayloadsForBackendNodeId { .. }
+            | Self::AccessibilityTreePayloadsForNode { .. }
+            | Self::AccessibilityNodePayloadForNode { .. }
+            | Self::AccessibilityNodeAndAncestorPayloadsForNode { .. }
+            | Self::AccessibilityChildNodePayloadsForNode { .. }
+            | Self::AccessibilityPartialTreePayloadsForNode { .. }
             | Self::AccessibilityTreePayloadsForChildFrame { .. }
             | Self::AccessibilityNodePayloadForChildFrame { .. }
             | Self::StyleSheetPayloadForStyleSheetId { .. }
             | Self::StyleSheetInventoryForDocument { .. }
             | Self::ResetCssAgentSession { .. }
             | Self::OuterHtmlForDocument { .. }
-            | Self::OuterHtmlForBackendNodeId { .. }
+            | Self::OuterHtmlForNode { .. }
             | Self::SerializeDocument
             | Self::LayoutMetrics
             | Self::PublishLayout

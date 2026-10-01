@@ -188,7 +188,7 @@ pub(super) struct PendingDomCommandStartError {
 pub(super) enum PendingDomCommandKind {
     DiscardDomAgentFrontendBindings,
     RemoveNode,
-    RendererBackendNodeClientRect {
+    RendererNodeGeometry {
         operation: DevToolsDomGeometryOperation,
     },
     GetNodeForLocation {
@@ -215,42 +215,11 @@ pub(super) enum PendingDomCommandKind {
     ResolveFrontendNodeForMutateAttribute {
         mutation: RendererDomAttributeMutation,
     },
-    ResolveFrontendNodeForQuerySelector {
-        selector: String,
-        multiple: bool,
-        top_frame_id: Option<String>,
-    },
     ResolveFrontendNodeForResolveNode {
         frontend_node_id: u32,
         requested_execution_context_id: Option<i64>,
         object_group: Option<String>,
         top_frame_id: Option<String>,
-    },
-    ResolveFrontendNodeForGetText {
-        frontend_node_id: u32,
-    },
-    ResolveFrontendNodeForGetProperty {
-        frontend_node_id: u32,
-        name: String,
-    },
-    ResolveFrontendNodeForDomGeometry {
-        frontend_node_id: u32,
-        operation: DevToolsDomGeometryOperation,
-    },
-    ResolveFrontendNodeForDescribeNode {
-        frontend_node_id: u32,
-        depth: i32,
-        pierce: bool,
-        top_frame_id: Option<String>,
-    },
-    ResolveFrontendNodeForRequestChildNodes {
-        depth: i32,
-        pierce: bool,
-        top_frame_id: Option<String>,
-    },
-    ResolveFrontendNodeForGetOuterHtml {
-        frontend_node_id: u32,
-        include_shadow_dom: bool,
     },
     ResolveFrontendNodeForScrollIntoViewIfNeeded {
         frontend_node_id: u32,
@@ -272,7 +241,7 @@ pub(super) enum PendingDomCommandKind {
     RequestNodeObjectReference,
     GetOuterHtmlDocument,
     GetOuterHtmlObjectReference,
-    GetOuterHtmlBackendNodeReference,
+    GetOuterHtmlNodeReference,
     ScrollIntoViewIfNeededObjectReference,
     Focus {
         missing_node_message: &'static str,
@@ -494,25 +463,6 @@ fn required_backend_node_id_for_reference(
     }
 }
 
-fn start_document_node_text_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_text_for_backend_node_id(backend_node_id)
-        .map_err(PendingDomCommandStartError::renderer_error)
-}
-
-fn start_document_node_property_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-    name: &str,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_property_for_backend_node_id(backend_node_id, name)
-        .map_err(PendingDomCommandStartError::renderer_error)
-}
-
 pub(super) fn start_document_node_snapshot_for_reference(
     page: &Page,
     reference: DevToolsDomNodeReference,
@@ -522,55 +472,6 @@ pub(super) fn start_document_node_snapshot_for_reference(
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
     page.start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
         .map_err(PendingDomCommandStartError::renderer_error)
-}
-
-fn start_inspector_document_node_snapshot_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
-    include_whitespace: bool,
-    reference: DevToolsDomNodeReference,
-    depth: i32,
-    pierce: bool,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_snapshot_for_backend_node_id_in_inspector_session(
-        renderer_inspector_session_id,
-        include_whitespace,
-        backend_node_id,
-        depth,
-        pierce,
-    )
-    .map_err(PendingDomCommandStartError::renderer_error)
-}
-
-fn start_outer_html_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-    include_shadow_dom: bool,
-) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
-        .start_outer_html_for_backend_node_id(backend_node_id, include_shadow_dom)
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    Ok((
-        pending,
-        PendingDomCommandKind::GetOuterHtmlBackendNodeReference,
-    ))
-}
-
-fn start_client_rect_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-    operation: DevToolsDomGeometryOperation,
-) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
-    let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
-        .start_document_geometry_for_backend_node_id(backend_node_id)
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    Ok((
-        pending,
-        PendingDomCommandKind::RendererBackendNodeClientRect { operation },
-    ))
 }
 
 fn start_scroll_into_view_for_reference(
@@ -585,58 +486,6 @@ fn start_scroll_into_view_for_reference(
     Ok((
         pending,
         PendingDomCommandKind::RendererBackendNodeScrollIntoViewIfNeeded,
-    ))
-}
-
-fn start_query_selector_with_child_node_snapshot_events_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
-    include_whitespace: bool,
-    reference: DevToolsDomNodeReference,
-    selector: String,
-    multiple: bool,
-    top_frame_id: Option<String>,
-) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
-    let root_backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
-        .start_document_query_selector_with_child_node_snapshot_events_for_backend_node_id(
-            renderer_inspector_session_id,
-            include_whitespace,
-            root_backend_node_id,
-            selector,
-            multiple,
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    Ok((
-        pending,
-        PendingDomCommandKind::QuerySelectorSetChildNodesLive {
-            multiple,
-            top_frame_id,
-        },
-    ))
-}
-
-fn start_query_selector_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
-    include_whitespace: bool,
-    reference: DevToolsDomNodeReference,
-    selector: String,
-    multiple: bool,
-) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
-    let root_backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
-        .start_document_query_selector_for_backend_node_id_in_inspector_session(
-            renderer_inspector_session_id,
-            include_whitespace,
-            root_backend_node_id,
-            selector,
-            multiple,
-        )
-        .map_err(PendingDomCommandStartError::renderer_error)?;
-    Ok((
-        pending,
-        PendingDomCommandKind::QuerySelectorLive { multiple },
     ))
 }
 

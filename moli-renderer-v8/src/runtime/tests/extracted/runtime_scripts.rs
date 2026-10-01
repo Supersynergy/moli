@@ -2861,8 +2861,11 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
             DevToolsSessionKey::Attached("native".to_owned()),
             attachment,
             RendererNativeOperation::new(
-                RendererPageCommand::ComputedStylePropertiesForBackendNodeId {
-                    backend_node_id: u32::MAX,
+                RendererPageCommand::ComputedStyleProperties {
+                    reference:
+                        crate::runtime::page_surface::RendererDomNodeReference::BackendNodeId(
+                            u32::MAX,
+                        ),
                 },
                 move |reply| {
                     assert!(matches!(

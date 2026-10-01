@@ -51,78 +51,6 @@ pub(super) fn complete_pending_dom_command(
                 out,
             );
         }
-        PendingDomCommandKind::ResolveFrontendNodeForGetText { frontend_node_id } => {
-            return complete_frontend_node_binding_for_get_text(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForGetProperty {
-            frontend_node_id,
-            name,
-        } => {
-            return complete_frontend_node_binding_for_get_property(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                name,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForDomGeometry {
-            frontend_node_id,
-            operation,
-        } => {
-            return complete_frontend_node_binding_for_dom_geometry(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                operation,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForDescribeNode {
-            frontend_node_id,
-            depth,
-            pierce,
-            top_frame_id,
-        } => {
-            return complete_frontend_node_binding_for_describe_node(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                depth,
-                pierce,
-                top_frame_id,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForRequestChildNodes {
-            depth,
-            pierce,
-            top_frame_id,
-        } => {
-            return complete_frontend_node_binding_for_request_child_nodes(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                depth,
-                pierce,
-                top_frame_id,
-                out,
-            );
-        }
         PendingDomCommandKind::ResolveFrontendNodeForRemoveNode { frontend_node_id } => {
             return complete_frontend_node_binding_for_remove_node(
                 conn,
@@ -153,22 +81,6 @@ pub(super) fn complete_pending_dom_command(
                 out,
             );
         }
-        PendingDomCommandKind::ResolveFrontendNodeForQuerySelector {
-            selector,
-            multiple,
-            top_frame_id,
-        } => {
-            return complete_frontend_node_binding_for_query_selector(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                selector,
-                multiple,
-                top_frame_id,
-                out,
-            );
-        }
         PendingDomCommandKind::ResolveFrontendNodeForResolveNode {
             frontend_node_id,
             requested_execution_context_id,
@@ -184,20 +96,6 @@ pub(super) fn complete_pending_dom_command(
                 requested_execution_context_id,
                 object_group,
                 top_frame_id,
-                out,
-            );
-        }
-        PendingDomCommandKind::ResolveFrontendNodeForGetOuterHtml {
-            frontend_node_id,
-            include_shadow_dom,
-        } => {
-            return complete_frontend_node_binding_for_get_outer_html(
-                conn,
-                command_id,
-                &owner_scope,
-                completion,
-                frontend_node_id,
-                include_shadow_dom,
                 out,
             );
         }
@@ -369,8 +267,8 @@ pub(super) fn complete_pending_dom_command(
                 page, completion, out,
             );
         }
-        PendingDomCommandKind::RendererBackendNodeClientRect { operation } => {
-            return complete_renderer_backend_node_client_rect(operation, page, completion, out);
+        PendingDomCommandKind::RendererNodeGeometry { operation } => {
+            return complete_renderer_node_geometry(operation, page, completion, out);
         }
         PendingDomCommandKind::GetNodeForLocation { top_frame_id } => {
             match finish_document_hit_test(page, completion, top_frame_id) {
@@ -435,8 +333,8 @@ pub(super) fn complete_pending_dom_command(
         PendingDomCommandKind::GetOuterHtmlObjectReference => {
             return complete_get_outer_html_object_reference(page, completion, out);
         }
-        PendingDomCommandKind::GetOuterHtmlBackendNodeReference => {
-            return complete_get_outer_html_backend_node_reference(page, completion, out);
+        PendingDomCommandKind::GetOuterHtmlNodeReference => {
+            return complete_get_outer_html_node_reference(page, completion, out);
         }
         PendingDomCommandKind::ScrollIntoViewIfNeededObjectReference => {
             return complete_scroll_into_view_if_needed_object_reference(page, completion, out);
@@ -654,17 +552,10 @@ pub(super) fn complete_pending_dom_command(
         | PendingDomCommandKind::DiscardSearchResultsLive
         | PendingDomCommandKind::SetNodeStackTracesEnabled
         | PendingDomCommandKind::GetNodeStackTraces
-        | PendingDomCommandKind::ResolveFrontendNodeForGetText { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForGetProperty { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForDomGeometry { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForDescribeNode { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForRequestChildNodes { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForRemoveNode { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForFocus { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForMutateAttribute { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForQuerySelector { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForResolveNode { .. }
-        | PendingDomCommandKind::ResolveFrontendNodeForGetOuterHtml { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForScrollIntoViewIfNeeded { .. }
         | PendingDomCommandKind::ResolveBidiNodeForSetFileInputFiles { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForSetFileInputFiles { .. } => {
