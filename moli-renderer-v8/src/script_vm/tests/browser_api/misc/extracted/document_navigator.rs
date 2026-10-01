@@ -381,3 +381,213 @@ fn request_relative_urls_follow_live_document_base_urls() {
     assert_eq!(checks.len(), 16);
     assert!(checks.iter().all(|check| *check), "{result}");
 }
+
+fn install_request_base_parent_document(vm: &mut ScriptVm) {
+    vm.exec(
+        r#"
+const html = document.documentElement || document.appendChild(document.createElement('html'));
+const head = document.head || html.appendChild(document.createElement('head'));
+if (!document.body) html.appendChild(document.createElement('body'));
+const parentBase = head.appendChild(document.createElement('base'));
+parentBase.href = '/parent-base/';
+globalThis.requestBaseFrame = document.createElement('iframe');
+"#,
+        None,
+    )
+    .expect("parent document with its own base should be installed");
+}
+
+fn assert_request_urls_follow_live_child_base_urls(
+    vm: &mut ScriptVm,
+    document_url: &str,
+    fallback_base_url: &str,
+) {
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("iframe should have its own realm");
+    let fallback_base_url = Url::parse(fallback_base_url).unwrap();
+    let parent_base_url = Url::parse(
+        &vm.eval("document.baseURI")
+            .expect("parent base should be readable"),
+    )
+    .unwrap();
+    let allowed_referrer = fallback_base_url.join("/allowed-referrer").unwrap();
+    let phases = [
+        (
+            Some("/initial/"),
+            fallback_base_url.join("/initial/").unwrap(),
+        ),
+        (
+            Some("../relative/"),
+            fallback_base_url.join("../relative/").unwrap(),
+        ),
+        (
+            Some("https://other-base.test/second/"),
+            Url::parse("https://other-base.test/second/").unwrap(),
+        ),
+        (None, fallback_base_url.clone()),
+    ];
+
+    for (href, expected_base_url) in phases {
+        let mutation = match href {
+            Some(href) => format!(
+                "const base = childDocument.querySelector('base') || \
+                 childDocument.head.appendChild(childDocument.createElement('base')); \
+                 base.href = {};",
+                serde_json::to_string(href).unwrap()
+            ),
+            None => "childDocument.querySelector('base').remove();".to_owned(),
+        };
+        vm.eval(&format!(
+            "(() => {{ const childDocument = requestBaseFrame.contentDocument; \
+             {mutation} }})()"
+        ))
+        .expect("child base mutation should evaluate");
+
+        let probe = format!(
+            r#"
+(() => {{
+  const child = CHILD_WINDOW;
+  return JSON.stringify({{
+    documentURL: child.document.URL,
+    baseURI: child.document.baseURI,
+    urls: ['item', '../item?q#f', '?q', '#f'].map(input => new child.Request(input).url),
+    absoluteURL: new child.Request('https://absolute.test/path').url,
+    allowedReferrer: new child.Request('item', {{referrer: {allowed_referrer}}}).referrer,
+    relativeReferrer: new child.Request('item', {{referrer: 'referrer'}}).referrer
+  }});
+}})()
+"#,
+            allowed_referrer = serde_json::to_string(allowed_referrer.as_str()).unwrap(),
+        );
+        let parent_result = vm
+            .eval(&probe.replace("CHILD_WINDOW", "requestBaseFrame.contentWindow"))
+            .expect("parent should construct a Request using the child constructor");
+        let child_result = vm
+            .eval_in_child_default_context(
+                child_context_id,
+                &probe.replace("CHILD_WINDOW", "globalThis"),
+            )
+            .expect("child realm should construct a Request using its own constructor");
+        let relative_referrer = expected_base_url.join("referrer").unwrap();
+        let expected_referrer = if relative_referrer.origin() == allowed_referrer.origin() {
+            relative_referrer.as_str()
+        } else {
+            "about:client"
+        };
+        let expected_urls = ["item", "../item?q#f", "?q", "#f"]
+            .map(|input| expected_base_url.join(input).unwrap().to_string());
+        let expected = serde_json::json!({
+            "documentURL": document_url,
+            "baseURI": expected_base_url.as_str(),
+            "urls": expected_urls,
+            "absoluteURL": "https://absolute.test/path",
+            "allowedReferrer": allowed_referrer.as_str(),
+            "relativeReferrer": expected_referrer,
+        });
+        for (realm, result) in [("parent", parent_result), ("child", child_result)] {
+            let actual: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(
+                actual, expected,
+                "{realm} call after base mutation {href:?}"
+            );
+        }
+        assert_eq!(
+            vm.eval("new Request('parent-item').url")
+                .expect("parent Request should retain the parent base"),
+            parent_base_url.join("parent-item").unwrap().as_str(),
+            "child base mutation {href:?} must not affect the parent's API base"
+        );
+    }
+}
+
+#[test]
+fn request_relative_urls_follow_live_initial_about_blank_iframe_base_urls() {
+    let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
+    install_request_base_parent_document(&mut vm);
+    vm.eval("document.body.appendChild(requestBaseFrame); requestBaseFrame.contentDocument")
+        .expect("initial about:blank iframe should be created");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_request_urls_follow_live_child_base_urls(
+        &mut vm,
+        "about:blank",
+        "https://request-base.test/parent-base/",
+    );
+}
+
+#[test]
+fn request_relative_urls_follow_live_srcdoc_iframe_base_urls() {
+    let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
+    install_request_base_parent_document(&mut vm);
+    vm.exec(
+        "requestBaseFrame.srcdoc = '<!doctype html><html><head></head><body></body></html>'; \
+         document.body.appendChild(requestBaseFrame);",
+        None,
+    )
+    .expect("srcdoc iframe should be created");
+    vm.drain_pending_child_frame_work_for_test();
+    assert_request_urls_follow_live_child_base_urls(
+        &mut vm,
+        "about:srcdoc",
+        "https://request-base.test/parent-base/",
+    );
+}
+
+#[tokio::test]
+async fn request_relative_urls_follow_live_http_iframe_base_urls() {
+    let (server_url, server) = spawn_lightweight_popup_response_html_server(
+        "Request iframe base server",
+        "Request iframe base",
+        "",
+        "<!doctype html><html><head></head><body></body></html>",
+    )
+    .await;
+    let server_url = Url::parse(&server_url).unwrap();
+    let parent_url = server_url.join("/parent/page.html").unwrap();
+    let child_url = server_url.join("/child/page.html").unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    install_request_base_parent_document(&mut vm);
+    vm.exec(
+        &format!(
+            "requestBaseFrame.src = {}; document.body.appendChild(requestBaseFrame);",
+            serde_json::to_string(child_url.as_str()).unwrap()
+        ),
+        None,
+    )
+    .expect("HTTP iframe navigation should start");
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        for _ in 0..128 {
+            let current_url = vm
+                .eval("requestBaseFrame.contentDocument && requestBaseFrame.contentDocument.URL")
+                .expect("committed child URL should be readable");
+            if current_url == child_url.as_str()
+                && !vm.live_child_default_runtime_realm_inventory().is_empty()
+            {
+                return;
+            }
+            if !vm
+                .run_one_oldest_ready_page_task_executor_turn(&loader)
+                .await
+                .expect("iframe navigation Page task should execute")
+            {
+                assert!(
+                    vm.wait_for_task_executor_work_arrival().await,
+                    "iframe navigation should publish its next Page task"
+                );
+            }
+        }
+        panic!("HTTP iframe navigation exceeded its finite Page task budget");
+    })
+    .await
+    .expect("HTTP iframe should commit and materialize its child realm");
+    assert_request_urls_follow_live_child_base_urls(
+        &mut vm,
+        child_url.as_str(),
+        child_url.as_str(),
+    );
+    server.await.expect("iframe response server should finish");
+}

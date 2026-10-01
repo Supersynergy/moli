@@ -413,10 +413,7 @@ fn shared_worker_constructor_context(
         let host = unsafe { &mut *host_ptr };
         let child_handle = current_child_context_handle(scope)
             .or_else(|| child_context_handle_from_object_creation_context(scope, receiver))
-            .or_else(|| {
-                host.active_child_subresource_request_scope()
-                    .map(|(handle, _, _)| handle)
-            });
+            .or_else(|| host.active_child_subresource_request_handle());
         let active_popup_referrer_policy = child_handle
             .is_none()
             .then(|| {

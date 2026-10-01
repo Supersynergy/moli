@@ -26,8 +26,9 @@ pub(super) fn effective_websocket_document_scope(
     let binding = host.current_runtime_window_execution_context_binding(scope)?;
     match binding.dispatch_scope() {
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
-            let (frame_id, document_url) = host.child_browsing_context_request_scope(handle)?;
-            Some((binding, Some(frame_id), document_url))
+            let frame_id = host.frame_owner_frame_id_for_child_handle(handle)?.0;
+            let base_url = host.child_browsing_context_base_url(handle)?;
+            Some((binding, Some(frame_id), base_url))
         }
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => Some((
             binding,

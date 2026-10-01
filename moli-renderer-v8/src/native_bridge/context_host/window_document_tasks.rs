@@ -183,7 +183,7 @@ impl JsContextHost {
                 RendererWindowDocumentSource::RootFrame
             }
             (WindowDocumentOwner::Frame(owner), OwnerDispatchScope::Child(handle)) => {
-                let (frame_id, _) = self.child_browsing_context_request_scope(handle)?;
+                let frame_id = self.frame_owner_frame_id_for_child_handle(handle)?.0;
                 RendererWindowDocumentSource::ChildFrame {
                     frame_id,
                     local_window_id: owner.local_window_id.0,

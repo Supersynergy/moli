@@ -1,5 +1,4 @@
 use super::*;
-use crate::util::get_private_value;
 
 pub(in crate::network_host) use crate::context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as XHR_CHILD_CONTEXT_HANDLE_SLOT;
 
@@ -70,77 +69,45 @@ pub(crate) fn effective_subresource_policy_context(
     }
 }
 
-fn child_browsing_context_handle_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> Option<crate::document_runtime::DomHandle> {
-    let object = local_object_in_scope(scope, object);
-    get_private_value(scope, object, XHR_CHILD_CONTEXT_HANDLE_SLOT)
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
-        .map(|value| crate::document_runtime::DomHandle::new(value as usize))
-}
-
-fn lightweight_popup_id_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> Option<u64> {
-    let object = local_object_in_scope(scope, object);
-    crate::native_bridge::lightweight_popup_id_from_window(scope, object)
-}
-
-fn local_object_in_scope<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
-    let global = v8::Global::new(scope, object);
-    v8::Local::new(scope, global)
-}
-
-pub(in crate::network_host) fn effective_subresource_request_scope(
+/// Select request attribution without using a document's mutable base URL.
+pub(in crate::network_host) fn effective_subresource_request_owner(
     scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
-    receiver: Option<v8::Local<'_, v8::Object>>,
-) -> (
-    Option<String>,
-    url::Url,
-    crate::native_bridge::OwnerDispatchScope,
-) {
-    let handle = receiver
-        .and_then(|receiver| child_browsing_context_handle_from_object(scope, receiver))
-        .or_else(|| {
-            host.active_child_subresource_request_scope()
-                .map(|(handle, _, _)| handle)
-        })
-        .or_else(|| {
-            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
-        });
+) -> crate::native_bridge::OwnerDispatchScope {
+    let handle = host.active_child_subresource_request_handle().or_else(|| {
+        crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
+    });
     if let Some(handle) = handle
-        && let Some((frame_id, document_url)) = host.child_browsing_context_request_scope(handle)
+        && host.frame_owner_frame_id_for_child_handle(handle).is_some()
     {
-        return (
-            Some(frame_id),
-            document_url,
-            crate::native_bridge::OwnerDispatchScope::Child(handle),
-        );
+        return crate::native_bridge::OwnerDispatchScope::Child(handle);
     }
-    let popup_id = receiver
-        .and_then(|receiver| lightweight_popup_id_from_object(scope, receiver))
-        .or_else(|| crate::native_bridge::active_lightweight_popup_id(scope));
-    if let Some(popup_id) = popup_id
-        && let Some(document_url) = host.lightweight_popup_request_base_url(scope, popup_id)
+    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope)
+        && host.lightweight_popup_document_url(popup_id).is_some()
     {
-        return (
-            None,
-            document_url,
-            crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id),
-        );
+        return crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
     }
-    (
-        None,
-        host.document_url().clone(),
-        crate::native_bridge::OwnerDispatchScope::Top,
-    )
+    crate::native_bridge::OwnerDispatchScope::Top
+}
+
+/// The API base URL resolves relative input; it is neither the document URL
+/// nor the origin used for request security checks. Read it live for every call.
+pub(crate) fn subresource_api_base_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+    owner: crate::native_bridge::OwnerDispatchScope,
+) -> Option<url::Url> {
+    match owner {
+        crate::native_bridge::OwnerDispatchScope::Top => {
+            Some(host.document_base_url_for_handle(host.document_handle()))
+        }
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_base_url(handle)
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_request_base_url(scope, popup_id)
+        }
+    }
 }
 
 pub(in crate::network_host) fn effective_subresource_referrer_policy(

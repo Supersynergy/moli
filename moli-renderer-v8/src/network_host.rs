@@ -136,11 +136,13 @@ pub(crate) use self::request::{
 pub(crate) use self::request::{
     parse_fetch_init, parse_request_redirect_mode_label, request_object_credentials_mode,
 };
-pub(crate) use self::request_scope::effective_subresource_policy_context;
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,
-    effective_subresource_referrer_policy, effective_subresource_request_scope,
+    effective_subresource_referrer_policy, effective_subresource_request_owner,
     observe_subresource_request_cookie_report,
+};
+pub(crate) use self::request_scope::{
+    effective_subresource_policy_context, subresource_api_base_url,
 };
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
