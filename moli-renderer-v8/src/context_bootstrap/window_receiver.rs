@@ -4,6 +4,8 @@ use crate::util::{
     throw_type_error,
 };
 
+pub(crate) const NATIVE_WINDOW_BRAND_SLOT: &str = "__moliNativeWindowBrand";
+
 /// Recognizes a native Window receiver for WebIDL brand checks.
 ///
 /// A retained, detached global proxy can lose both its creation context and
@@ -34,7 +36,8 @@ fn is_live_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some()
+    if get_private_value(scope, receiver, NATIVE_WINDOW_BRAND_SLOT).is_some()
+        || crate::native_bridge::lightweight_popup_id_from_window(scope, receiver).is_some()
         || crate::native_bridge::cross_origin_lightweight_popup_id(scope, receiver).is_some()
         || get_private_value(scope, receiver, CHILD_BROWSING_CONTEXT_HANDLE_SLOT).is_some()
     {

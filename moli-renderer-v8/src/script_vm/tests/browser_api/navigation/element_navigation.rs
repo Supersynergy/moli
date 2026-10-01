@@ -1,8 +1,12 @@
 use super::*;
 
-#[test]
-fn noopener_named_hyperlink_reuses_an_existing_iframe() {
-    let mut vm = new_storage_test_vm("https://example.com/page.html");
+#[tokio::test]
+async fn noopener_named_hyperlink_reuses_an_existing_iframe() {
+    let loader = static_http_loader([]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://example.com/page.html",
+        &loader,
+    );
     vm.eval(
         r#"
 const body = document.body;
@@ -18,6 +22,15 @@ link.click();
 "#,
     )
     .expect("noopener named hyperlink should evaluate");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "frame.contentWindow.location.href",
+        "about:blank#isolated",
+        "named iframe navigation",
+    )
+    .await;
 
     assert_eq!(
         vm.eval("frame.contentWindow.location.href")

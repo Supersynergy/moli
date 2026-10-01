@@ -12,7 +12,7 @@ use crate::{
             navigate_existing_browsing_context_target_for_dispatch_scope,
             navigate_named_iframe_target,
         },
-        entered_child_window_handle, lightweight_popup_id_from_window,
+        lightweight_popup_id_from_window,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
@@ -409,7 +409,7 @@ fn window_open_entered_document_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    if let Some(handle) = entered_child_window_handle(scope) {
+    if let OwnerDispatchScope::Child(handle) = host.entered_owner_dispatch_scope(scope) {
         return host.document_url_for_child_context(handle);
     }
     if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope)
@@ -427,7 +427,7 @@ fn window_open_entered_policy_container(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> DocumentPolicyContainer {
-    if let Some(handle) = entered_child_window_handle(scope)
+    if let OwnerDispatchScope::Child(handle) = host.entered_owner_dispatch_scope(scope)
         && let Some(policy_container) =
             host.child_browsing_context_policy_container_snapshot(handle)
     {

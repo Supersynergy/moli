@@ -368,15 +368,20 @@ fn browsing_context_target_window_for_dispatch_scope<'s>(
             crate::native_bridge::OwnerDispatchScope::Child(handle),
             Some(SpecialBrowsingContextTarget::Top),
         ) => Some(
-            unsafe { &mut *runtime_ptr }.child_browsing_context_root_window(scope, handle, global),
+            unsafe { &mut *runtime_ptr }
+                .child_browsing_context_parent_top_for_realm_global(scope, handle, global)
+                .1,
         ),
         (
             crate::native_bridge::OwnerDispatchScope::Child(handle),
             Some(SpecialBrowsingContextTarget::Parent),
         ) => {
             let runtime = unsafe { &mut *runtime_ptr };
-            let top = runtime.child_browsing_context_root_window(scope, handle, global);
-            Some(runtime.child_browsing_context_parent_window(scope, handle, top))
+            Some(
+                runtime
+                    .child_browsing_context_parent_top_for_realm_global(scope, handle, global)
+                    .0,
+            )
         }
     }
 }
