@@ -1536,7 +1536,7 @@ fn same_name_isolated_worlds_are_scoped_to_devtools_session_and_detach() {
 }
 
 #[test]
-fn frame_owner_get_svg_document_methods_share_content_document_semantics_and_enforce_brands() {
+fn frame_owner_get_svg_document_methods_reject_html_documents_and_enforce_brands() {
     let mut vm = new_storage_test_vm("https://frame-owner-get-svg-document.test/");
 
     let result = vm
@@ -1588,11 +1588,9 @@ fn frame_owner_get_svg_document_methods_share_content_document_semantics_and_enf
 
   return JSON.stringify({
     descriptors,
-    iframeMatches: iframe.getSVGDocument() !== null &&
-      iframe.getSVGDocument() === iframe.contentDocument,
-    embedHasDocument: embed.getSVGDocument() !== null,
-    objectMatches: object.getSVGDocument() !== null &&
-      object.getSVGDocument() === object.contentDocument,
+    iframeIsNull: iframe.getSVGDocument() === null,
+    embedIsNull: embed.getSVGDocument() === null,
+    objectIsNull: object.getSVGDocument() === null,
     brandErrors,
     absentFromBase: !("getSVGDocument" in HTMLElement.prototype)
   });
@@ -1603,6 +1601,52 @@ fn frame_owner_get_svg_document_methods_share_content_document_semantics_and_enf
 
     assert_eq!(
         result,
-        r#"{"descriptors":[{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true}],"iframeMatches":true,"embedHasDocument":true,"objectMatches":true,"brandErrors":["TypeError","TypeError","TypeError"],"absentFromBase":true}"#
+        r#"{"descriptors":[{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true}],"iframeIsNull":true,"embedIsNull":true,"objectIsNull":true,"brandErrors":["TypeError","TypeError","TypeError"],"absentFromBase":true}"#
+    );
+}
+
+#[test]
+fn frame_owner_get_svg_document_uses_native_document_content_type() {
+    let mut vm = new_storage_html_test_vm("https://frame-owner-svg-type.test/");
+    vm.eval(
+        r#"
+for (const tag of ['iframe', 'embed', 'object']) {
+  const owner = document.createElement(tag);
+  owner.id = tag;
+  if (tag === 'object') owner.data = 'about:blank';
+  else owner.src = 'about:blank';
+  document.body.appendChild(owner);
+  if (owner.getSVGDocument() !== null) throw new Error('HTML document accepted');
+}
+"#,
+    )
+    .expect("frame owner setup should evaluate");
+
+    // Simulate the response MIME metadata at a child document commit. Parsing
+    // and frame navigation are covered separately; this checks the public
+    // method against native metadata rather than author-visible properties.
+    {
+        let mut host = vm._context_host.borrow_mut();
+        for id in ["iframe", "embed", "object"] {
+            let owner = host.dom_host().element_handle_by_id(id).unwrap();
+            let document = host.child_browsing_context_document_handle(owner).unwrap();
+            host.set_dom_document_content_type_for_handle(document, "image/svg+xml");
+        }
+    }
+    assert_eq!(
+        vm.eval(
+            r#"
+['iframe', 'embed', 'object'].every(id => {
+  const owner = document.getElementById(id);
+  const svg = owner.getSVGDocument();
+  if (svg === null || svg.contentType !== 'image/svg+xml') return false;
+  if (id !== 'embed' && svg !== owner.contentDocument) return false;
+  Object.defineProperty(svg, 'contentType', {value: 'text/html', configurable: true});
+  return owner.getSVGDocument() === svg;
+})
+"#
+        )
+        .expect("native SVG document metadata should determine the result"),
+        "true"
     );
 }
