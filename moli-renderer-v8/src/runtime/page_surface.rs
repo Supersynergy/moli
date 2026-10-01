@@ -5159,6 +5159,10 @@ pub enum RendererPageCommand {
     SetPermissionOverrides(Vec<crate::protocol_types::PermissionOverrideRegistration>),
     SetIdleOverride(Option<crate::protocol_types::EmulatedIdleOverride>),
     SetNavigatorOverrides(moli_page_types::NavigatorOverrides),
+    SetNavigatorAndDocumentActivity {
+        navigator_overrides: moli_page_types::NavigatorOverrides,
+        document_activity: moli_page_types::DocumentActivity,
+    },
     SetDocumentActivity(moli_page_types::DocumentActivity),
     SetScriptExecutionDisabled(bool),
     SetBypassContentSecurityPolicy(bool),

@@ -95,9 +95,9 @@ enum PendingEmulationPageOperation {
     SetNetworkConditions,
     SetIdleOverride,
     SetNavigatorOverrides,
+    SetNavigatorAndDocumentActivity,
     SetEmulatedMedia,
     SetViewportSurface,
-    SetDocumentActivity,
     SetUserAgentLoader,
     ReplaceBrowserResourceRuntime,
 }
@@ -107,10 +107,10 @@ impl PendingEmulationPageOperation {
         match self {
             Self::SetExtraHttpHeaders
             | Self::SetNavigatorOverrides
+            | Self::SetNavigatorAndDocumentActivity
             | Self::SetNetworkConditions
             | Self::SetEmulatedMedia
             | Self::SetViewportSurface
-            | Self::SetDocumentActivity
             | Self::SetUserAgentLoader
             | Self::ReplaceBrowserResourceRuntime => true,
             // Chromium owns this state on RenderFrameHostImpl::IdleManager.
@@ -2854,26 +2854,15 @@ fn start_surface_override_page_command(
     navigator_overrides: moli_page_types::NavigatorOverrides,
     document_activity: moli_page_types::DocumentActivity,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let native_update = page
-        .start_set_navigator_overrides(&navigator_overrides)
+    let pending = page
+        .start_set_navigator_and_document_activity(navigator_overrides, document_activity)
         .map_err(|error| error.to_string())?;
-    let activity_update = page
-        .start_set_document_activity(document_activity)
-        .map_err(|error| error.to_string())?;
-    Ok(vec![
-        PendingEmulationPageCommand {
-            target: target.clone(),
-            operation: PendingEmulationPageOperation::SetNavigatorOverrides,
-            pending: native_update,
-            runtime_response_rx: None,
-        },
-        PendingEmulationPageCommand {
-            target,
-            operation: PendingEmulationPageOperation::SetDocumentActivity,
-            pending: activity_update,
-            runtime_response_rx: None,
-        },
-    ])
+    Ok(vec![PendingEmulationPageCommand {
+        target,
+        operation: PendingEmulationPageOperation::SetNavigatorAndDocumentActivity,
+        pending,
+        runtime_response_rx: None,
+    }])
 }
 
 fn finish_pending_emulation_page_command(
@@ -2943,7 +2932,9 @@ fn finish_emulation_page_operation(
         PendingEmulationPageOperation::SetIdleOverride => page
             .finish_set_idle_override(completion)
             .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetNavigatorOverrides => page
+        // Both operations acknowledge the captured policy with a unit reply.
+        PendingEmulationPageOperation::SetNavigatorOverrides
+        | PendingEmulationPageOperation::SetNavigatorAndDocumentActivity => page
             .finish_set_navigator_overrides(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetEmulatedMedia => page
@@ -2951,9 +2942,6 @@ fn finish_emulation_page_operation(
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetViewportSurface => page
             .finish_set_viewport_surface(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetDocumentActivity => page
-            .finish_set_document_activity(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::ReplaceBrowserResourceRuntime => page
             .finish_replace_browser_resource_runtime(completion)

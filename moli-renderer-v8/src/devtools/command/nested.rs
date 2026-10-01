@@ -186,6 +186,7 @@ impl RendererPageCommand {
             | Self::PublishAppManifestLoad(..)
             | Self::SetIdleOverride(..)
             | Self::SetNavigatorOverrides(..)
+            | Self::SetNavigatorAndDocumentActivity { .. }
             | Self::SetDocumentActivity(..)
             | Self::SetEmulatedMedia(..)
             | Self::SetViewportSurface(..) => OwnerOnly,

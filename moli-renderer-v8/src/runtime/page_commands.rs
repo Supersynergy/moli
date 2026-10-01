@@ -1101,6 +1101,16 @@ impl PageVm {
                 self.set_navigator_overrides(&overrides)?;
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::SetNavigatorAndDocumentActivity {
+                navigator_overrides,
+                document_activity,
+            } => {
+                // Preserve navigator-before-activity ordering for this policy;
+                // the caller needs one completion for the entire update.
+                self.set_navigator_overrides(&navigator_overrides)?;
+                self.set_document_activity(document_activity)?;
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::SetDocumentActivity(activity) => {
                 self.set_document_activity(activity)?;
                 Ok(RendererPageReply::Unit)
