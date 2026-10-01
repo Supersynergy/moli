@@ -2155,6 +2155,7 @@ mod mouse_snapshot;
 mod no_cors_header_fill;
 mod observer_callbacks;
 mod observer_receivers;
+mod offline_audio_float;
 mod post_parse;
 mod queue_microtask;
 mod rendering_update;
