@@ -346,7 +346,7 @@ struct OfflineAudioContextConstructorArgs {
     #[webidl(required)]
     length: f64,
     #[webidl(required)]
-    sample_rate: f64,
+    sample_rate: f32,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -1297,7 +1297,7 @@ pub(in crate::context_bootstrap) fn offline_audio_context_constructor_callback<'
 
     let channel_count = parsed.channel_count.trunc();
     let length = parsed.length.trunc();
-    let sample_rate = parsed.sample_rate;
+    let sample_rate = f64::from(parsed.sample_rate);
     if !channel_count.is_finite()
         || !length.is_finite()
         || !sample_rate.is_finite()
