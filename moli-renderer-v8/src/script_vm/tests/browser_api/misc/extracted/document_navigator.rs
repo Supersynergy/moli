@@ -350,6 +350,70 @@ fn geometry_exposes_svg_point_as_a_legacy_window_alias() {
 }
 
 #[test]
+fn request_referrers_use_captured_document_origin() {
+    for (document_url, origin, expected_referrer) in [
+        (
+            "about:blank",
+            "https://request-origin.test",
+            "https://request-origin.test/referrer",
+        ),
+        (
+            "https://request-origin.test/page.html",
+            "null",
+            "about:client",
+        ),
+    ] {
+        let mut vm = new_storage_test_vm(document_url);
+        {
+            // Seed inherited and opaque settings independently of the URL.
+            // No requests exist yet, so replacing this fixture's authority
+            // cannot discard in-flight loads.
+            let mut host = vm._context_host.borrow_mut();
+            let loader = host.current_main_document_resource_loader().unwrap();
+            let context = loader.fetch_context();
+            host.retire_document_resource_loader(context.owner())
+                .unwrap();
+            host.register_committed_document_resource_loader(
+                crate::network::context::DocumentFetchContext::new(
+                    context.owner(),
+                    context.document_url().clone(),
+                    context.base_url().clone(),
+                    origin,
+                ),
+                crate::network::context::DocumentResourceAuthoritySource::Inherited(loader),
+            );
+        }
+        let result = vm
+            .eval(
+                r#"
+(() => {
+  globalThis.origin = 'https://other.test';
+  const url = 'https://request-origin.test/resource';
+  return JSON.stringify([
+    document.URL,
+    globalThis.origin,
+    new Request(url, {referrer: 'https://request-origin.test/referrer'}).referrer,
+    new Request(url, {referrer: 'https://other.test/referrer'}).referrer
+  ]);
+})()
+"#,
+            )
+            .expect("Request referrer origin probe should evaluate");
+        let values: Vec<String> = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            values,
+            [
+                document_url,
+                "https://other.test",
+                expected_referrer,
+                "about:client",
+            ],
+            "document URL {document_url}, captured origin {origin}"
+        );
+    }
+}
+
+#[test]
 fn request_relative_urls_follow_live_document_base_urls() {
     let mut vm = new_storage_test_vm("https://request-base.test/dir/page.html");
     let result = vm

@@ -2,6 +2,8 @@ use super::super::headers::HeadersGuard;
 use super::*;
 use crate::web_api_interfaces;
 use crate::webidl;
+use moli_url::WebOrigin;
+use url::Url;
 
 pub(in crate::network_host) fn normalize_request_method(
     method: &str,
@@ -385,29 +387,21 @@ pub(super) fn normalize_request_referrer(scope: &mut v8::PinScope<'_, '_>, input
     let Some(context_origin) = current_request_context_origin(scope) else {
         return resolved;
     };
-    if moli_url::parsed_same_origin(&resolved, &context_origin) {
+    if Url::parse(&resolved).is_ok_and(|url| WebOrigin::from_url(&url).same_origin(&context_origin))
+    {
         resolved
     } else {
         "about:client".to_owned()
     }
 }
 
-fn current_request_context_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
+fn current_request_context_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<WebOrigin> {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &*host_ptr };
-        match effective_subresource_request_owner(scope, host) {
-            crate::native_bridge::OwnerDispatchScope::Top => {
-                Some(moli_url::origin_ascii_serialization(host.document_url()))
-            }
-            crate::native_bridge::OwnerDispatchScope::Child(handle) => {
-                host.child_browsing_context_target_origin(handle)
-            }
-            crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-                host.lightweight_popup_origin(popup_id)
-            }
-        }
+        let owner = effective_subresource_request_owner(scope, host);
+        let loader = host.document_resource_loader_for_dispatch_scope(owner)?;
+        Some(loader.fetch_context().request_origin())
     } else {
-        crate::context_bootstrap::current_worker_script_url(scope)
-            .map(|url| moli_url::origin_ascii_serialization(&url))
+        crate::worker::worker_global_origin(scope)
     }
 }

@@ -4432,6 +4432,17 @@ pub(crate) fn worker_current_script_url(scope: &mut v8::PinScope<'_, '_>) -> Opt
     get_worker_state(scope)?.borrow().current_script_url.clone()
 }
 
+pub(crate) fn worker_global_origin(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<moli_url::WebOrigin> {
+    let global = scope.get_current_context().global(scope);
+    let origin = get_private_value(scope, global, WORKER_GLOBAL_ORIGIN_SLOT)?;
+    let origin = v8::Local::<v8::String>::try_from(origin).ok()?;
+    Some(moli_url::WebOrigin::from_serialized(
+        &origin.to_rust_string_lossy(scope),
+    ))
+}
+
 pub(crate) fn worker_allows_trusted_type_policy_name(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
