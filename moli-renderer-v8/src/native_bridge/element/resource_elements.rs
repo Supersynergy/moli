@@ -1287,65 +1287,75 @@ fn frame_owner_content_document_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let receiver = args.this();
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, receiver)
-    else {
-        return;
-    };
-    if iframe_is_inside_its_own_child_context_document(scope, runtime_ptr, handle) {
-        rv.set_null();
-        return;
+    match frame_owner_content_document(scope, args.this()) {
+        Some(document) => rv.set(document.into()),
+        None => rv.set_null(),
     }
-    if iframe_has_inactive_child_context(unsafe { &*runtime_ptr }, handle) {
-        rv.set_null();
-        return;
+}
+
+pub(super) fn frame_owner_get_svg_document_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let document = frame_owner_content_document(scope, args.this()).filter(|document| {
+        node_runtime_and_handle_from_object_or_detached(scope, *document).is_ok_and(
+            |(runtime_ptr, handle)| {
+                unsafe { &*runtime_ptr }
+                    .dom_host()
+                    .document_content_type_for_handle(handle)
+                    == Some("image/svg+xml")
+            },
+        )
+    });
+    match document {
+        Some(document) => rv.set(document.into()),
+        None => rv.set_null(),
     }
-    if iframe_is_in_own_child_document(unsafe { &*runtime_ptr }, handle) {
-        rv.set_null();
-        return;
+}
+
+fn frame_owner_content_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver).ok()?;
+    if iframe_is_inside_its_own_child_context_document(scope, runtime_ptr, handle)
+        || iframe_has_inactive_child_context(unsafe { &*runtime_ptr }, handle)
+        || iframe_is_in_own_child_document(unsafe { &*runtime_ptr }, handle)
+    {
+        return None;
     }
     let runtime = unsafe { &*runtime_ptr };
     if iframe_uses_detached_content_cache(runtime, handle)
         || !runtime.dom_host().is_connected(handle)
     {
-        if iframe_uses_detached_content_cache(runtime, handle)
+        return if iframe_uses_detached_content_cache(runtime, handle)
             || disconnected_iframe_can_materialize_detached_content(runtime, handle)
         {
-            match detached_iframe_content_document(scope, receiver) {
-                Some(document) => rv.set(document.into()),
-                None => rv.set_null(),
-            }
+            detached_iframe_content_document(scope, receiver)
         } else {
-            rv.set_null();
-        }
-        return;
+            None
+        };
     }
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.refresh_child_browsing_context(scope, handle);
     if !runtime.child_browsing_context_is_same_origin_with_top(handle) {
-        rv.set_null();
-        return;
+        return None;
     }
-    let window = runtime.child_browsing_context_window_wrapper(scope, handle);
-    if let Some(window) = window {
+    if let Some(window) = runtime.child_browsing_context_window_wrapper(scope, handle) {
         runtime.set_cached_detached_iframe_content_window(scope, handle, window);
         if let Some(document) = window
             .get(scope, v8str(scope, "document").into())
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
         {
             runtime.set_cached_detached_iframe_content_document(scope, handle, document);
-            rv.set(document.into());
-            return;
+            return Some(document);
         }
     }
-    match runtime.child_browsing_context_document_wrapper(scope, handle) {
-        Some(document) => {
-            runtime.set_cached_detached_iframe_content_document(scope, handle, document);
-            rv.set(document.into());
-        }
-        None => rv.set_null(),
-    }
+    let document = runtime.child_browsing_context_document_wrapper(scope, handle)?;
+    runtime.set_cached_detached_iframe_content_document(scope, handle, document);
+    Some(document)
 }
 
 fn frame_owner_content_window_getter_function<'s>(
@@ -1933,7 +1943,7 @@ pub(super) struct HtmlEmbedElementUrlPrototypeDeclaration {
     #[webapi(
         method = "getSVGDocument",
         length = 0,
-        callback = frame_owner_content_document_getter_function,
+        callback = frame_owner_get_svg_document_function,
         receiver = web_api_interfaces::HTMLEmbedElement::is_instance
     )]
     get_svg_document: (),
@@ -2116,7 +2126,7 @@ pub(super) struct HtmlIFrameElementPrototypeDeclaration {
     #[webapi(
         method = "getSVGDocument",
         length = 0,
-        callback = frame_owner_content_document_getter_function,
+        callback = frame_owner_get_svg_document_function,
         receiver = web_api_interfaces::HTMLIFrameElement::is_instance
     )]
     get_svg_document: (),

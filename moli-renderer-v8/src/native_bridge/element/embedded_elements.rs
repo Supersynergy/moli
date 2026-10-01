@@ -170,7 +170,7 @@ pub(super) struct HtmlObjectElementPrototypeDeclaration {
     #[webapi(
         method = "getSVGDocument",
         length = 0,
-        callback = object_content_document_getter_function,
+        callback = super::resource_elements::frame_owner_get_svg_document_function,
         receiver = web_api_interfaces::HTMLObjectElement::is_instance
     )]
     get_svg_document: (),
