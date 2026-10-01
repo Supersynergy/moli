@@ -44,7 +44,7 @@ fn event_subclass_constructor_callback<'s>(
     };
     let (bubbles, cancelable, composed) = read_event_init(scope, &args);
 
-    initialize_event_object(scope, event, &event_type, bubbles, cancelable);
+    initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
     define_event_property(
         scope,
         event,

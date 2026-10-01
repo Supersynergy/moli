@@ -3,7 +3,6 @@ use super::*;
 use crate::context_bootstrap::{current_performance_time_origin, dom_time_since_origin_millis};
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
-use crate::webidl;
 use moli_webapi_declare::WebApiObject;
 
 pub(crate) const EVENT_DISPATCHING_SLOT: &str = "__lmDispatching";
@@ -88,7 +87,7 @@ pub(in crate::context_bootstrap) fn event_type_argument<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     constructor_name: &'static str,
-) -> Option<String> {
+) -> Option<v8::Local<'s, v8::String>> {
     if args.length() == 0 {
         throw_type_error(
             scope,
@@ -96,20 +95,7 @@ pub(in crate::context_bootstrap) fn event_type_argument<'s>(
         );
         return None;
     }
-    webidl::argument::<webidl::DomString>(
-        scope,
-        args,
-        0,
-        webidl::Context::argument(constructor_name, 1),
-    )
-    .map(Into::into)
-    .map_or_else(
-        |error| {
-            webidl::throw_error(scope, &error);
-            None
-        },
-        Some,
-    )
+    args.get(0).to_string(scope)
 }
 
 pub(crate) fn define_event_property(
@@ -476,7 +462,7 @@ pub(in crate::context_bootstrap) fn event_constructor_callback<'s>(
     };
 
     let (bubbles, cancelable, composed) = read_event_init(scope, &args);
-    initialize_event_object(scope, event, &event_type, bubbles, cancelable);
+    initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
     define_event_property(
         scope,
         event,
