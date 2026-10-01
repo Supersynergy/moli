@@ -1534,3 +1534,75 @@ fn same_name_isolated_worlds_are_scoped_to_devtools_session_and_detach() {
         "undefined"
     );
 }
+
+#[test]
+fn frame_owner_get_svg_document_methods_share_content_document_semantics_and_enforce_brands() {
+    let mut vm = new_storage_test_vm("https://frame-owner-get-svg-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    const html = document.createElement('html');
+    html.appendChild(document.createElement('body'));
+    document.appendChild(html);
+  }
+  const root = document.body || document.documentElement;
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<body>iframe child</body>";
+  const embed = document.createElement("embed");
+  embed.type = "text/html";
+  embed.src = "about:blank";
+  const object = document.createElement("object");
+  object.type = "text/html";
+  object.data = "about:blank";
+  root.appendChild(iframe);
+  root.appendChild(embed);
+  root.appendChild(object);
+
+  const interfaces = [
+    [HTMLIFrameElement.prototype, iframe, "HTMLIFrameElement"],
+    [HTMLEmbedElement.prototype, embed, "HTMLEmbedElement"],
+    [HTMLObjectElement.prototype, object, "HTMLObjectElement"]
+  ];
+  const descriptors = interfaces.map(([prototype]) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "getSVGDocument");
+    return {
+      type: typeof descriptor.value,
+      name: descriptor.value.name,
+      length: descriptor.value.length,
+      writable: descriptor.writable,
+      enumerable: descriptor.enumerable,
+      configurable: descriptor.configurable
+    };
+  });
+  const brandErrors = interfaces.map(([prototype], index) => {
+    try {
+      prototype.getSVGDocument.call(interfaces[(index + 1) % interfaces.length][1]);
+      return "accepted";
+    } catch (error) {
+      return error.name;
+    }
+  });
+
+  return JSON.stringify({
+    descriptors,
+    iframeMatches: iframe.getSVGDocument() !== null &&
+      iframe.getSVGDocument() === iframe.contentDocument,
+    embedHasDocument: embed.getSVGDocument() !== null,
+    objectMatches: object.getSVGDocument() !== null &&
+      object.getSVGDocument() === object.contentDocument,
+    brandErrors,
+    absentFromBase: !("getSVGDocument" in HTMLElement.prototype)
+  });
+})()
+"#,
+        )
+        .expect("frame owner getSVGDocument methods should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":[{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true}],"iframeMatches":true,"embedHasDocument":true,"objectMatches":true,"brandErrors":["TypeError","TypeError","TypeError"],"absentFromBase":true}"#
+    );
+}
