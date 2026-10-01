@@ -136,7 +136,7 @@ struct DomRectPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly, enumerable)]
 struct DomRectReadOnlyConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",
@@ -147,7 +147,7 @@ struct DomRectReadOnlyConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRect)]
+#[webapi(interface = web_api_interfaces::DOMRect, enumerable)]
 struct DomRectConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",
@@ -216,13 +216,13 @@ struct DomRectReadOnlyConstructorArgs {
 #[webidl(prefix = "DOMRectInit")]
 struct DomRectInit {
     #[webidl(default = 0.0)]
-    x: f64,
-    #[webidl(default = 0.0)]
-    y: f64,
+    height: f64,
     #[webidl(default = 0.0)]
     width: f64,
     #[webidl(default = 0.0)]
-    height: f64,
+    x: f64,
+    #[webidl(default = 0.0)]
+    y: f64,
 }
 
 pub(super) fn dom_rect_readonly_constructor_callback<'s>(
