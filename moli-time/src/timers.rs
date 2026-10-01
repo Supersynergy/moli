@@ -43,7 +43,19 @@ struct ScheduledTimer<T> {
     sequence: u64,
     run_at: Instant,
     delay_ms: u64,
+    allow_early_dispatch: bool,
     payload: T,
+}
+
+impl<T> ScheduledTimer<T> {
+    fn is_ready_at(&self, now: Instant, allowance: TimerReadyAllowance) -> bool {
+        let allowance = if self.allow_early_dispatch {
+            allowance
+        } else {
+            TimerReadyAllowance::NONE
+        };
+        timer_ready(self.run_at, self.delay_ms, now, allowance)
+    }
 }
 
 impl<T> Ord for ScheduledTimer<T> {
@@ -97,7 +109,19 @@ impl<T> TimerScheduler<T> {
     // HTML timers apply their own argument conversion before scheduling.
     pub fn schedule_after(&mut self, payload: T, delay_ms: u64, now: Instant) -> TimerId {
         let id = self.allocate_id();
-        self.schedule_existing_after(id, payload, delay_ms, now);
+        self.schedule_existing_after(id, payload, delay_ms, now, true);
+        id
+    }
+
+    /// Schedules one timer whose deadline cannot be advanced by a ready allowance.
+    pub fn schedule_after_without_early_allowance(
+        &mut self,
+        payload: T,
+        delay_ms: u64,
+        now: Instant,
+    ) -> TimerId {
+        let id = self.allocate_id();
+        self.schedule_existing_after(id, payload, delay_ms, now, false);
         id
     }
 
@@ -148,7 +172,7 @@ impl<T> TimerScheduler<T> {
                 let _ = self.pending.pop();
                 continue;
             }
-            if !timer_ready(timer.run_at, timer.delay_ms, now, allowance) {
+            if !timer.is_ready_at(now, allowance) {
                 return None;
             }
 
@@ -214,7 +238,7 @@ impl<T> TimerScheduler<T> {
     {
         self.pending.iter().any(|timer| {
             self.active.contains(&timer.id)
-                && timer_ready(timer.run_at, timer.delay_ms, now, allowance)
+                && timer.is_ready_at(now, allowance)
                 && predicate(&timer.payload)
         })
     }
@@ -235,15 +259,14 @@ impl<T> TimerScheduler<T> {
         if self.cancelled_running.remove(&id) {
             return false;
         }
-        self.schedule_existing_after(id, payload, delay_ms, now);
+        self.schedule_existing_after(id, payload, delay_ms, now, true);
         true
     }
 
     pub fn has_ready_timer(&self, now: Instant, allowance: TimerReadyAllowance) -> bool {
-        self.pending.iter().any(|timer| {
-            self.active.contains(&timer.id)
-                && timer_ready(timer.run_at, timer.delay_ms, now, allowance)
-        })
+        self.pending
+            .iter()
+            .any(|timer| self.active.contains(&timer.id) && timer.is_ready_at(now, allowance))
     }
 
     pub fn next_ready_deadline_matching<F>(
@@ -283,7 +306,14 @@ impl<T> TimerScheduler<T> {
         self.active.len()
     }
 
-    fn schedule_existing_after(&mut self, id: TimerId, payload: T, delay_ms: u64, now: Instant) {
+    fn schedule_existing_after(
+        &mut self,
+        id: TimerId,
+        payload: T,
+        delay_ms: u64,
+        now: Instant,
+        allow_early_dispatch: bool,
+    ) {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
         self.active.insert(id);
@@ -292,6 +322,7 @@ impl<T> TimerScheduler<T> {
             sequence,
             run_at: now + Duration::from_millis(delay_ms),
             delay_ms,
+            allow_early_dispatch,
             payload,
         });
     }
@@ -321,7 +352,7 @@ impl<T> TimerScheduler<T> {
             if !self.active.contains(&timer.id) {
                 continue;
             }
-            if !timer_ready(timer.run_at, timer.delay_ms, now, allowance) {
+            if !timer.is_ready_at(now, allowance) {
                 if first_non_ready.is_none_or(|current| timer_precedes(timer, current)) {
                     first_non_ready = Some(timer);
                 }
@@ -364,6 +395,55 @@ fn timer_ready(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timers_without_early_allowance_wait_until_their_deadline_in_every_ready_query() {
+        let now = Instant::now();
+        let mut scheduler = TimerScheduler::default();
+        let ordinary = scheduler.schedule_after("ordinary", 1, now);
+        let idle = scheduler.schedule_after_without_early_allowance("idle", 1, now);
+        let allowance = TimerReadyAllowance {
+            max_delay_ms: 1,
+            allowance: Duration::from_millis(1),
+        };
+        assert!(scheduler.has_ready_timer(now, allowance));
+        let ready = scheduler.take_next_ready(now, allowance).unwrap();
+        assert_eq!(ready.id, ordinary);
+        scheduler.finish_running(ordinary);
+
+        let before_deadline = now + Duration::from_micros(999);
+        assert!(!scheduler.has_ready_timer(before_deadline, allowance));
+        assert!(!scheduler.has_ready_matching(before_deadline, allowance, |_| true));
+        assert_eq!(
+            scheduler.next_ready_deadline_matching(before_deadline, allowance, |_| true),
+            None
+        );
+        assert!(
+            scheduler
+                .take_next_ready(before_deadline, allowance)
+                .is_none()
+        );
+        assert!(
+            scheduler
+                .take_next_ready_matching(before_deadline, allowance, |_| true)
+                .is_none()
+        );
+        assert_eq!(scheduler.ms_to_next(before_deadline), Some(1));
+
+        let deadline = now + Duration::from_millis(1);
+        assert!(scheduler.has_ready_timer(deadline, allowance));
+        assert_eq!(
+            scheduler.next_ready_deadline_matching(deadline, allowance, |_| true),
+            Some(deadline)
+        );
+        let ready = scheduler
+            .take_next_ready_matching(deadline, allowance, |_| true)
+            .unwrap();
+        assert_eq!(ready.id, idle);
+        assert_eq!(ready.payload, "idle");
+        scheduler.finish_running(idle);
+        assert_eq!(scheduler.pending_count(), 0);
+    }
 
     #[test]
     fn ready_timers_fire_by_deadline_then_sequence() {

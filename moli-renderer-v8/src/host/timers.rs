@@ -469,18 +469,24 @@ impl HostTimeoutScheduler {
         ) else {
             return 0;
         };
-        self.scheduler
-            .schedule_after(
-                ScheduledTimerTask {
-                    callback: ScheduledTimerCallback::WindowWebIdl(callback),
-                    owner,
-                    is_interval,
-                    extra_args,
-                },
-                u64::from(delay_ms),
-                Instant::now(),
-            )
-            .get()
+        let task = ScheduledTimerTask {
+            callback: ScheduledTimerCallback::WindowWebIdl(callback),
+            owner,
+            is_interval,
+            extra_args,
+        };
+        let now = Instant::now();
+        let id = if matches!(kind, WindowWebIdlCallbackTaskKind::Idle { .. }) {
+            // An idle opportunity must reach its actual deadline. The shared
+            // heap's allowance for short timers would otherwise run recursive
+            // idle callbacks immediately, within the same DOM clock tick.
+            self.scheduler
+                .schedule_after_without_early_allowance(task, u64::from(delay_ms), now)
+        } else {
+            self.scheduler
+                .schedule_after(task, u64::from(delay_ms), now)
+        };
+        id.get()
     }
 
     pub(crate) fn queue_source_once_with_receiver<'s>(
