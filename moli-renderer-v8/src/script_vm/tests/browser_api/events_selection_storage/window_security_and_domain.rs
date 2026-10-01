@@ -48,7 +48,8 @@ frame.src = {:?};
         )
         .await;
         assert_eq!(
-            vm.eval("JSON.stringify(results)").unwrap(),
+            vm.eval("JSON.stringify(results.sort((a, b) => a.target.localeCompare(b.target)))")
+                .unwrap(),
             if nested {
                 r#"[{"target":"_parent","denied":false,"same":true,"isTop":false},{"target":"_top","denied":true,"same":false,"isTop":true}]"#
             } else {
