@@ -3,11 +3,7 @@
 //! the Browser acknowledgement of that policy; a published reply always wins.
 use super::*;
 use crate::domains::native::{self, NativeCommandStep};
-use moli_core::{
-    RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
-    RendererNativeProtocolResponse as Response, RendererPageCommand as Command,
-    RendererPageReply as Reply,
-};
+use moli_core::{RendererNativeOperation as Operation, RendererPageCommand as Command};
 
 pub(super) fn try_start(
     conn: &mut CdpConnection,
@@ -63,21 +59,15 @@ pub(super) fn try_start_surface(
     let attachment = native::frontend_attachment(conn, cmd)?;
     let inputs =
         conn.navigation_load_inputs_for_owner(&CommandOwnerScope::capture(conn, cmd.session_id));
-    let operation = Operation::then(
-        Command::SetNavigatorOverrides(inputs.navigator_overrides),
-        move |reply| match reply {
-            Ok(Reply::Unit) => {
-                Step::Continue(unit(Command::SetDocumentActivity(inputs.document_activity)))
-            }
-            Err(error) => Step::Complete(Response::error(-32000, error.to_string())),
-            _ => unreachable!("navigator configuration acknowledgement"),
-        },
-    );
+    let operation = unit(Command::SetNavigatorAndDocumentActivity {
+        navigator_overrides: inputs.navigator_overrides,
+        document_activity: inputs.document_activity,
+    });
     Some(start_admitted(
         conn,
         cmd,
         operation,
-        PendingEmulationPageOperation::SetDocumentActivity,
+        PendingEmulationPageOperation::SetNavigatorAndDocumentActivity,
         attachment,
     ))
 }

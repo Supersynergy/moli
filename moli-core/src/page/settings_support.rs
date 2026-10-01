@@ -506,6 +506,18 @@ impl Page {
         )
     }
 
+    /// Apply one captured target policy in a single renderer owner turn.
+    pub fn start_set_navigator_and_document_activity(
+        &self,
+        navigator_overrides: moli_page_types::NavigatorOverrides,
+        document_activity: moli_page_types::DocumentActivity,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetNavigatorAndDocumentActivity {
+            navigator_overrides,
+            document_activity,
+        })
+    }
+
     pub async fn set_document_activity_async(
         &mut self,
         activity: moli_page_types::DocumentActivity,
