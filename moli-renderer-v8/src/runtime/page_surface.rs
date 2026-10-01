@@ -6129,6 +6129,7 @@ impl RendererPageTable {
                 navigation_redirect_chain: Vec::new(),
                 final_url,
                 document_title,
+                document_activity: Default::default(),
                 status,
                 headers: Vec::new(),
                 script_execution: Arc::new(ScriptExecutionReport::default()),
