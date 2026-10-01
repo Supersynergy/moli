@@ -39,13 +39,18 @@ and instrumentation pause must leave Main work pending while IO remains live.
 `DOM.setNodeStackTracesEnabled`, and `DOM.disable` must also complete through
 their frontend native wrappers before the client sends resume. Disabling must
 invalidate the original node bindings while the outer evaluation stays paused.
+Paused scoped queries also cover selectors, child captures, AX, and geometry;
+selector bindings, subtree depth, AX backend identity, and nonempty layout are
+checked. Child-node notifications must precede their request's terminal, and
+ready Main replies must retain wire order even when awaited in reverse.
 All scenarios use local fixture documents, match the navigation's loader and
 `DOMContentLoaded` before setup, track the original response session
 and exactly one terminal per command, retain the full wire transcript, and use
 protocol events/responses instead of sleeps or retries.
 
-Four mutation cases explicitly preserve Moli's current VM entry boundary:
-`DOM.setAttributeValue`, `CSS.setStyleSheetText`, `Page.setDocumentContent`, and
+Six mutation cases explicitly preserve Moli's current VM entry boundary:
+`DOM.setAttributeValue`, `DOM.removeNode`, `DOM.scrollIntoViewIfNeeded`,
+`CSS.setStyleSheetText`, `Page.setDocumentContent`, and
 `Emulation.setHardwareConcurrencyOverride` wait for resume in Moli but complete
 during ordinary pause in Chromium. This is a Moli implementation limitation,
 not a CDP requirement; supporting nested mutation later must deliberately update
