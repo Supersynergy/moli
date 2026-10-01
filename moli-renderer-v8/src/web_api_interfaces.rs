@@ -595,6 +595,8 @@ interfaces! {
     WebGLTransformFeedback: WebGLObject;
     WebGLVertexArrayObject: WebGLObject;
     WebGLUniformLocation;
+    WebTransportBidirectionalStream;
+    WebTransportDatagramDuplexStream;
     WebSocket: EventTarget;
     WebSocketError: DOMException;
     WebSocketStream;
