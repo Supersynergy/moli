@@ -657,10 +657,9 @@ impl ScriptVm {
         }
         let frame_id = {
             let host = self._context_host.borrow();
-            let (frame_id, _) = host
-                .child_browsing_context_request_scope(handle)
-                .ok_or_else(|| anyhow::anyhow!("child frame realm scope is unavailable"))?;
-            frame_id
+            host.frame_owner_frame_id_for_child_handle(handle)
+                .ok_or_else(|| anyhow::anyhow!("child frame realm scope is unavailable"))?
+                .0
         };
         let context = self.create_new_child_default_world(&frame_id, handle)?;
         let execution_context_id = context.inspector_execution_context_id;

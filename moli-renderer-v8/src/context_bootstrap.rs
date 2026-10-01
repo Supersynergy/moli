@@ -503,8 +503,8 @@ pub(crate) fn current_child_frame_id_for_runtime_scope(
     let owner = self::navigation_window::runtime_window_owner(scope, global);
     let handle =
         self::navigation_window::child_browsing_context_handle_for_runtime_owner(scope, owner)?;
-    host.child_browsing_context_request_scope(handle)
-        .map(|(frame_id, _)| frame_id)
+    host.frame_owner_frame_id_for_child_handle(handle)
+        .map(|frame_id| frame_id.0)
 }
 
 pub(crate) fn current_child_browsing_context_handle_for_runtime_scope(

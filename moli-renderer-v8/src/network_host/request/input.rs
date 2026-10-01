@@ -351,21 +351,15 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
             .map_err(RequestUrlError::from);
     }
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        let document_url = child_handle
-            .and_then(|handle| {
-                host.child_browsing_context_request_scope(handle)
-                    .map(|(_, url)| url)
-            })
+        let host = unsafe { &*host_ptr };
+        let api_base_url = child_handle
+            .and_then(|handle| host.child_browsing_context_base_url(handle))
             .unwrap_or_else(|| {
-                let (_, base_url, owner) = effective_subresource_request_scope(scope, host, None);
-                if matches!(owner, crate::native_bridge::OwnerDispatchScope::Top) {
-                    host.document_base_url_for_handle(host.document_handle())
-                } else {
-                    base_url
-                }
+                let owner = effective_subresource_request_owner(scope, host);
+                subresource_api_base_url(scope, host, owner)
+                    .unwrap_or_else(|| host.document_url().clone())
             });
-        resolve_context_url(&document_url, input, None)
+        resolve_context_url(&api_base_url, input, None)
             .map(|url| url.to_string())
             .map_err(RequestUrlError::from)
     } else if let Some(worker_url) = crate::context_bootstrap::current_worker_script_url(scope) {
@@ -388,22 +382,32 @@ pub(super) fn normalize_request_referrer(scope: &mut v8::PinScope<'_, '_>, input
     }
 
     let resolved = resolve_request_constructor_url(scope, input);
-    let Some(context_url) = current_request_context_url(scope) else {
+    let Some(context_origin) = current_request_context_origin(scope) else {
         return resolved;
     };
-    if moli_url::parsed_same_origin(&resolved, &context_url) {
+    if moli_url::parsed_same_origin(&resolved, &context_origin) {
         resolved
     } else {
         "about:client".to_owned()
     }
 }
 
-fn current_request_context_url(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
+fn current_request_context_origin(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &mut *host_ptr };
-        let (_, document_url, _) = effective_subresource_request_scope(scope, host, None);
-        Some(document_url.to_string())
+        let host = unsafe { &*host_ptr };
+        match effective_subresource_request_owner(scope, host) {
+            crate::native_bridge::OwnerDispatchScope::Top => {
+                Some(moli_url::origin_ascii_serialization(host.document_url()))
+            }
+            crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+                host.child_browsing_context_target_origin(handle)
+            }
+            crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+                host.lightweight_popup_origin(popup_id)
+            }
+        }
     } else {
-        crate::context_bootstrap::current_worker_script_url(scope).map(|url| url.to_string())
+        crate::context_bootstrap::current_worker_script_url(scope)
+            .map(|url| moli_url::origin_ascii_serialization(&url))
     }
 }

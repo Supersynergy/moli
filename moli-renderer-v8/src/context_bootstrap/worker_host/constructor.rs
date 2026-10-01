@@ -155,10 +155,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
         let host = unsafe { &mut *host_ptr };
         let child_handle = current_child_context_handle(scope)
             .or_else(|| child_context_handle_from_object_creation_context(scope, worker))
-            .or_else(|| {
-                host.active_child_subresource_request_scope()
-                    .map(|(handle, _, _)| handle)
-            })
+            .or_else(|| host.active_child_subresource_request_handle())
             .or_else(|| crate::native_bridge::active_child_window_handle(scope));
         let active_popup_base_url = child_handle
             .is_none()
@@ -819,8 +816,8 @@ pub(in crate::context_bootstrap) fn document_query_encoding_override(
 pub(in crate::context_bootstrap) fn worker_constructor_base_url(
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    host.active_child_subresource_request_scope()
-        .map(|(_, _, document_url)| document_url)
+    host.active_child_subresource_request_handle()
+        .and_then(|handle| host.child_browsing_context_base_url(handle))
         .unwrap_or_else(|| {
             host.dom_host()
                 .document_base_url()

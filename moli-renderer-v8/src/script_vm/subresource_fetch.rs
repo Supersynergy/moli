@@ -400,7 +400,7 @@ fn enter_subresource_owner_async_scope<'s>(
         OwnerDispatchScope::Child(handle) => {
             let child_context_exists = context_host
                 .borrow()
-                .child_browsing_context_request_scope(handle)
+                .frame_owner_frame_id_for_child_handle(handle)
                 .is_some();
             child_context_exists.then(|| {
                 context_host

@@ -129,17 +129,7 @@ fn xhr_open_request_url(
             );
             return None;
         };
-        match execution_context.dispatch_scope() {
-            crate::native_bridge::OwnerDispatchScope::Top => {
-                Some(host.document_base_url_for_handle(host.document_handle()))
-            }
-            crate::native_bridge::OwnerDispatchScope::Child(handle) => {
-                host.child_browsing_context_base_url(handle)
-            }
-            crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-                host.lightweight_popup_request_base_url(scope, popup_id)
-            }
-        }
+        subresource_api_base_url(scope, host, execution_context.dispatch_scope())
     };
     let Some(base_url) = base_url else {
         xhr_open_throw_invalid_state(

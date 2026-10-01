@@ -142,21 +142,10 @@ impl JsContextHost {
         Some(self.document_url().clone())
     }
 
-    pub(crate) fn child_browsing_context_request_scope(
-        &self,
-        handle: DomHandle,
-    ) -> Option<(String, Url)> {
-        let entry = self.child_browsing_contexts.get(&handle)?;
-        let document_url = self.child_browsing_context_base_url(handle)?;
-        Some((entry.frame_id().to_owned(), document_url))
-    }
-
-    pub(crate) fn active_child_subresource_request_scope(
-        &self,
-    ) -> Option<(DomHandle, String, Url)> {
+    pub(crate) fn active_child_subresource_request_handle(&self) -> Option<DomHandle> {
         let handle = *self.active_child_subresource_request_scopes.last()?;
-        let (frame_id, document_url) = self.child_browsing_context_request_scope(handle)?;
-        Some((handle, frame_id, document_url))
+        self.frame_owner_frame_id_for_child_handle(handle)?;
+        Some(handle)
     }
 
     pub(crate) fn child_browsing_context_base_url(&self, handle: DomHandle) -> Option<Url> {
