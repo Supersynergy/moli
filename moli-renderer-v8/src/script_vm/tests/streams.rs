@@ -5688,3 +5688,34 @@ globalThis.__readableStreamFromResult = "";
         r#"{"surface":["function","from",1,true,true,true],"nullError":"TypeError","openIdentity":true,"syncValues":["a","b",true],"asyncValues":["async",true,2],"finishedSkipsValue":true,"nextIdentity":true,"cancelPending":true,"cancelSettled":true,"undefinedReturnRejects":true,"reentrant":[true,1]}"#
     );
 }
+
+#[test]
+fn readable_stream_from_does_not_inherit_author_start_algorithms() {
+    let mut vm = stream_test_vm();
+    vm.eval(r#"
+      globalThis.internalSourceResult = null;
+      (async () => {
+        const before = Object.getOwnPropertyDescriptor(Object.prototype, 'start');
+        let reads = 0;
+        Object.defineProperty(Object.prototype, 'start', {
+          configurable: true,
+          get() { reads++; throw Error('inherited start must not run'); }
+        });
+        try {
+          const reader = ReadableStream.from([7]).getReader();
+          const first = await reader.read();
+          const last = await reader.read();
+          return JSON.stringify([first.value, first.done, last.done, reads]);
+        } finally {
+          if (before) Object.defineProperty(Object.prototype, 'start', before);
+          else delete Object.prototype.start;
+        }
+      })().then(value => internalSourceResult = value, error => internalSourceResult = String(error));
+    "#).unwrap();
+    for _ in 0..32 {
+        if vm.eval("String(internalSourceResult !== null)").unwrap() == "true" {
+            break;
+        }
+    }
+    assert_eq!(vm.eval("internalSourceResult").unwrap(), "[7,false,true,0]");
+}

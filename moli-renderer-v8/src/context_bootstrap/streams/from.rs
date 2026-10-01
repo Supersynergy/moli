@@ -60,6 +60,12 @@ pub(super) fn readable_stream_from_callback<'s>(
     )
     .bind(scope)
     .expect("ReadableStream.from source declaration should bind");
+    // This is an internal source, so author Object.prototype members cannot
+    // provide an inherited start algorithm during native stream setup.
+    let null = v8::null(scope);
+    if source.set_prototype(scope, null.into()) != Some(true) {
+        return;
+    }
     let stream = new_readable_stream_object(scope, Some(source), 0.0, None);
     rv.set(stream.into());
 }
