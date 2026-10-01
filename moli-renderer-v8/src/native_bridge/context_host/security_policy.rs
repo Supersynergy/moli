@@ -839,7 +839,7 @@ impl JsContextHost {
         }
         if include_call_location
             && let Some((source_file, line_number, column_number)) =
-                current_script_violation_location(scope)
+                crate::content_security_policy::current_script_violation_location(scope)
         {
             for violation in [&mut report_only_violation, &mut enforced_violation]
                 .into_iter()
@@ -1272,23 +1272,4 @@ impl JsContextHost {
         self.dispatch_child_window_event(scope, handle, "securitypolicyviolation", event);
         Ok(())
     }
-}
-
-fn current_script_violation_location(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<(String, i32, i32)> {
-    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
-    let frame = stack.get_frame(scope, 0)?;
-    let source_file = frame
-        .get_script_name_or_source_url(scope)
-        .map(|source| source.to_rust_string_lossy(scope))
-        .map(|source| {
-            crate::content_security_policy::content_security_policy_source_file_for_report(&source)
-        })
-        .unwrap_or_default();
-    let line_number = i32::try_from(frame.get_line_number())
-        .unwrap_or_default()
-        .max(0);
-    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
-    Some((source_file, line_number, column_number))
 }

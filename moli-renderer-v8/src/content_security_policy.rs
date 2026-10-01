@@ -222,8 +222,8 @@ impl<'a> ContentSecurityPolicyViolationEventFields<'a> {
             disposition: violation.disposition,
             source_file: violation.source_file.as_str(),
             sample: violation.sample.as_str(),
-            line_number: 0,
-            column_number: 0,
+            line_number: violation.line_number,
+            column_number: violation.column_number,
             status_code: 0,
         }
     }
@@ -2063,6 +2063,25 @@ fn inline_source_matches_hash(source: &str, hash_source: CspHashSourceValue<'_>)
             b'_' => b'/',
             _ => byte,
         }))
+}
+
+pub(crate) fn current_script_violation_location(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(String, i32, i32)> {
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    let frame = stack.get_frame(scope, 0)?;
+    let source_file = frame
+        .get_script_name_or_source_url(scope)
+        .map(|source| source.to_rust_string_lossy(scope))
+        .map(|source| {
+            crate::content_security_policy::content_security_policy_source_file_for_report(&source)
+        })
+        .unwrap_or_default();
+    let line_number = i32::try_from(frame.get_line_number())
+        .unwrap_or_default()
+        .max(0);
+    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
+    Some((source_file, line_number, column_number))
 }
 
 #[cfg(test)]
