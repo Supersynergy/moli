@@ -46,11 +46,7 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
                 Command::ResetCssAgentSession {
                     inspector_session_id,
                 },
-                |reply| match reply {
-                    Ok(Reply::Unit) => Response::success(json!({})),
-                    Err(error) => Response::error(-32000, error.to_string()),
-                    _ => unreachable!("CSS reset reply"),
-                },
+                native::unit_response,
             )
         }
         CssAction::GetStyleSheet => {
