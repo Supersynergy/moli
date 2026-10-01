@@ -528,22 +528,6 @@ pub(crate) fn command_output_plan(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Co
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PageOutputProjectionStep {
-    Download,
-    FileChooser,
-    JavascriptDialog,
-    WindowOpen,
-    Popup,
-    DocumentTitleChanged,
-    DocumentLifecycle,
-    ChildFrameActivity,
-    SameDocumentNavigation,
-    SessionHistoryUpdate,
-    TopLevelLocationNavigation,
-    TopLevelHistoryTraversal,
-}
-
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct PagePreparedOutputs {
     javascript_dialogs: Vec<javascript_dialog::PreparedJavaScriptDialog>,
@@ -1268,10 +1252,10 @@ fn page_screencast_subscription_status_for_owner(
 pub(in crate::domains) async fn emit_popup_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(popups) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_popup_activations)
     {
         popup::emit_prepared(conn, out, popups).await;
@@ -1286,10 +1270,10 @@ pub(in crate::domains) async fn emit_popup_activity_background_events_async(
 pub(in crate::domains) fn publish_prepared_top_level_location_navigation_owner_action(
     conn: &mut CdpConnection,
     command_owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(navigation) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_top_level_location_navigation)
     {
         let (owner, navigation) = navigation.into_parts();
@@ -1305,10 +1289,10 @@ pub(in crate::domains) async fn emit_top_level_history_traversal_activity_backgr
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(traversal) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_top_level_history_traversal)
     {
         traverse_session_owner_history_from_renderer_background_events_async(
@@ -1467,10 +1451,10 @@ pub(in crate::domains) async fn emit_same_document_navigation_activity_backgroun
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(navigations) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_same_document_navigations)
     {
         navigation::emit_same_document_navigation_background_events_async(

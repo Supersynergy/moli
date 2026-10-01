@@ -1752,11 +1752,11 @@ pub(in crate::domains) async fn emit_download_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
     command_context: &mut CommandDispatchContext,
 ) {
     if let Some(activations) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::input_mut)
+        .input_mut()
         .and_then(InputPreparedOutputSlot::take_download_activations)
     {
         emit_download_activations(conn, out, owner, activations, command_context).await;
@@ -1792,10 +1792,10 @@ pub(in crate::domains) async fn emit_file_chooser_activity_background_events_asy
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(activations) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::input_mut)
+        .input_mut()
         .and_then(InputPreparedOutputSlot::take_file_chooser_activations)
     {
         file_chooser::emit_prepared_activations_async(conn, out, owner, activations).await;
@@ -2510,7 +2510,7 @@ mod producer_tests {
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-download"),
-            Some(&mut prepared),
+            &mut prepared,
             &mut command_context,
         )
         .await;
@@ -2565,7 +2565,7 @@ mod producer_tests {
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-1"),
-            Some(&mut prepared),
+            &mut prepared,
         )
         .await;
 
@@ -2613,7 +2613,7 @@ mod producer_tests {
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-context"),
-            Some(&mut prepared),
+            &mut prepared,
         )
         .await;
 

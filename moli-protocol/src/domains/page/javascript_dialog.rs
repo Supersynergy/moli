@@ -196,10 +196,10 @@ pub(super) fn finish_devtools_handle_javascript_dialog_command(
 pub(in crate::domains) async fn emit_javascript_dialog_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(dialogs) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_javascript_dialogs)
     {
         javascript_dialog::emit_prepared(conn, out, dialogs);

@@ -29,10 +29,10 @@ pub(in crate::domains) const SLOT_DOM_MUTATIONS: ProtocolOutputSlot =
 pub(in crate::domains) async fn project_dom_mutations_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     let Some(batches) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::dom_mut)
+        .dom_mut()
         .and_then(DomPreparedOutputSlot::take_batches)
     else {
         return;

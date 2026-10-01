@@ -301,7 +301,7 @@ async fn drain_target_lifecycle_events_for_test(
     emit_target_lifecycle_events(
         conn,
         &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
-        Some(&mut prepared_outputs),
+        &mut prepared_outputs,
     )
     .await;
     command_context.take_protocol_events()
@@ -3365,7 +3365,7 @@ async fn shared_worker_target_console_messages_emit_to_target_session_and_advanc
     emit_target_lifecycle_events(
         &mut conn,
         &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
-        Some(&mut prepared_outputs),
+        &mut prepared_outputs,
     )
     .await;
     let events = command_context.take_protocol_events();

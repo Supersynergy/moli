@@ -4,7 +4,7 @@ pub(in crate::domains) async fn project_worker_target_output_async(
     output: ProtocolOutputSlot,
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     match output {
         ProtocolOutputSlot::SharedWorkerTargetLifecycle
@@ -18,10 +18,10 @@ pub(in crate::domains) async fn project_worker_target_output_async(
 pub(super) async fn emit_target_lifecycle_events(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     let Some(events) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::target_mut)
+        .target_mut()
         .and_then(TargetPreparedOutputSlot::take_worker_target_lifecycle_outputs)
     else {
         return;

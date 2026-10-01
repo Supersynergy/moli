@@ -228,7 +228,7 @@ pub(in crate::domains::target) async fn close_shared_worker_target_for_target_cl
     emit_target_lifecycle_events(
         conn,
         &mut ProtocolOutputProjectionContext::new(&owner, command_context),
-        Some(&mut prepared_outputs),
+        &mut prepared_outputs,
     )
     .await;
     true
@@ -265,7 +265,7 @@ pub(in crate::domains::target) async fn close_dedicated_worker_target_for_target
     emit_target_lifecycle_events(
         conn,
         &mut ProtocolOutputProjectionContext::new(&owner, command_context),
-        Some(&mut prepared_outputs),
+        &mut prepared_outputs,
     )
     .await;
     true

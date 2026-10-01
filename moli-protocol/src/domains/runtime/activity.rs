@@ -15,13 +15,6 @@ use moli_core::page::{
     RendererRuntimeInspectorMessageResponseOrder,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RuntimeOutputProjectionStep {
-    RuntimeBindingCalls,
-    RuntimeInspectorMessages,
-    RuntimeInspectorPostResponseMessages,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RuntimePreparedOutputs {
     binding_call_batches: Vec<RuntimeBindingCallBatch>,
@@ -151,107 +144,85 @@ pub(in crate::domains) const SLOT_RUNTIME_INSPECTOR_MESSAGES: ProtocolOutputSlot
 pub(in crate::domains) const SLOT_RUNTIME_INSPECTOR_POST_RESPONSE_MESSAGES: ProtocolOutputSlot =
     ProtocolOutputSlot::RuntimeInspectorPostResponseMessages;
 
-impl RuntimeOutputProjectionStep {
-    async fn project_async(
-        self,
-        conn: &mut CdpConnection,
-        context: &mut ProtocolOutputProjectionContext<'_>,
-        prepared_outputs: Option<&mut ProtocolOutputPayloads>,
-    ) {
-        match self {
-            RuntimeOutputProjectionStep::RuntimeBindingCalls => {
-                if let Some(batches) = prepared_outputs
-                    .and_then(ProtocolOutputPayloads::runtime_mut)
-                    .and_then(RuntimePreparedOutputSlot::take_binding_call_batches)
-                {
-                    for batch in batches {
-                        if !conn
-                            .target_page_protocol_attachment_identity_is_current(&batch.attachment)
-                        {
-                            continue;
-                        }
-                        let session_id = batch.attachment.session_id().map(str::to_owned);
-                        context
-                            .command
-                            .protocol_events_mut()
-                            .extend(batch.calls.into_iter().map(|call| {
-                                call.into_background_protocol_event(session_id.as_deref())
-                            }));
-                    }
-                }
-            }
-            RuntimeOutputProjectionStep::RuntimeInspectorMessages
-            | RuntimeOutputProjectionStep::RuntimeInspectorPostResponseMessages => {
-                if let Some(batches) = prepared_outputs
-                    .and_then(ProtocolOutputPayloads::runtime_mut)
-                    .and_then(|outputs| match self {
-                        RuntimeOutputProjectionStep::RuntimeInspectorMessages => {
-                            outputs.take_inspector_messages()
-                        }
-                        RuntimeOutputProjectionStep::RuntimeInspectorPostResponseMessages => {
-                            outputs.take_post_response_inspector_messages()
-                        }
-                        RuntimeOutputProjectionStep::RuntimeBindingCalls => unreachable!(),
-                    })
-                {
-                    for batch in batches {
-                        if !batch.authority.permits_projection(conn) {
-                            continue;
-                        }
-                        let owner = batch.authority.command_owner();
-                        let session_id = batch.authority.session_id().map(str::to_owned);
-                        push_runtime_inspector_messages_for_session(
-                            conn,
-                            context.command.protocol_events_mut(),
-                            batch.messages,
-                            session_id.as_deref(),
-                        );
-                        for execution_context_id in batch.created_execution_context_ids {
-                            Box::pin(
-                                super::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
-                                    conn,
-                                    &owner,
-                                    execution_context_id,
-                                    context.command.protocol_events_mut(),
-                                ),
-                            )
-                            .await;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 pub(in crate::domains) async fn project_runtime_binding_calls_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    RuntimeOutputProjectionStep::RuntimeBindingCalls
-        .project_async(conn, context, prepared_outputs)
-        .await;
+    if let Some(batches) = prepared_outputs
+        .runtime_mut()
+        .and_then(RuntimePreparedOutputSlot::take_binding_call_batches)
+    {
+        for batch in batches {
+            if !conn.target_page_protocol_attachment_identity_is_current(&batch.attachment) {
+                continue;
+            }
+            let session_id = batch.attachment.session_id().map(str::to_owned);
+            context.command.protocol_events_mut().extend(
+                batch
+                    .calls
+                    .into_iter()
+                    .map(|call| call.into_background_protocol_event(session_id.as_deref())),
+            );
+        }
+    }
 }
 
 pub(in crate::domains) async fn project_runtime_inspector_messages_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    RuntimeOutputProjectionStep::RuntimeInspectorMessages
-        .project_async(conn, context, prepared_outputs)
-        .await;
+    if let Some(batches) = prepared_outputs
+        .runtime_mut()
+        .and_then(RuntimePreparedOutputSlot::take_inspector_messages)
+    {
+        project_inspector_message_batches(conn, context, batches).await;
+    }
 }
 
 pub(in crate::domains) async fn project_runtime_inspector_post_response_messages_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    RuntimeOutputProjectionStep::RuntimeInspectorPostResponseMessages
-        .project_async(conn, context, prepared_outputs)
-        .await;
+    if let Some(batches) = prepared_outputs
+        .runtime_mut()
+        .and_then(RuntimePreparedOutputSlot::take_post_response_inspector_messages)
+    {
+        project_inspector_message_batches(conn, context, batches).await;
+    }
+}
+
+async fn project_inspector_message_batches(
+    conn: &mut CdpConnection,
+    context: &mut ProtocolOutputProjectionContext<'_>,
+    batches: Vec<RuntimeInspectorMessageBatch>,
+) {
+    for batch in batches {
+        if !batch.authority.permits_projection(conn) {
+            continue;
+        }
+        let owner = batch.authority.command_owner();
+        let session_id = batch.authority.session_id().map(str::to_owned);
+        push_runtime_inspector_messages_for_session(
+            conn,
+            context.command.protocol_events_mut(),
+            batch.messages,
+            session_id.as_deref(),
+        );
+        for execution_context_id in batch.created_execution_context_ids {
+            Box::pin(
+                super::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
+                    conn,
+                    &owner,
+                    execution_context_id,
+                    context.command.protocol_events_mut(),
+                ),
+            )
+            .await;
+        }
+    }
 }
 
 impl RuntimePreparedOutputs {
@@ -771,12 +742,8 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         {
             let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
-            super::project_runtime_inspector_messages_async(
-                conn,
-                &mut context,
-                Some(&mut prepared),
-            )
-            .await;
+            super::project_runtime_inspector_messages_async(conn, &mut context, &mut prepared)
+                .await;
         }
         command_context.take_protocol_events()
     }
@@ -922,8 +889,7 @@ mod tests {
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
         let mut prepared = prepared_runtime_binding_calls(attachment);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
         let out = context
             .command
             .take_protocol_events()
@@ -952,8 +918,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
 
         assert!(
             context.command.take_protocol_events().is_empty(),
@@ -981,8 +946,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
         let events = context
             .command
             .take_protocol_events()
@@ -1012,8 +976,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(&mut conn, &mut context, &mut prepared).await;
 
         assert!(
             context.command.take_protocol_events().is_empty(),

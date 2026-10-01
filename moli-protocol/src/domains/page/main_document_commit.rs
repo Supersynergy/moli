@@ -35,10 +35,10 @@ impl MainDocumentCommitPreparedOutput {
 pub(in crate::domains) async fn project_main_document_commit_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    payloads: Option<&mut ProtocolOutputPayloads>,
+    payloads: &mut ProtocolOutputPayloads,
 ) {
     let Some(commits) = payloads
-        .and_then(ProtocolOutputPayloads::main_document_commit_mut)
+        .main_document_commit_mut()
         .map(MainDocumentCommitPreparedOutput::take_commits)
     else {
         return;
