@@ -3,13 +3,15 @@ use crate::{
     context_bootstrap::{
         FileSystemHandleDurablePayload, build_file_system_handle_from_durable_payload,
         file_system_handle_clone_payload_from_object,
-        file_system_handle_durable_payload_from_object,
+        file_system_handle_durable_payload_from_object, image_data_clone_payload_from_object,
     },
     dom::native::SelectedFile,
     structured_clone::{
         BlobClonePayload, HOST_OBJECT_TAG_BLOB, HOST_OBJECT_TAG_CRYPTO_KEY,
-        HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, blob_clone_payload_from_object,
-        build_blob_object_from_clone_payload, read_crypto_key_payload, write_crypto_key_payload,
+        HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_IMAGE_DATA,
+        blob_clone_payload_from_object, build_blob_object_from_clone_payload,
+        read_crypto_key_payload, read_image_data_payload, write_crypto_key_payload,
+        write_image_data_payload,
     },
 };
 use moli_indexeddb::{IndexedDbFileSystemHandleBucket, IndexedDbFileSystemHandleKind};
@@ -70,6 +72,12 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                     external_objects.push(indexed_db_external_object_from_blob_payload(payload));
                     serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
                     serializer.write_uint32(index);
+                    return Some(true);
+                }
+            }
+            Some("ImageData") => {
+                if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
+                    write_image_data_payload(serializer, payload);
                     return Some(true);
                 }
             }
@@ -163,6 +171,7 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
             return None;
         }
         match tag {
+            HOST_OBJECT_TAG_IMAGE_DATA => read_image_data_payload(scope, deserializer),
             HOST_OBJECT_TAG_CRYPTO_KEY => {
                 read_crypto_key_payload(scope, deserializer).or_else(|| {
                     let exception = dom_exception_value(
