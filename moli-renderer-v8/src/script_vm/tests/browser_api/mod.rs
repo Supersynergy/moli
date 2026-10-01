@@ -33,6 +33,7 @@ mod fullscreen;
 mod gamepad;
 mod history_worlds;
 mod ice_candidate;
+mod ice_error_event;
 mod idle_callbacks;
 mod idle_detection;
 mod images;
