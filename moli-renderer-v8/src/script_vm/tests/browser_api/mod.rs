@@ -37,6 +37,7 @@ mod ice_error_event;
 mod idle_callbacks;
 mod idle_detection;
 mod images;
+mod legacy_event_init;
 mod location_entry_settings;
 mod media;
 mod media_devices;
