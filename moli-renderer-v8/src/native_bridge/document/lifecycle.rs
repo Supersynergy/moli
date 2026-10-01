@@ -12,7 +12,6 @@ use crate::native_bridge::element::{
     replace_text_control_selection, text_control_value,
 };
 use crate::{
-    context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     custom_elements,
     document_runtime::DomHandle,
     util::{
@@ -101,7 +100,6 @@ fn node_document_write_or_writeln_callback<'s>(
         return;
     }
     if implicit_replacement_session {
-        clear_window_event_handlers(scope);
         JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
     }
     for chunk in parsed.text {
@@ -184,19 +182,10 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         }
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
-            clear_window_event_handlers(scope);
             JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
         }
     }
     rv.set(args.this().into());
-}
-
-fn clear_window_event_handlers(scope: &mut v8::PinScope<'_, '_>) {
-    let global = scope.get_current_context().global(scope);
-    let null = v8::null(scope).into();
-    for name in WINDOW_EVENT_HANDLER_PROPERTIES {
-        let _ = global.set(scope, v8str(scope, name).into(), null);
-    }
 }
 
 impl JsContextHost {
@@ -237,7 +226,6 @@ impl JsContextHost {
         html: &str,
     ) {
         let document_handle = unsafe { &*host_ptr }.document_handle();
-        clear_window_event_handlers(scope);
         Self::prepare_root_document_replacement(scope, host_ptr, document_handle);
         let _ = unsafe { &mut *host_ptr }.write_html(scope, host_ptr, document_handle, html);
         unsafe { &mut *host_ptr }.close_document(scope, host_ptr);
