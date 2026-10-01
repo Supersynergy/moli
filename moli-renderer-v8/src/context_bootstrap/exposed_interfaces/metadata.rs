@@ -53,6 +53,7 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "Crypto",
     "SubtleCrypto",
     "CryptoKey",
+    "PerformanceServerTiming",
     "MediaCapabilities",
     "NavigatorUAData",
     "Lock",
