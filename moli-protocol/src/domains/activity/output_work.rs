@@ -24,7 +24,7 @@ pub(crate) enum RootFrameStoppedLoadingSettlementError {
     SubscribedAttachmentUnavailable,
 }
 
-/// Durable protocol output whose payload and delivery routes are frozen.
+/// Frozen root-frame stopped-loading fact and its exact delivery routes.
 ///
 /// This move-only capability does not name a source that should be scanned
 /// later. It owns the concrete fact that was published and the exact Page
@@ -33,17 +33,6 @@ pub(crate) enum RootFrameStoppedLoadingSettlementError {
 /// then-current Page, Document, target, or session.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ProtocolOutputWork {
-    payload: ProtocolOutputPayload,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum ProtocolOutputPayload {
-    RootFrameStoppedLoading(RootFrameStoppedLoadingOutput),
-}
-
-/// Concrete payload and frozen routes for root-frame stopped-loading.
-#[derive(Debug, Eq, PartialEq)]
-struct RootFrameStoppedLoadingOutput {
     attachments: Vec<TargetPageProtocolAttachmentIdentity>,
     frame_id: String,
     loader_id: String,
@@ -60,13 +49,9 @@ impl ProtocolOutputWork {
             "protocol output work must own at least one exact delivery route"
         );
         Self {
-            payload: ProtocolOutputPayload::RootFrameStoppedLoading(
-                RootFrameStoppedLoadingOutput {
-                    attachments,
-                    frame_id,
-                    loader_id,
-                },
-            ),
+            attachments,
+            frame_id,
+            loader_id,
         }
     }
 
@@ -107,47 +92,32 @@ impl ProtocolOutputWork {
         Self::root_frame_stopped_loading(attachments, frame_id, loader_id)
     }
 
-    pub fn is_root_frame_stopped_loading(&self) -> bool {
-        matches!(
-            &self.payload,
-            ProtocolOutputPayload::RootFrameStoppedLoading(_)
-        )
-    }
-
     pub(crate) fn navigation_gate_target_id(&self) -> Option<&str> {
-        match &self.payload {
-            ProtocolOutputPayload::RootFrameStoppedLoading(output) => {
-                let target_id = output.attachments.first()?.page_owner().target_id()?;
-                debug_assert!(
-                    output.attachments.iter().all(|attachment| {
-                        attachment.page_owner().target_id() == Some(target_id)
-                    })
-                );
-                Some(target_id)
-            }
-        }
+        let target_id = self.attachments.first()?.page_owner().target_id()?;
+        debug_assert!(
+            self.attachments
+                .iter()
+                .all(|attachment| { attachment.page_owner().target_id() == Some(target_id) })
+        );
+        Some(target_id)
     }
 
     pub(crate) fn into_background_events(
         self,
         conn: &CdpConnection,
     ) -> Vec<BackgroundProtocolEvent> {
-        match self.payload {
-            ProtocolOutputPayload::RootFrameStoppedLoading(output) => {
-                let mut events = Vec::new();
-                for attachment in output.attachments {
-                    if !conn.target_page_protocol_attachment_identity_is_current(&attachment) {
-                        continue;
-                    }
-                    crate::domains::page::emit_navigation_frame_stopped_loading_background_events(
-                        &mut events,
-                        attachment.session_id(),
-                        &output.frame_id,
-                        &output.loader_id,
-                    );
-                }
-                events
+        let mut events = Vec::new();
+        for attachment in self.attachments {
+            if !conn.target_page_protocol_attachment_identity_is_current(&attachment) {
+                continue;
             }
+            crate::domains::page::emit_navigation_frame_stopped_loading_background_events(
+                &mut events,
+                attachment.session_id(),
+                &self.frame_id,
+                &self.loader_id,
+            );
         }
+        events
     }
 }

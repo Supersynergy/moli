@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use moli_core::{RendererOutputCursor, RendererRuntimeCommandCausalIdentity};
 
@@ -79,7 +79,7 @@ enum HeldOutputReleaseMode {
 struct HeldRuntimeCommandOutput {
     id: RuntimeCommandOutputHoldId,
     renderer_output_cursor: Option<RendererOutputCursor>,
-    predecessors: BTreeSet<RuntimeCommandOutputBarrierId>,
+    predecessor: Option<RuntimeCommandOutputBarrierId>,
     release_mode: HeldOutputReleaseMode,
     outputs: PreparedProtocolOutputs,
 }
@@ -242,20 +242,20 @@ impl RuntimeCommandOutputBarriers {
                 .await;
             return;
         };
-        let matching: Vec<_> = self
-            .active
-            .iter()
-            .filter_map(|(id, barrier)| {
+        let barrier_id = {
+            let mut matching = self.active.iter().filter_map(|(id, barrier)| {
                 (barrier.causal_owner == route.causal_owner
                     && &barrier.renderer_cause == renderer_cause)
                     .then_some(*id)
-            })
-            .collect();
-        let [barrier_id] = matching.as_slice() else {
+            });
+            let barrier_id = matching.next();
             assert!(
-                matching.is_empty(),
+                matching.next().is_none(),
                 "one renderer Runtime command cause cannot match multiple active barriers"
             );
+            barrier_id
+        };
+        let Some(barrier_id) = barrier_id else {
             outputs
                 .project_async(conn, delivery_scope, command_context)
                 .await;
@@ -275,7 +275,7 @@ impl RuntimeCommandOutputBarriers {
         self.hold_for_exact_barrier(
             conn,
             route,
-            *barrier_id,
+            barrier_id,
             renderer_output_cursor,
             causal_outputs,
             command_context,
@@ -307,7 +307,7 @@ impl RuntimeCommandOutputBarriers {
         let held = HeldRuntimeCommandOutput {
             id,
             renderer_output_cursor,
-            predecessors: BTreeSet::from([barrier_id]),
+            predecessor: Some(barrier_id),
             release_mode: HeldOutputReleaseMode::All,
             outputs,
         };
@@ -395,9 +395,11 @@ impl RuntimeCommandOutputBarriers {
                 continue;
             }
             for held in &mut route.outputs {
-                let was_predecessor = held.predecessors.remove(&barrier_id);
-                if was_predecessor && terminal != RuntimeCommandOutputBarrierTerminal::Released {
-                    held.release_mode = HeldOutputReleaseMode::OwnerActionsOnly;
+                if held.predecessor == Some(barrier_id) {
+                    held.predecessor = None;
+                    if terminal != RuntimeCommandOutputBarrierTerminal::Released {
+                        held.release_mode = HeldOutputReleaseMode::OwnerActionsOnly;
+                    }
                 }
             }
         }
@@ -415,7 +417,7 @@ impl RuntimeCommandOutputBarriers {
                 let ready = self.held_routes[route_index]
                     .outputs
                     .front()
-                    .is_some_and(|held| held.predecessors.is_empty());
+                    .is_some_and(|held| held.predecessor.is_none());
                 if !ready {
                     break;
                 }

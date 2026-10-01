@@ -27,9 +27,9 @@ pub(in crate::domains) const SLOT_DOM_STORAGE: ProtocolOutputSlot = ProtocolOutp
 
 pub(in crate::domains) async fn project_dom_storage_async(
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::dom_storage_mut) else {
+    let Some(slot) = prepared_outputs.dom_storage_mut() else {
         return;
     };
     context

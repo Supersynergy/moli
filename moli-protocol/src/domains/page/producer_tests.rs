@@ -18,7 +18,9 @@ use crate::automation::{AutomationEvent, NavigationFrameEventKind};
 use crate::conn::{
     BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpTargetFilter, CommandOwnerScope,
 };
-use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
+use crate::domains::activity::{
+    ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSlot,
+};
 use crate::domains::input::{InputPreparedOutputSlot, InputPreparedOutputs};
 use crate::testing::TestContext;
 
@@ -305,7 +307,7 @@ async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -369,7 +371,7 @@ async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -437,7 +439,7 @@ async fn detached_source_attachment_dismisses_prepared_child_dialog() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -483,7 +485,7 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut dialog_output),
+        &mut dialog_output,
     )
     .await;
     assert!(
@@ -517,12 +519,8 @@ async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
                 )],
             ),
         ));
-    super::emit_popup_activity_background_events_async(
-        &mut conn,
-        &mut out,
-        Some(&mut popup_output),
-    )
-    .await;
+    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut popup_output)
+        .await;
 
     let messages = protocol_messages_from_background_events(out);
     assert!(
@@ -592,7 +590,7 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
     assert!(
@@ -600,8 +598,7 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
         "dialog must wait for its popup target instead of falling back to the opener"
     );
 
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, Some(&mut prepared))
-        .await;
+    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
 
     let browser_context = conn
         .browser_context_by_id("BID-popup-dialog")
@@ -666,7 +663,7 @@ async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut later_out,
-        Some(&mut later_dialog),
+        &mut later_dialog,
     )
     .await;
     let later_messages = protocol_messages_from_background_events(later_out);
@@ -741,11 +738,10 @@ async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, Some(&mut prepared))
-        .await;
+    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
 
     let messages = protocol_messages_from_background_events(out);
     assert!(
@@ -843,7 +839,7 @@ async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -901,7 +897,7 @@ async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -952,7 +948,7 @@ async fn javascript_dialog_projection_uses_captured_url_and_frame() {
     super::emit_javascript_dialog_activity_background_events_async(
         &mut conn,
         &mut out,
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -1052,12 +1048,12 @@ async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
     for step in [
-        super::PageOutputProjectionStep::FileChooser,
-        super::PageOutputProjectionStep::Download,
-        super::PageOutputProjectionStep::JavascriptDialog,
-        super::PageOutputProjectionStep::Popup,
+        ProtocolOutputSlot::FileChooser,
+        ProtocolOutputSlot::Download,
+        ProtocolOutputSlot::JavascriptDialog,
+        ProtocolOutputSlot::Popup,
     ] {
-        step.project_async(&mut conn, &mut context, Some(&mut prepared))
+        super::output::project_page_output_async(step, &mut conn, &mut context, &mut prepared)
             .await;
     }
 
@@ -1181,11 +1177,11 @@ async fn later_navigation_drain_order_survives_ordered_typed_event_stream() {
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
     for step in [
-        super::PageOutputProjectionStep::ChildFrameActivity,
-        super::PageOutputProjectionStep::SameDocumentNavigation,
-        super::PageOutputProjectionStep::TopLevelLocationNavigation,
+        ProtocolOutputSlot::ChildFrameActivity,
+        ProtocolOutputSlot::SameDocumentNavigation,
+        ProtocolOutputSlot::TopLevelLocationNavigation,
     ] {
-        step.project_async(&mut conn, &mut context, Some(&mut prepared))
+        super::output::project_page_output_async(step, &mut conn, &mut context, &mut prepared)
             .await;
     }
 
@@ -1900,9 +1896,13 @@ async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
     let mut command_context = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-    super::PageOutputProjectionStep::ChildFrameActivity
-        .project_async(&mut conn, &mut context, Some(&mut prepared))
-        .await;
+    super::output::project_page_output_async(
+        ProtocolOutputSlot::ChildFrameActivity,
+        &mut conn,
+        &mut context,
+        &mut prepared,
+    )
+    .await;
 
     let events = context
         .command
@@ -2180,9 +2180,13 @@ async fn child_frame_activity_drain_requires_prepared_output() {
     let mut command_context = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-    super::PageOutputProjectionStep::ChildFrameActivity
-        .project_async(&mut conn, &mut context, None)
-        .await;
+    super::output::project_page_output_async(
+        ProtocolOutputSlot::ChildFrameActivity,
+        &mut conn,
+        &mut context,
+        &mut ProtocolOutputPayloads::default(),
+    )
+    .await;
 
     assert!(
         context.command.take_protocol_events().is_empty(),
@@ -2217,8 +2221,7 @@ async fn popup_activation_creates_target_and_schedules_navigation_without_page_r
             ),
         ));
 
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, Some(&mut prepared))
-        .await;
+    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
 
     let events = out
         .into_iter()
@@ -2296,8 +2299,7 @@ async fn popup_activation_publishes_automation_lifecycle_without_cdp_discovery()
         ));
     let mut out = Vec::new();
 
-    super::emit_popup_activity_background_events_async(&mut conn, &mut out, Some(&mut prepared))
-        .await;
+    super::emit_popup_activity_background_events_async(&mut conn, &mut out, &mut prepared).await;
 
     let events = out
         .into_iter()
@@ -2340,14 +2342,11 @@ async fn emit_committed_history_and_navigation_for_test(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    mut prepared: Option<&mut ProtocolOutputPayloads>,
+    prepared: &mut ProtocolOutputPayloads,
 ) {
     // Production sends a separate committed-history action before the
     // observer notification. Exercise both projections and their authority.
-    if let Some(slot) = prepared
-        .as_deref_mut()
-        .and_then(ProtocolOutputPayloads::page_mut)
-    {
+    if let Some(slot) = prepared.page_mut() {
         slot.outputs.session_history_updates = slot
             .outputs
             .same_document_navigations
@@ -2368,9 +2367,13 @@ async fn emit_committed_history_and_navigation_for_test(
     }
     let mut command = crate::conn::CommandDispatchContext::default();
     let mut context = ProtocolOutputProjectionContext::new(owner, &mut command);
-    super::PageOutputProjectionStep::SessionHistoryUpdate
-        .project_async(conn, &mut context, prepared.as_deref_mut())
-        .await;
+    super::output::project_page_output_async(
+        ProtocolOutputSlot::SessionHistoryUpdate,
+        conn,
+        &mut context,
+        prepared,
+    )
+    .await;
     super::emit_same_document_navigation_activity_background_events_async(
         conn, out, owner, prepared,
     )
@@ -2403,7 +2406,7 @@ async fn same_document_drain_consumes_prepared_navigations_without_page_readback
         &mut conn,
         &mut out,
         &CommandOwnerScope::for_session("SID-1"),
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -2491,7 +2494,7 @@ async fn document_open_replacement_keeps_same_document_navigation_handoff() {
         &mut conn,
         &mut out,
         &CommandOwnerScope::for_session("SID-document-open-same-document"),
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -2543,7 +2546,7 @@ async fn stale_page_residence_same_document_navigation_cannot_mutate_replacement
         &mut conn,
         &mut out,
         &CommandOwnerScope::for_session("SID-stale-page-same-document"),
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
 
@@ -2584,7 +2587,7 @@ async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
     super::publish_prepared_top_level_location_navigation_owner_action(
         &mut conn,
         &CommandOwnerScope::for_session("SID-location"),
-        Some(&mut prepared),
+        &mut prepared,
     );
 
     assert_eq!(
@@ -2670,7 +2673,7 @@ async fn document_open_replacement_keeps_requested_top_level_navigation() {
     super::publish_prepared_top_level_location_navigation_owner_action(
         &mut conn,
         &CommandOwnerScope::for_session("SID-document-open-location"),
-        Some(&mut prepared),
+        &mut prepared,
     );
     let work = take_top_level_location_navigation_work_for_test(&mut conn);
     let (out, scheduler_events) = conn
@@ -2730,7 +2733,7 @@ async fn stale_page_residence_top_level_navigation_cannot_replace_current_page()
     super::publish_prepared_top_level_location_navigation_owner_action(
         &mut conn,
         &CommandOwnerScope::for_session("SID-stale-page-location"),
-        Some(&mut prepared),
+        &mut prepared,
     );
     let work = take_top_level_location_navigation_work_for_test(&mut conn);
     let (out, scheduler_events) = conn

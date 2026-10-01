@@ -459,7 +459,7 @@ impl PreparedProtocolOutputs {
             slot.project_async(
                 conn,
                 &mut ProtocolOutputProjectionContext::new(owner, command_context),
-                Some(&mut self.payloads),
+                &mut self.payloads,
             )
             .await;
             if let Some(started) = trace_started {

@@ -36,6 +36,7 @@ struct OpenRendererOutputStream {
     next_expected_sequence: u64,
     last_projected_sequence: u64,
     projecting_sequence: Option<u64>,
+    queued_ready: bool,
     pending: BTreeMap<u64, RendererOutputPublication>,
     /// `None` means the stream is open. `Some(None)` is a closing stream
     /// which never published a batch.
@@ -67,7 +68,6 @@ pub(crate) struct OrderedRendererOutputIngress {
     /// stream appears at most once, so a missing same-stream predecessor does
     /// not make every later admission rescan all buffered publications.
     ready_streams: VecDeque<RendererOutputStreamIdentity>,
-    queued_ready_streams: HashSet<RendererOutputStreamIdentity>,
 }
 
 impl OrderedRendererOutputIngress {
@@ -94,6 +94,7 @@ impl OrderedRendererOutputIngress {
                 next_expected_sequence: 1,
                 last_projected_sequence: 0,
                 projecting_sequence: None,
+                queued_ready: false,
                 pending: BTreeMap::new(),
                 closing_at: None,
                 active_cursor_leases: HashMap::new(),
@@ -363,10 +364,10 @@ impl OrderedRendererOutputIngress {
     fn release_ready_publications(&mut self) -> Vec<AdmittedRendererOutputPublication> {
         let mut ready = Vec::new();
         while let Some(stream) = self.ready_streams.pop_front() {
-            self.queued_ready_streams.remove(&stream);
             let Some(state) = self.open_streams.get_mut(&stream) else {
                 continue;
             };
+            state.queued_ready = false;
             if state.projecting_sequence.is_some() {
                 continue;
             }
@@ -389,11 +390,14 @@ impl OrderedRendererOutputIngress {
     }
 
     fn enqueue_stream_if_ready(&mut self, stream: RendererOutputStreamIdentity) {
-        let is_ready = self.open_streams.get(&stream).is_some_and(|state| {
-            state.projecting_sequence.is_none()
-                && state.pending.contains_key(&state.next_expected_sequence)
-        });
-        if is_ready && self.queued_ready_streams.insert(stream) {
+        let Some(state) = self.open_streams.get_mut(&stream) else {
+            return;
+        };
+        if !state.queued_ready
+            && state.projecting_sequence.is_none()
+            && state.pending.contains_key(&state.next_expected_sequence)
+        {
+            state.queued_ready = true;
             self.ready_streams.push_back(stream);
         }
     }
@@ -420,7 +424,6 @@ impl OrderedRendererOutputIngress {
             .open_streams
             .remove(&stream)
             .expect("completed renderer output stream must remain open until retirement");
-        self.queued_ready_streams.remove(&stream);
         if !state.active_cursor_leases.is_empty() {
             let active_cursor_leases = state.active_cursor_leases.into_keys().collect();
             assert!(

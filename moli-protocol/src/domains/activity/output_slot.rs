@@ -145,7 +145,7 @@ impl ProtocolOutputSlot {
         self,
         conn: &'a mut CdpConnection,
         context: &'a mut ProtocolOutputProjectionContext<'_>,
-        payloads: Option<&'a mut ProtocolOutputPayloads>,
+        payloads: &'a mut ProtocolOutputPayloads,
     ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         Box::pin(async move {
             match self {
