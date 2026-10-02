@@ -91,6 +91,10 @@ pub fn html_element_interface_name(local_name: &str) -> &'static str {
 pub fn svg_element_interface_name(local_name: &str) -> &'static str {
     match local_name {
         "a" => "SVGAElement",
+        "animate" => "SVGAnimateElement",
+        "animateMotion" => "SVGAnimateMotionElement",
+        "animateTransform" => "SVGAnimateTransformElement",
+        "set" => "SVGSetElement",
         "circle" => "SVGCircleElement",
         "defs" => "SVGDefsElement",
         "desc" => "SVGDescElement",
