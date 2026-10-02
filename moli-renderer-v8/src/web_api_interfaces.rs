@@ -296,6 +296,12 @@ interfaces! {
     MediaQueryListEvent: Event;
     MediaSource: EventTarget;
     MemoryInfo;
+    MIDIPort: EventTarget;
+    MIDIAccess: EventTarget;
+    MIDIInput: MIDIPort;
+    MIDIOutput: MIDIPort;
+    MIDIInputMap;
+    MIDIOutputMap;
     MessageChannel;
     MessageEvent: Event;
     MessagePort: EventTarget;
