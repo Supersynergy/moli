@@ -107,6 +107,7 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "MediaDevices",
     "SubtleCrypto",
     "CryptoKey",
+    "PaymentResponse",
     "IdleDetector",
     "Worklet",
     "AudioWorklet",

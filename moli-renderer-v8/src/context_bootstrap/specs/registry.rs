@@ -1152,6 +1152,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::PerformanceNavigationTiming,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::PaymentResponse::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PerformanceMark::DESCRIPTOR,
         kind: ConstructorKind::PerformanceMark,
     },

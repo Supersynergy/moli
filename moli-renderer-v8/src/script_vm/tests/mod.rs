@@ -2180,6 +2180,7 @@ mod history_replace_forward;
 
 mod extracted;
 mod navigation_timing_inheritance;
+mod payment_response_interfaces;
 
 mod response_blob_mime;
 
