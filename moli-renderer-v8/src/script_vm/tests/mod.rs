@@ -2160,6 +2160,7 @@ mod queue_microtask;
 mod rendering_update;
 mod script_terminal_completion;
 mod streams;
+mod svg_switch_mpath_interfaces;
 mod url_components;
 mod webgl_interfaces;
 mod webidl_collections;
