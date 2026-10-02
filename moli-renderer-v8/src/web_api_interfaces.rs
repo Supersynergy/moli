@@ -299,6 +299,7 @@ interfaces! {
     MessageChannel;
     MessageEvent: Event;
     MessagePort: EventTarget;
+    ModelContext: EventTarget;
     MimeType;
     MimeTypeArray;
     MouseEvent: UIEvent;
@@ -467,6 +468,8 @@ interfaces! {
     TextTrackCueList;
     TextTrackList: EventTarget;
     ToggleEvent: Event;
+    ToolActivatedEvent: Event;
+    ToolCancelEvent: Event;
     Touch;
     TouchEvent: UIEvent;
     TouchList;

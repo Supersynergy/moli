@@ -230,6 +230,10 @@ fn submit_form_with_submit_event_inner(
     submitter_handle: Option<DomHandle>,
     user_initiated: bool,
 ) -> bool {
+    let invocation = crate::context_bootstrap::web_mcp::begin_form_submit(
+        unsafe { &mut *runtime_ptr },
+        form_handle,
+    );
     let skips_constraint_validation = {
         let runtime = unsafe { &*runtime_ptr };
         form_submission_skips_constraint_validation(runtime, form_handle, submitter_handle)
@@ -237,20 +241,48 @@ fn submit_form_with_submit_event_inner(
     if !skips_constraint_validation
         && !form_validate_for_submission(scope, runtime_ptr, form_handle)
     {
+        if let Some(id) = invocation {
+            crate::context_bootstrap::web_mcp::form_submission_failed(scope, runtime_ptr, id);
+        }
         return false;
     }
 
     let submitter_value = wrap_handle_value(scope, runtime_ptr, submitter_handle);
-    if let Some(event) = construct_submit_event(scope, submitter_value, true, true)
-        && dispatch_public_event(scope, runtime_ptr, form_handle, event).allows_default()
-    {
-        return submit_form_default_action(
+    if let Some(event) = construct_submit_event(scope, submitter_value, true, true) {
+        if invocation.is_some() {
+            crate::context_bootstrap::mark_agent_submit_event(scope, event);
+        }
+        let allows_default =
+            dispatch_public_event(scope, runtime_ptr, form_handle, event).allows_default();
+        if let Some(id) = invocation {
+            crate::context_bootstrap::web_mcp::finish_form_submit(
+                scope,
+                runtime_ptr,
+                id,
+                event,
+                allows_default,
+            );
+        }
+        if !allows_default {
+            return false;
+        }
+        let accepted = submit_form_default_action(
             scope,
             runtime_ptr,
             form_handle,
             submitter_handle,
             user_initiated,
         );
+        crate::context_bootstrap::web_mcp::finish_form_navigation(
+            scope,
+            runtime_ptr,
+            form_handle,
+            accepted,
+        );
+        return accepted;
+    }
+    if let Some(id) = invocation {
+        crate::context_bootstrap::web_mcp::form_submission_failed(scope, runtime_ptr, id);
     }
     false
 }
@@ -351,6 +383,7 @@ pub(in crate::native_bridge) fn form_reset_callback<'s>(
     }
 
     if dispatch_form_reset_event(scope, runtime_ptr, form_handle, args.this()).allows_default() {
+        crate::context_bootstrap::web_mcp::cancel_form_execution(scope, runtime_ptr, form_handle);
         let _ = reset_form_default_action(
             scope,
             runtime_ptr,
@@ -466,7 +499,13 @@ pub(in crate::native_bridge) fn form_submit_callback<'s>(
         return;
     }
 
-    let _ = submit_form_default_action(scope, runtime_ptr, form_handle, None, false);
+    let accepted = submit_form_default_action(scope, runtime_ptr, form_handle, None, false);
+    crate::context_bootstrap::web_mcp::finish_form_navigation(
+        scope,
+        runtime_ptr,
+        form_handle,
+        accepted,
+    );
     rv.set_undefined();
 }
 
@@ -957,6 +996,10 @@ fn submit_post_form_to_top_level_browsing_context(
         None,
         moli_fetch::BrowserNavigationRequestKind::Navigate,
     );
+    crate::context_bootstrap::web_mcp::bind_root_navigation(
+        unsafe { &mut *runtime_ptr },
+        form_handle,
+    );
     true
 }
 
@@ -1004,7 +1047,8 @@ fn submit_post_form_to_child_self_browsing_context(
             return true;
         }
     }
-    unsafe { &mut *runtime_ptr }.navigate_child_browsing_context_with_request(
+    let runtime = unsafe { &mut *runtime_ptr };
+    let navigated = runtime.navigate_child_browsing_context_with_request(
         scope,
         child_handle,
         ChildBrowsingContextNavigationRequest {
@@ -1013,7 +1057,15 @@ fn submit_post_form_to_child_self_browsing_context(
             body: Some(body),
             request_headers: vec![("Content-Type".to_owned(), content_type)],
         },
-    )
+    );
+    if navigated {
+        crate::context_bootstrap::web_mcp::bind_child_navigation(
+            runtime,
+            form_handle,
+            child_handle,
+        );
+    }
+    navigated
 }
 
 fn build_form_submission_request(

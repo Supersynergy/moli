@@ -1142,6 +1142,7 @@ pub(crate) struct PageVmRuntimeHooks {
     pub(crate) browser_context_runtime: super::RendererBrowserContextRuntime,
     document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
     document_lifecycle_install: PageVmDocumentLifecycleInstall,
+    web_mcp_navigation: Option<u64>,
     renderer_document_isolate_allocator: Option<RendererDocumentIsolateAllocator>,
     renderer_page_script_environment: Option<crate::script_vm::RendererPageScriptEnvironment>,
     renderer_document_isolate_reservation: Option<RendererDocumentIsolateReservation>,
@@ -1191,6 +1192,10 @@ struct PageVmRendererDocumentIsolateBootstrap {
 }
 
 impl PageVmRuntimeHooks {
+    pub(in crate::runtime) fn with_web_mcp_navigation(mut self, id: Option<u64>) -> Self {
+        self.web_mcp_navigation = id;
+        self
+    }
     #[cfg(test)]
     fn standalone_base_for_test() -> Self {
         let owner = Rc::new(super::RendererBrowserContextRuntime::new());
@@ -1204,6 +1209,7 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -1279,6 +1285,7 @@ impl PageVmRuntimeHooks {
                 },
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -1317,6 +1324,7 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::ReuseOrCreateInitial,
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -4292,6 +4300,9 @@ impl PageVm {
             env.reserved_service_worker_client_id,
         )?;
         let mut vm = vm_bootstrap.finish()?;
+        if let Some(id) = runtime_hooks.web_mcp_navigation.take() {
+            vm.receive_web_mcp_navigation(id);
+        }
         vm.set_document_navigator_identity(&env.navigator_identity);
         vm.set_layout_policy(env.layout_policy);
         vm.install_page_task_capabilities(page_task_capabilities);

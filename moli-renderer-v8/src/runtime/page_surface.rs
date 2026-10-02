@@ -314,6 +314,7 @@ pub struct RendererDocumentSourcedTopLevelLocationNavigation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RendererTopLevelNavigationRequest {
+    web_mcp_invocation: Option<u64>,
     url: String,
     request_method: String,
     request_body: Option<Vec<u8>>,
@@ -354,6 +355,7 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
         Self {
             source_document,
             request: Box::new(RendererTopLevelNavigationRequest {
+                web_mcp_invocation: None,
                 url,
                 request_method,
                 request_body,
@@ -366,6 +368,15 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
 
     pub fn source_document(&self) -> RendererDocumentLifecycleIdentity {
         self.source_document
+    }
+
+    pub fn with_web_mcp_invocation(mut self, id: Option<u64>) -> Self {
+        self.request.web_mcp_invocation = id;
+        self
+    }
+
+    pub fn web_mcp_invocation(&self) -> Option<u64> {
+        self.request.web_mcp_invocation
     }
 
     pub fn url(&self) -> &str {
@@ -4657,6 +4668,10 @@ pub(crate) enum RendererInspectorPageCommand {
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
+    WebMcp {
+        session: DevToolsSessionKey,
+        command: moli_page_types::RendererWebMcpCommand,
+    },
     Native(Box<RendererCdpCall>),
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
@@ -5658,6 +5673,7 @@ impl RendererPageCommand {
             Self::RemoveDocumentBackendNodeId { .. } => Some("RemoveDocumentBackendNodeId"),
             Self::EditDocumentNode { .. } => Some("EditDocumentNode"),
             Self::TriggerAutofill(_) => Some("TriggerAutofill"),
+            Self::WebMcp { .. } => Some("WebMCP"),
             Self::ComputedStylePropertiesForBackendNodeId { .. } => {
                 Some("ComputedStylePropertiesForBackendNodeId")
             }
@@ -5967,6 +5983,7 @@ pub enum RendererCaptureScreencastFrameReply {
 }
 
 pub enum RendererPageReply {
+    WebMcp(std::result::Result<Option<u64>, moli_page_types::RendererWebMcpError>),
     NativeCommandReady(Box<RendererNativeCommandReadyResponse>),
     NativeCommandPublished,
     ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),

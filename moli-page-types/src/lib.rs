@@ -12,8 +12,13 @@ mod navigation_history;
 mod navigator_overrides;
 mod renderer_transport_memory;
 mod session_history;
+mod web_mcp;
 
 pub use session_history::{SessionHistoryCommit, SessionHistorySeed, SessionHistoryUpdate};
+pub use web_mcp::{
+    RendererWebMcpAnnotations, RendererWebMcpCommand, RendererWebMcpError, RendererWebMcpEvent,
+    RendererWebMcpObservation, RendererWebMcpResult, RendererWebMcpTool, RendererWebMcpToolId,
+};
 
 use std::{
     borrow::Cow,
