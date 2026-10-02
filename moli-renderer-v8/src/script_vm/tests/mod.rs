@@ -2144,6 +2144,7 @@ mod element_click;
 mod event_receivers;
 mod headers_list;
 mod http_fixture;
+mod media_playback_value_interfaces;
 
 mod audio_event_interfaces;
 mod import_meta;

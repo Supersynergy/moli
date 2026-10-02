@@ -1156,6 +1156,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::MediaError,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::TimeRanges::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoPlaybackQuality::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::TextTrack::DESCRIPTOR,
         kind: ConstructorKind::TextTrack,
     },

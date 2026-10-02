@@ -467,6 +467,8 @@ interfaces! {
     TextTrackCueList;
     TextTrackList: EventTarget;
     ToggleEvent: Event;
+    TimeRanges;
+    VideoPlaybackQuality;
     Touch;
     TouchEvent: UIEvent;
     TouchList;
