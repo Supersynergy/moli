@@ -561,6 +561,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ClipboardItem,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaSession::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MediaCapabilities::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },

@@ -294,6 +294,7 @@ interfaces! {
     MediaList;
     MediaQueryList: EventTarget;
     MediaQueryListEvent: Event;
+    MediaSession;
     MediaSource: EventTarget;
     MemoryInfo;
     MessageChannel;
