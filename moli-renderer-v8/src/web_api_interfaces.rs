@@ -387,6 +387,11 @@ interfaces! {
     SVGAnimatedNumber;
     SVGAnimatedNumberList;
     SVGAnimatedTransformList;
+    SVGAnimationElement: SVGElement;
+    SVGAnimateElement: SVGAnimationElement;
+    SVGAnimateMotionElement: SVGAnimationElement;
+    SVGAnimateTransformElement: SVGAnimationElement;
+    SVGSetElement: SVGAnimationElement;
     SVGCircleElement: SVGGeometryElement;
     SVGDefsElement: SVGGraphicsElement;
     SVGDescElement: SVGElement;
