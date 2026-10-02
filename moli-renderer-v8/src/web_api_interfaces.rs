@@ -331,6 +331,7 @@ interfaces! {
     OscillatorNode;
     PageTransitionEvent: Event;
     Path2D;
+    PaymentResponse: EventTarget;
     Performance: EventTarget;
     PerformanceEntry;
     PerformanceMark: PerformanceEntry;
