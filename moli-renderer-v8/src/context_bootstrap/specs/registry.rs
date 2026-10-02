@@ -1188,6 +1188,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::TextTrack,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::RemotePlayback::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::TextTrackList::DESCRIPTOR,
         kind: ConstructorKind::TextTrackList,
     },
