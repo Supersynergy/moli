@@ -392,6 +392,12 @@ interfaces! {
     SVGDescElement: SVGElement;
     SVGElement: Element;
     SVGEllipseElement: SVGGeometryElement;
+    SVGFEComponentTransferElement: SVGElement;
+    SVGFEFloodElement: SVGElement;
+    SVGFEImageElement: SVGElement;
+    SVGFEMergeElement: SVGElement;
+    SVGFEMergeNodeElement: SVGElement;
+    SVGFETileElement: SVGElement;
     SVGForeignObjectElement: SVGGraphicsElement;
     SVGGElement: SVGGraphicsElement;
     SVGGeometryElement: SVGGraphicsElement;
