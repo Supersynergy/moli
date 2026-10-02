@@ -403,7 +403,12 @@ pub(super) fn ax_value(document: &NativeDom, node_id: NodeId, node: &Node) -> Op
                     | InputType::Submit
             ) =>
         {
-            element.input_value()
+            // Chromium exposes a password value only as one bullet per character.
+            if element.input_type() == InputType::Password {
+                "\u{2022}".repeat(element.input_value().chars().count())
+            } else {
+                element.input_value()
+            }
         }
         "textarea" => {
             if element.input_value_dirty() {
@@ -931,5 +936,25 @@ mod tests {
     fn accessible_name_relation_budget_matches_chromium_boundary() {
         assert_eq!(alternating_relation_chain_name(49), "End");
         assert_eq!(alternating_relation_chain_name(50), "");
+    }
+
+    #[test]
+    fn password_value_is_exposed_as_bullets_only() {
+        let (mut document, root) = document_with_root();
+        let input = document.create_element("input");
+        assert!(document.set_attribute(input, "type", "password"));
+        assert!(document.set_attribute(input, "value", "secret"));
+        assert!(document.append_child(root, input));
+
+        let value = ax_value(
+            &document,
+            input,
+            document.node(input).expect("password input"),
+        )
+        .expect("password input has an AX value");
+        assert_eq!(
+            value["value"],
+            "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
+        );
     }
 }

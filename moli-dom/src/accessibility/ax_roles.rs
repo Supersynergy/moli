@@ -30,13 +30,13 @@ fn native_ax_role(element: &Element) -> &'static str {
         "a" => "link",
         "button" => "button",
         "input" => match element.attribute("type").unwrap_or("text") {
-            "text" | "email" | "tel" | "url" => "textbox",
+            "text" | "email" | "tel" | "url" | "password" => "textbox",
             "search" => "searchbox",
             "number" => "spinbutton",
             "checkbox" => "checkbox",
             "radio" => "radio",
             "button" | "submit" | "reset" | "image" => "button",
-            "password" | "hidden" => "none",
+            "hidden" => "none",
             "color" => "color",
             "file" => "file",
             "month" => "month",
@@ -323,5 +323,23 @@ mod tests {
 
         assert!(document.set_attribute(element, "role", "button status"));
         assert_eq!(ax_role(document.node(element).expect("element")), "button");
+    }
+
+    #[test]
+    fn password_input_is_a_textbox_and_hidden_input_is_not_exposed() {
+        let mut document =
+            NativeDom::new_html(Url::parse("https://example.test/").expect("valid URL"));
+        let password = document.create_element("input");
+        assert!(document.append_child(document.document_node_id(), password));
+        assert!(document.set_attribute(password, "type", "password"));
+        assert_eq!(
+            ax_role(document.node(password).expect("element")),
+            "textbox"
+        );
+
+        let hidden = document.create_element("input");
+        assert!(document.append_child(document.document_node_id(), hidden));
+        assert!(document.set_attribute(hidden, "type", "hidden"));
+        assert_eq!(ax_role(document.node(hidden).expect("element")), "none");
     }
 }
