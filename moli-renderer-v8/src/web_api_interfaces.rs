@@ -289,11 +289,14 @@ interfaces! {
     MediaCapabilities;
     MediaDeviceInfo;
     InputDeviceInfo: MediaDeviceInfo;
+    MediaStreamTrack: EventTarget;
+    CanvasCaptureMediaStreamTrack: MediaStreamTrack;
     MediaDevices: EventTarget;
     MediaError;
     MediaList;
     MediaQueryList: EventTarget;
     MediaQueryListEvent: Event;
+    MediaSession;
     MediaSource: EventTarget;
     MemoryInfo;
     MIDIPort: EventTarget;
@@ -488,6 +491,8 @@ interfaces! {
     TextTrackCueList;
     TextTrackList: EventTarget;
     ToggleEvent: Event;
+    TimeRanges;
+    VideoPlaybackQuality;
     Touch;
     TouchEvent: UIEvent;
     TouchList;
