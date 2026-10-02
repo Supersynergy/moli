@@ -375,6 +375,7 @@ interfaces! {
     ReadableStreamDefaultController;
     ReadableStreamDefaultReader;
     Request;
+    RemotePlayback: EventTarget;
     ResizeObserver;
     ResizeObserverEntry;
     ResizeObserverSize;
