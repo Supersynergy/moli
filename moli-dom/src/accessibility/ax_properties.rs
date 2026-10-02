@@ -403,9 +403,10 @@ pub(super) fn ax_value(document: &NativeDom, node_id: NodeId, node: &Node) -> Op
                     | InputType::Submit
             ) =>
         {
-            // Chromium exposes a password value only as one bullet per character.
+            // Chromium exposes a password value as one bullet per UTF-16 code unit.
             if element.input_type() == InputType::Password {
-                "\u{2022}".repeat(element.input_value().chars().count())
+                let value = element.input_value();
+                "\u{2022}".repeat(value.encode_utf16().count())
             } else {
                 element.input_value()
             }
@@ -939,22 +940,48 @@ mod tests {
     }
 
     #[test]
-    fn password_value_is_exposed_as_bullets_only() {
-        let (mut document, root) = document_with_root();
-        let input = document.create_element("input");
-        assert!(document.set_attribute(input, "type", "password"));
-        assert!(document.set_attribute(input, "value", "secret"));
-        assert!(document.append_child(root, input));
+    fn password_value_is_masked_per_utf16_code_unit() {
+        // Chromium's Accessibility.getFullAXTree masks both initial and live values.
+        for (password, bullet_count) in [
+            ("secret", 6),
+            ("密码", 2),
+            ("😀", 2),
+            ("a😀密", 4),
+            ("e\u{301}", 2),
+            ("👩\u{200d}💻", 5),
+            ("", 0),
+        ] {
+            for live_value in [false, true] {
+                let (mut document, root) = document_with_root();
+                let input = document.create_element("input");
+                assert!(document.set_attribute(input, "type", "password"));
+                assert!(document.append_child(root, input));
+                if live_value {
+                    assert!(document.set_attribute(input, "value", "initial"));
+                    let element = document
+                        .node_mut(input)
+                        .expect("password input")
+                        .data_mut()
+                        .as_element_mut()
+                        .expect("password input element");
+                    assert!(element.set_input_value(password));
+                } else {
+                    assert!(document.set_attribute(input, "value", password));
+                }
 
-        let value = ax_value(
-            &document,
-            input,
-            document.node(input).expect("password input"),
-        )
-        .expect("password input has an AX value");
-        assert_eq!(
-            value["value"],
-            "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"
-        );
+                let value = ax_value(
+                    &document,
+                    input,
+                    document.node(input).expect("password input"),
+                );
+                let expected = (bullet_count > 0).then(|| {
+                    json!({
+                        "type": "string",
+                        "value": "\u{2022}".repeat(bullet_count),
+                    })
+                });
+                assert_eq!(value, expected, "password={password:?}, live={live_value}");
+            }
+        }
     }
 }
