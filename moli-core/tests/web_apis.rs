@@ -4871,8 +4871,11 @@ async fn servo_fontfaceset_load_replaces_ready_and_rejects_css_wide_keywords() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-load-ready"))
+        .await?;
+
+    page.evaluate_runtime_expression_with_await_async("fontFixtureDone", true)
         .await?;
 
     assert!(
