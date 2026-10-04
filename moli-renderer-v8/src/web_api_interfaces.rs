@@ -561,6 +561,8 @@ interfaces! {
     URLSearchParams;
     URLSearchParamsIterator = "URLSearchParams Iterator";
     UserActivation;
+    VideoDecoder: EventTarget;
+    VideoEncoder: EventTarget;
     VTTCue: TextTrackCue;
     ValidityState;
     ViewTransition;
