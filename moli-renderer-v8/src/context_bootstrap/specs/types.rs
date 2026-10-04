@@ -41,6 +41,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     ToggleEvent,
     InterestEvent,
     PopStateEvent,
+    HashChangeEvent,
     PageTransitionEvent,
     DomException,
     DomError,
