@@ -1140,6 +1140,7 @@ fn start_devtools_dispatch_mouse_event_command(
                 command.delta_y,
                 pointer,
                 command.modifiers,
+                false,
             )
         },
     )
