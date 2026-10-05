@@ -2171,6 +2171,7 @@ mod svg_filter_interfaces;
 mod svg_number_validation;
 mod svg_root_factory_receivers;
 mod svg_switch_mpath_interfaces;
+mod time_ranges;
 mod url_components;
 mod webgl_interfaces;
 mod webidl_collections;
