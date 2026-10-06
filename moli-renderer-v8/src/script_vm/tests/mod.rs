@@ -2204,3 +2204,4 @@ mod media_device_interfaces;
 
 mod dom_rect_factory_descriptors;
 mod dom_rect_structured_clone;
+mod domrect_receiver_consolidation;
