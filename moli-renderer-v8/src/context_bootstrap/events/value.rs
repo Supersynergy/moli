@@ -4,6 +4,7 @@ use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state, set_event_private_value,
 };
+use crate::context_bootstrap::events::EventInit;
 use crate::{
     util::{new_null_prototype_object, throw_type_error, v8str},
     web_api_interfaces, webidl,
@@ -106,12 +107,8 @@ struct ToolCancelEventPrototypeDeclaration {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "ToolEventInit")]
 struct ToolEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "toolName", with = string_member)]
     tool_name: v8::Local<'s, v8::String>,
 }
@@ -119,12 +116,8 @@ struct ToolEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "WebGLContextEventInit")]
 struct WebGlContextEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(with = string_member)]
     status_message: v8::Local<'s, v8::String>,
 }
@@ -134,12 +127,8 @@ struct WebGlContextEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AnimationEventInit")]
 struct AnimationEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "animationName", with = string_member)]
     animation_name: v8::Local<'s, v8::String>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
@@ -151,12 +140,8 @@ struct AnimationEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "TransitionEventInit")]
 struct TransitionEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
     elapsed_time: f64,
     #[webidl(name = "propertyName", with = string_member)]
@@ -207,12 +192,8 @@ fn gamepad_member<'s>(
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "BlobEventInit")]
 struct BlobEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(required, interface = web_api_interfaces::Blob)]
     data: v8::Local<'s, v8::Object>,
     #[webidl(converter = "double")]
@@ -338,7 +319,11 @@ fn value_event_constructor<'s>(
                     PSEUDO_ELEMENT_SLOT,
                     parsed.pseudo_element.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::Transition => {
                 let parsed =
@@ -356,7 +341,11 @@ fn value_event_constructor<'s>(
                     PSEUDO_ELEMENT_SLOT,
                     parsed.pseudo_element.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::WebGlContext => {
                 let parsed =
@@ -367,7 +356,11 @@ fn value_event_constructor<'s>(
                     STATUS_MESSAGE_SLOT,
                     parsed.status_message.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::Blob => {
                 let parsed = webidl::parse_dictionary_object::<BlobEventInit>(scope, dictionary)?;
@@ -378,12 +371,20 @@ fn value_event_constructor<'s>(
                     TIMECODE_SLOT,
                     v8::Number::new(scope, parsed.timecode.unwrap_or(f64::NAN)).into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::ToolActivated | ValueEventKind::ToolCancel => {
                 let parsed = webidl::parse_dictionary_object::<ToolEventInit>(scope, dictionary)?;
                 set_event_private_value(scope, state, TOOL_NAME_SLOT, parsed.tool_name.into());
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::Gamepad => {
                 let parsed =
