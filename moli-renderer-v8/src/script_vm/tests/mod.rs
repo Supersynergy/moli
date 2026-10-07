@@ -2145,6 +2145,7 @@ mod dom_xhr;
 mod element_click;
 mod encoded_video_chunk_shell;
 mod event_receivers;
+mod geometry_point_conversion_order;
 mod headers_list;
 mod http_fixture;
 mod media_owner_playback_interfaces;
