@@ -14,7 +14,7 @@ fn moli_cli_path() -> PathBuf {
 }
 
 #[test]
-fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
+fn cli_serve_exits_promptly_when_sigterm_is_delivered() {
     let mut child = Command::new(moli_cli_path())
         .args([
             "serve",
@@ -80,5 +80,5 @@ fn cli_serve_exits_immediately_when_sigterm_is_delivered() {
     stderr_reader
         .join()
         .expect("stderr reader should finish after server exit");
-    assert_eq!(status.code(), Some(128 + libc::SIGTERM));
+    assert!(status.success(), "graceful server shutdown: {status}");
 }
