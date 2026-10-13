@@ -1,6 +1,7 @@
 #[cfg(test)]
 use std::path::PathBuf;
 use std::{
+    future::{Future, IntoFuture},
     net::SocketAddr,
     sync::{Arc, atomic::AtomicU64},
 };
@@ -136,6 +137,11 @@ impl ProtocolServer {
     }
 
     pub async fn serve(&self) -> Result<()> {
+        self.serve_until(std::future::pending()).await
+    }
+
+    /// Stop accepting connections and flush owned profiles on shutdown.
+    pub async fn serve_until(&self, shutdown: impl Future<Output = ()>) -> Result<()> {
         let listener = TcpListener::bind(self.config.bind_target())
             .await
             .with_context(|| {
@@ -164,8 +170,16 @@ impl ProtocolServer {
         let listener = listener.tap_io(|tcp_stream| {
             tcp_options::configure_accepted_protocol_stream(tcp_stream);
         });
-        let result = axum::serve(listener, app).await;
-        cdp_owner_registry.shutdown().await;
+        let result = tokio::select! {
+            result = axum::serve(listener, app).into_future() => result,
+            () = shutdown => Ok(()),
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            cdp_owner_registry.shutdown(),
+        )
+        .await
+        .context("timed out flushing protocol server profiles")?;
         result.context("protocol server failed")
     }
 }
