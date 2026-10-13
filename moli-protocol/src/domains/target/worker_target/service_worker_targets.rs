@@ -575,7 +575,7 @@ pub(super) async fn worker_target_removal_background_events_async(
     emit_target_lifecycle_events(
         conn,
         &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
-        Some(&mut prepared_outputs),
+        &mut prepared_outputs,
     )
     .await;
     command_context.take_protocol_events()

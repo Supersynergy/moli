@@ -78,7 +78,7 @@ async fn drain(
     emit_target_lifecycle_events(
         conn,
         &mut ProtocolOutputProjectionContext::new(&owner, &mut command),
-        Some(&mut prepared),
+        &mut prepared,
     )
     .await;
     command.take_protocol_events()

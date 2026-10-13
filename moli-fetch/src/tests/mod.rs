@@ -1,6 +1,7 @@
 mod cookie_context;
 mod cookie_store;
 mod header_bytes;
+mod header_eof;
 mod mixed_transport;
 mod request_security;
 mod support;
@@ -63,6 +64,7 @@ fn test_web_bot_auth_signer() -> WebBotAuthSigner {
 
 fn sample_response_head() -> ResponseHead {
     ResponseHead {
+        status_text: None,
         final_url: Url::parse("http://example.test/final").unwrap(),
         status: 203,
         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
@@ -114,22 +116,148 @@ fn fetch_raw_with_network_metadata_for_test(
 
 #[test]
 fn response_head_round_trips_through_text_and_raw_materialized_responses() {
-    let head = sample_response_head();
-    let response =
-        Response::from_head_and_body(head.clone(), "hello".to_owned(), b"hello".to_vec());
+    for status_text in [None, Some("Custom message"), Some("")] {
+        let mut head = sample_response_head();
+        head.status_text = status_text.map(str::to_owned);
+        let response =
+            Response::from_head_and_body(head.clone(), "hello".to_owned(), b"hello".to_vec());
+        assert_eq!(response.clone().head().status_text, head.status_text);
+        assert_eq!(
+            response.clone().into_parts().0.status_text,
+            head.status_text
+        );
 
-    let raw = response.into_materialized_raw_response();
-    assert_eq!(raw.final_url, head.final_url);
-    assert_eq!(raw.status, head.status);
-    assert_eq!(raw.headers, head.headers);
-    assert_eq!(raw.body_bytes(), b"hello");
+        let raw = response.into_materialized_raw_response();
+        assert_eq!(raw.final_url, head.final_url);
+        assert_eq!(raw.status, head.status);
+        assert_eq!(raw.clone().into_parts().0.status_text, head.status_text);
+        assert_eq!(raw.headers, head.headers);
+        assert_eq!(raw.body_bytes(), b"hello");
 
-    let text = raw.into_lossy_materialized_text_response();
-    assert_eq!(text.final_url, head.final_url);
-    assert_eq!(text.status, head.status);
-    assert_eq!(text.headers, head.headers);
-    assert_eq!(text.body_text(), "hello");
-    assert_eq!(text.body_bytes(), b"hello");
+        let text = raw.into_lossy_materialized_text_response();
+        assert_eq!(text.final_url, head.final_url);
+        assert_eq!(text.status, head.status);
+        assert_eq!(text.head().status_text, head.status_text);
+        assert_eq!(text.headers, head.headers);
+        assert_eq!(text.body_text(), "hello");
+        assert_eq!(text.body_bytes(), b"hello");
+    }
+}
+
+#[test]
+fn http_status_messages_preserve_bytes_and_explicit_empty_values() {
+    for (line, status, expected) in [
+        (b"HTTP/1.0 402 FIVE BUCKS\r\n".as_slice(), 402, "FIVE BUCKS"),
+        (b"HTTP/1.1 699 WAY OUTTA RANGE\r\n", 699, "WAY OUTTA RANGE"),
+        (b"HTTP/1.1 200\r\n", 200, ""),
+        (
+            b"HTTP/1.1 200   Keep  inner spaces   \r\n",
+            200,
+            "Keep  inner spaces",
+        ),
+        (b"HTTP/1.1 200 \ttab\tinside\t \r\n", 200, "\ttab\tinside\t"),
+        (
+            b"HTTP/1.1 200 \xa0caf\xe9\xff\r\n",
+            200,
+            "\u{a0}caf\u{e9}\u{ff}",
+        ),
+        (b"HTTP/2 200 \r\n", 200, ""),
+        (b"HTTP/3 200 \r\n", 200, ""),
+    ] {
+        let parsed = crate::response::parse_http_response_status_line(line).unwrap();
+        assert_eq!(parsed.status, status);
+        assert_eq!(parsed.status_text, expected);
+    }
+
+    let mut head = sample_response_head();
+    head.status = 200;
+    assert_eq!(head.status_text(), "OK");
+    head.negotiated_http_version = Some(NegotiatedHttpVersion::Http2);
+    assert_eq!(head.status_text(), "");
+    head.status_text = Some("Explicit override".to_owned());
+    assert_eq!(head.status_text(), "Explicit override");
+    head.negotiated_http_version = Some(NegotiatedHttpVersion::Http11);
+    head.status_text = Some(String::new());
+    assert_eq!(head.status_text(), "");
+}
+
+#[tokio::test]
+async fn http_status_messages_survive_buffered_and_streamed_transport() -> Result<()> {
+    for (status, received, expected) in [
+        (200, "Different OK", "Different OK"),
+        (200, "", ""),
+        (200, "  Keep  inner spaces  ", "Keep  inner spaces"),
+        (200, "tab\tinside", "tab\tinside"),
+        (699, "WAY OUTTA RANGE", "WAY OUTTA RANGE"),
+    ] {
+        let server = ScriptedHttpServer::spawn(vec![
+            ScriptedResponse::status(status, received)
+                .with_body("body");
+            3
+        ]);
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        for mode in ["buffered", "html", "raw"] {
+            let request = Request::get(&server.url())?;
+            let (head, body) = match mode {
+                "buffered" => client
+                    .fetch(request.with_follow_redirects(false))
+                    .await?
+                    .into_body(),
+                "html" => client.fetch_html_stream(request).await?.into_body(),
+                _ => client
+                    .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+                    .await?
+                    .into_body(),
+            };
+            assert_eq!(head.status, status, "{mode}");
+            assert_eq!(head.status_text.as_deref(), Some(expected), "{mode}");
+            assert_eq!(body.into_materialized_bytes().await?, b"body", "{mode}");
+        }
+        assert_eq!(server.hits(), 3);
+        assert!(client.shutdown().is_clean());
+        server.shutdown();
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_status_messages_survive_disk_cache_across_streaming_modes() -> Result<()> {
+    for first_mode in ["html", "raw"] {
+        for status_text in ["Cached message", ""] {
+            let cache_dir = unique_test_cache_dir();
+            let server = ScriptedHttpServer::spawn(vec![
+                ScriptedResponse::status(200, status_text)
+                    .with_header("Cache-Control", "max-age=60")
+                    .with_body("cached body"),
+            ]);
+            let mut config = FetchConfig::default();
+            config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+            for (index, mode) in [first_mode, "html", "raw", "materialized"]
+                .into_iter()
+                .enumerate()
+            {
+                // Reopen the client so every subsequent read comes from disk.
+                let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+                let request = Request::get(&server.url())?;
+                let (head, body) = match mode {
+                    "html" => client.fetch_html_stream(request).await?.into_body(),
+                    "raw" => client
+                        .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+                        .await?
+                        .into_body(),
+                    _ => client.fetch(request).await?.into_body(),
+                };
+                assert_eq!(head.from_cache, index != 0, "{first_mode} to {mode}");
+                assert_eq!(head.status_text.as_deref(), Some(status_text), "{mode}");
+                assert_eq!(body.into_materialized_bytes().await?, b"cached body");
+                assert!(client.shutdown().is_clean());
+            }
+            assert_eq!(server.hits(), 1);
+            server.shutdown();
+            fs::remove_dir_all(cache_dir)?;
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -1612,7 +1740,7 @@ async fn request_headers_distinguish_empty_values_from_absent_upload_content_typ
             .parse::<usize>()?;
         seen.insert(index);
         let case = &cases[index];
-        let (_, method, _, content_type) = case;
+        let (_, method, body, content_type) = case;
         assert!(request.starts_with(&format!("{method} /empty-headers/{index} HTTP/1.1\r\n")));
         let values = |name: &str| {
             request
@@ -1631,6 +1759,22 @@ async fn request_headers_distinguish_empty_values_from_absent_upload_content_typ
             content_type.iter().copied().collect::<Vec<_>>(),
             "{case:?}: {request}"
         );
+        if body.as_ref().is_none_or(Vec::is_empty) {
+            let expected_length = if body.is_some() || matches!(*method, "POST" | "PUT") {
+                vec!["0"]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                values("content-length"),
+                expected_length,
+                "{case:?}: {request}"
+            );
+            assert!(
+                values("transfer-encoding").is_empty(),
+                "{case:?}: {request}"
+            );
+        }
     }
     assert_eq!(seen, (0..cases.len()).collect());
     Ok(())
@@ -4647,7 +4791,8 @@ fn fetch_client_cache_revalidates_with_etag() {
 fn fetch_client_cache_updates_freshness_after_not_modified() {
     let cache_dir = unique_test_cache_dir();
     let server = ScriptedHttpServer::spawn(vec![
-        ScriptedResponse::ok("hit-1")
+        ScriptedResponse::status(200, "Original cached message")
+            .with_body("hit-1")
             .with_header("Cache-Control", "max-age=0")
             .with_header("ETag", "\"v1\""),
         ScriptedResponse::status(304, "Not Modified")
@@ -4666,6 +4811,13 @@ fn fetch_client_cache_updates_freshness_after_not_modified() {
     assert_eq!(first.body_text(), "hit-1");
     assert_eq!(second.body_text(), "hit-1");
     assert_eq!(third.body_text(), "hit-1");
+    for response in [&first, &second, &third] {
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            response.status_text.as_deref(),
+            Some("Original cached message")
+        );
+    }
     assert_eq!(
         server.hits(),
         2,
@@ -5569,6 +5721,8 @@ fn fetch_runtime_negotiates_http2_over_tls() {
         fetch_response_for_test(&client, Request::get(&server.url_path("/h2")).unwrap()).unwrap();
 
     assert_eq!(response.body_text(), "h2-ok");
+    assert_eq!(response.status_text.as_deref(), Some(""));
+    assert_eq!(response.head().status_text(), "");
     assert_eq!(
         response.negotiated_http_version,
         Some(NegotiatedHttpVersion::Http2)
@@ -5611,6 +5765,8 @@ async fn fetch_runtime_raw_stream_reports_negotiated_http2() -> Result<()> {
             FetchCancelHandle::new(),
         )
         .await?;
+    assert_eq!(response.status_text.as_deref(), Some(""));
+    assert_eq!(response.head().status_text(), "");
     assert_eq!(
         response.negotiated_http_version,
         Some(NegotiatedHttpVersion::Http2)
@@ -6205,8 +6361,13 @@ fn fetch_runtime_owner_panic_returns_payload_and_identity_and_other_owners_still
         .backtrace()
         .expect("semantic owner panic must retain its panic-site backtrace");
     assert!(!backtrace.trim().is_empty());
+    // Toolchains can demangle inherent methods as Type::method or <Type>::method.
+    // Require the same fully qualified owner and method in a single frame.
     assert!(
-        backtrace.contains("RuntimeOwner::handle_command"),
+        backtrace.lines().any(|frame| {
+            frame.contains("moli_fetch::runtime::RuntimeOwner::handle_command")
+                || frame.contains("<moli_fetch::runtime::RuntimeOwner>::handle_command")
+        }),
         "panic backtrace should identify the semantic owner command boundary: {backtrace}"
     );
     assert_eq!(
@@ -6256,3 +6417,5 @@ fn panicking_fetch_runtime_owner_drop_does_not_replace_an_outer_unwind() {
 }
 
 mod range_encoding;
+
+mod referrer_redirects;

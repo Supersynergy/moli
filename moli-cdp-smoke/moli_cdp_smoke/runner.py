@@ -44,6 +44,7 @@ from .groups.layout_policy import run_layout_policy_group
 from .groups.layout_screenshot import run_layout_screenshot_group
 from .groups.locale_timezone_inputs import run_locale_timezone_inputs_group
 from .groups.process_environment import run_process_environment_group
+from .groups.scrollbar_visibility import run_scrollbar_visibility_group
 from .groups.multi_client import run_multi_client_group
 from .groups.multi_context import run_multi_context_group
 from .groups.multi_page import run_multi_page_group
@@ -112,6 +113,12 @@ async def _await_group(group: SmokeGroup, awaitable: Awaitable[None]) -> None:
 
 
 RAW_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup(
+        "scrollbar-visibility",
+        "Moli fetch/serve scrollbar defaults, CLI/environment precedence, CDP emulation, frames, paint, and input.",
+        "raw",
+        run_scrollbar_visibility_group,
+    ),
     SmokeGroup(
         "debugger-breakpoints",
         "Raw Debugger breakpoint commands dispatched while the page is normally running.",
@@ -711,7 +718,12 @@ async def async_main(argv: list[str] | None = None) -> int:
             port = int(port_env) if port_env else 0
             if port < 0 or port > 65535 or (port == 0 and port_env is not None):
                 raise RuntimeError(f"invalid MOLI_CDP_PORT: {port_env}")
-            serve = await start_moli_serve(port)
+            serve = await start_moli_serve(
+                port,
+                extra_args=("--scrollbars",)
+                if selected_group.name in {"classic-scrollbar", "iframe-input"}
+                else (),
+            )
             endpoint = await wait_for_moli_endpoint(serve)
         if endpoint is None:
             raise RuntimeError("CDP endpoint was not initialized")

@@ -1,3 +1,5 @@
+//! Screenshot and screencast requests, replies and pixel capture.
+
 use moli_layout::{
     LayoutRect, LayoutTransform2D, PaintCaptureRegion, PaintCaptureRequest, PaintCaptureSurface,
     PaintViewport,
@@ -6,10 +8,7 @@ use moli_page_types::{LayoutPolicy, ViewportSurface};
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::{
-    PageVm, RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
-    RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererDocumentLifecycleIdentity,
-};
+use super::{PageVm, RendererDocumentLifecycleIdentity};
 
 #[derive(Default)]
 struct PaintFragmentProfile {
@@ -119,7 +118,10 @@ pub enum RendererScreenshotFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendererScreenshotPurpose {
     Screenshot,
-    Print { print_background: bool },
+    /// Pixel capture under print media, independent of native PDF output.
+    Print {
+        print_background: bool,
+    },
 }
 
 /// A CDP page-coordinate clip. Validation remains at the renderer boundary so
@@ -172,6 +174,37 @@ pub struct RendererCaptureScreencastFrameRequest {
     pub known_visual_state: Option<RendererVisualStateToken>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererCapturedScreenshot {
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: Arc<[u8]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RendererCaptureScreenshotReply {
+    Captured(RendererCapturedScreenshot),
+    LayoutDisabled,
+    NoDocument,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererCapturedScreencastFrame {
+    /// Native viewport dimensions before the encoded frame is fitted to limits.
+    pub viewport_size: (u32, u32),
+    pub image: RendererCapturedScreenshot,
+    pub visual_state: RendererVisualStateToken,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RendererCaptureScreencastFrameReply {
+    Captured(RendererCapturedScreencastFrame),
+    Unchanged,
+    LayoutDisabled,
+    NoDocument,
+}
+
 impl RendererCaptureScreenshotRequest {
     pub fn viewport_png() -> Self {
         Self {
@@ -199,15 +232,15 @@ impl PageVm {
             RendererScreenshotPurpose::Print { .. } => moli_action_window::ActionBarrier::Explicit,
         };
         self.flush_page_action_window(barrier)?;
-        let paint_capture =
-            request.paint_capture_request(self.viewport_surface.unwrap_or_default())?;
+        let paint_capture = request
+            .paint_capture_request(self.document_settings.viewport_surface.unwrap_or_default())?;
         let restore_media = if matches!(request.purpose, RendererScreenshotPurpose::Print { .. })
-            && self.emulated_media.media.is_none()
+            && self.document_settings.emulated_media.media.is_none()
         {
-            let previous = self.emulated_media.clone();
+            let previous = self.document_settings.emulated_media.clone();
             let mut print = previous.clone();
             print.media = Some("print".to_owned());
-            self.set_emulated_media(&print);
+            self.set_emulated_media(&print)?;
             Some(previous)
         } else {
             None
@@ -223,7 +256,7 @@ impl PageVm {
             },
         );
         if let Some(previous) = restore_media {
-            self.set_emulated_media(&previous);
+            self.set_emulated_media(&previous)?;
         }
         result.map(RendererImageCaptureOutcome::into_screenshot_reply)
     }
@@ -252,10 +285,10 @@ impl PageVm {
         before_layout: impl FnOnce(),
     ) -> anyhow::Result<RendererCaptureScreencastFrameReply> {
         self.flush_page_action_window(moli_action_window::ActionBarrier::Screencast)?;
-        if self.layout_policy == LayoutPolicy::Mock {
+        if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(RendererCaptureScreencastFrameReply::LayoutDisabled);
         }
-        let surface = self.viewport_surface.unwrap_or_default();
+        let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
@@ -319,10 +352,10 @@ impl PageVm {
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(Instant::now);
-        if self.layout_policy == LayoutPolicy::Mock {
+        if self.layout_configuration.policy == LayoutPolicy::Mock {
             return Ok(RendererImageCaptureOutcome::LayoutDisabled);
         }
-        let surface = self.viewport_surface.unwrap_or_default();
+        let surface = self.document_settings.viewport_surface.unwrap_or_default();
         let viewport = PaintViewport::new(
             surface.inner_width,
             surface.inner_height,
@@ -377,7 +410,7 @@ impl PageVm {
             RendererScreenshotFormat::Jpeg => {
                 // Chrome captures JPEG against black. The encoder discards alpha,
                 // so composite our straight-alpha raster before handing it over.
-                for pixel in raster.rgba.chunks_exact_mut(4) {
+                for pixel in raster.rgba.as_chunks_mut::<4>().0 {
                     let alpha = u16::from(pixel[3]);
                     if alpha != 255 {
                         for channel in &mut pixel[..3] {

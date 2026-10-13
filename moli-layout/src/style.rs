@@ -1687,6 +1687,11 @@ impl ResolvedLayoutStyle {
         self.overflow_clips
     }
 
+    /// Native controls have an internal viewport even when their CSS overflow is visible.
+    pub(crate) fn clip_form_control_contents(&mut self) {
+        self.overflow_clips = true;
+    }
+
     pub(crate) fn establishes_scroll_container(&self) -> bool {
         // `overflow: clip` clips paint but deliberately does not create the
         // scrolling mechanism that selects a sticky scrollport.
@@ -1753,9 +1758,11 @@ impl ResolvedLayoutStyle {
         self.taffy.overflow.y = taffy::Overflow::Visible;
     }
 
-    pub(crate) fn prepare_scrollbar_layout(&mut self, is_root: bool) {
-        self.revealed_scrollbar_x = self.overflow_x == LayoutOverflowMode::Scroll;
-        self.revealed_scrollbar_y = self.overflow_y == LayoutOverflowMode::Scroll;
+    pub(crate) fn prepare_scrollbar_layout(&mut self, is_root: bool, scrollbars_hidden: bool) {
+        self.revealed_scrollbar_x =
+            !scrollbars_hidden && self.overflow_x == LayoutOverflowMode::Scroll;
+        self.revealed_scrollbar_y =
+            !scrollbars_hidden && self.overflow_y == LayoutOverflowMode::Scroll;
         // Moli resolves CSS scrollbar policy to physical edge insets through
         // `LayoutPartialTree::get_scrollbar_insets`. Keep Taffy's legacy
         // scalar disabled so no algorithm reserves the same gutter twice.
@@ -2383,14 +2390,14 @@ fn resolve_stylo_2d_transform(
             // precision even if they are widened again for LayoutTransform2D.
             .to_transform_3d_matrix_f64(Some(&reference_box))
         {
-            Ok((_matrix, true)) => {
-                has_unsupported_3d = true;
-                None
-            }
-            Ok((matrix, false)) => Some(LayoutTransform2D::new([
+            // Stylo's boolean reports 3D function syntax, not whether the
+            // resulting matrix needs 3D geometry. In particular, popovers
+            // commonly center with translate3d(-50%, 0, 0). Keep every matrix
+            // that is exactly representable in our 2D coordinate space.
+            Ok((matrix, _)) if matrix.is_2d() => Some(LayoutTransform2D::new([
                 matrix.m11, matrix.m12, matrix.m21, matrix.m22, matrix.m41, matrix.m42,
             ])),
-            Err(_) => {
+            Ok(_) | Err(_) => {
                 has_unsupported_3d = true;
                 None
             }

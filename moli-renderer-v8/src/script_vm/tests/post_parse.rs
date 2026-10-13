@@ -291,6 +291,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
     let final_url = Url::parse("https://cdn.test/final.js").unwrap();
     let response = Ok(crate::types::NavigationResponse::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: final_url.clone(),
             status: 200,
             headers: Vec::new(),
@@ -4055,9 +4056,9 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
                 [IDBCursor.prototype, "delete", 0],
                 [IDBKeyRange.prototype, "includes", 1],
                 [IDBKeyRange, "only", 1],
-                [IDBKeyRange, "bound", 4],
-                [IDBKeyRange, "lowerBound", 2],
-                [IDBKeyRange, "upperBound", 2],
+                [IDBKeyRange, "bound", 2],
+                [IDBKeyRange, "lowerBound", 1],
+                [IDBKeyRange, "upperBound", 1],
               ];
               for (const [target, name, length] of methods) {
                 const descriptor = Object.getOwnPropertyDescriptor(target, name);

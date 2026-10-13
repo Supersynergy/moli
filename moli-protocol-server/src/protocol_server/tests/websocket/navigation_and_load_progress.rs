@@ -15,6 +15,14 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
 
     let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
     let session = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+    let initial_runtime = send_cdp_command(
+        &mut socket,
+        40,
+        "Runtime.enable",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
     let old_isolate_messages = send_cdp_command(
         &mut socket,
         4,
@@ -23,6 +31,15 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
         json!({}),
     )
     .await;
+    let old_context_id = initial_runtime
+        .iter()
+        .chain(&old_isolate_messages)
+        .find(|message| {
+            message["method"] == "Runtime.executionContextCreated"
+                && message["params"]["context"]["auxData"]["isDefault"] == true
+        })
+        .expect("initial default execution context")["params"]["context"]["uniqueId"]
+        .clone();
     let old_isolate_id = old_isolate_messages
         .iter()
         .find(|message| message["id"] == json!(4_u64))
@@ -99,9 +116,29 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
     let new_isolate_id = resumed["result"]["id"]
         .as_str()
         .expect("replacement Runtime.getIsolateId");
-    assert_ne!(
+    assert_eq!(
         new_isolate_id, old_isolate_id,
-        "queued command must bind to the replacement document's renderer attachment"
+        "Document replacement must retain the Page's isolate"
+    );
+    let cutover = before_resume
+        .iter()
+        .chain(&resumed_messages)
+        .collect::<Vec<_>>();
+    let new_context_index = cutover
+        .iter()
+        .position(|message| {
+            message["method"] == "Runtime.executionContextCreated"
+                && message["params"]["context"]["auxData"]["isDefault"] == true
+                && message["params"]["context"]["uniqueId"] != old_context_id
+        })
+        .expect("replacement default execution context");
+    let control_reply_index = cutover
+        .iter()
+        .position(|message| message["id"] == 6)
+        .unwrap();
+    assert!(
+        new_context_index < control_reply_index,
+        "queued control command must complete after the new Document's context is published: {cutover:#?}"
     );
 
     let _ = socket.close(None).await;
@@ -610,15 +647,15 @@ async fn websocket_cdp_renderer_navigation_replaces_pending_response_without_cli
         }),
     )
     .await;
-    timeout(Duration::from_secs(3), async {
-        while !messages.iter().any(|message| {
-            message["sessionId"] == session.session_id && message["method"] == "Page.loadEventFired"
-        }) {
-            messages.push(recv_ws_json(&mut socket).await);
-        }
-    })
-    .await
-    .expect("replacement must load while the first response is still pending");
+    let replacement_loaded = |message: &serde_json::Value| {
+        message["sessionId"] == session.session_id && message["method"] == "Page.loadEventFired"
+    };
+    if !messages.iter().any(replacement_loaded) {
+        // /hang never responds, so reaching load proves replacement without
+        // imposing a scheduling deadline on a fully parallel test run.
+        // This helper only receives events; it sends no extra client commands.
+        messages.extend(recv_until_match(&mut socket, replacement_loaded).await);
+    }
     let committed_urls = messages
         .iter()
         .filter(|message| {
@@ -1322,6 +1359,8 @@ window.addEventListener('load', () => {
 
 #[tokio::test]
 async fn websocket_cdp_defer_wait_runs_ready_tasks_while_next_defer_source_is_pending() {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
     async fn page() -> impl IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -1343,13 +1382,22 @@ addEventListener('DOMContentLoaded', () => {
         )
     }
 
-    async fn delayed_defer_script() -> impl IntoResponse {
-        sleep(Duration::from_millis(120)).await;
-        (
-            [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
-            "mainDeferWaitTaskOrder.push(`second:${document.readyState}`);",
-        )
-    }
+    let completed_tasks = Arc::new(AtomicU8::new(0));
+    let release_defer = Arc::new(tokio::sync::Notify::new());
+    let task_ready_route = |mask| {
+        let completed_tasks = Arc::clone(&completed_tasks);
+        let release_defer = Arc::clone(&release_defer);
+        get(move || {
+            let completed_tasks = Arc::clone(&completed_tasks);
+            let release_defer = Arc::clone(&release_defer);
+            async move {
+                if completed_tasks.fetch_or(mask, Ordering::SeqCst) | mask == 3 {
+                    release_defer.notify_one();
+                }
+                axum::http::StatusCode::NO_CONTENT
+            }
+        })
+    };
 
     let fixture_app = Router::new()
         .route("/", get(page))
@@ -1359,15 +1407,35 @@ addEventListener('DOMContentLoaded', () => {
                 (
                     [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
                     r#"mainDeferWaitTaskOrder.push(`first:${document.readyState}`);
-setTimeout(() => mainDeferWaitTaskOrder.push(`timer:${document.readyState}`), 0);
+const recordReadyTask = name => {
+  mainDeferWaitTaskOrder.push(`${name}:${document.readyState}`);
+  fetch(`/${name}-ready`);
+};
+setTimeout(() => recordReadyTask('timer'), 0);
 addEventListener('message', () => {
-  mainDeferWaitTaskOrder.push(`message:${document.readyState}`);
+  recordReadyTask('message');
 }, { once: true });
 postMessage('between-defer-scripts', '*');"#,
                 )
             }),
         )
-        .route("/defer.js", get(delayed_defer_script));
+        .route("/timer-ready", task_ready_route(1))
+        .route("/message-ready", task_ready_route(2))
+        .route(
+            "/defer.js",
+            get(move || {
+                let release_defer = Arc::clone(&release_defer);
+                async move {
+                    // Both callbacks must run while this source is pending.
+                    // A fixed delay could expire before the first script runs.
+                    release_defer.notified().await;
+                    (
+                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
+                        "mainDeferWaitTaskOrder.push(`second:${document.readyState}`);",
+                    )
+                }
+            }),
+        );
     let (fixture_addr, fixture_server) =
         spawn_dedicated_fixture_server(fixture_app, "defer-event-loop-order");
 

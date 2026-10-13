@@ -1829,10 +1829,12 @@ async fn indexed_db_blocked_upgrade_result_database_keeps_opener_owner() {
   request.onsuccess = () => {
     globalThis.__blockedUpgradeOwnerTopDb = request.result;
     globalThis.__blockedUpgradeOwnerTopDb.onversionchange = () => {
-      const sender = new BroadcastChannel("blocked-upgrade-top-versionchange-owner");
-      sender.postMessage("top-versionchange");
-      globalThis.__blockedUpgradeOwnerTopVersionChange = "closed";
-      globalThis.__blockedUpgradeOwnerTopDb.close();
+      Promise.resolve().then(() => {
+        const sender = new BroadcastChannel("blocked-upgrade-top-versionchange-owner");
+        sender.postMessage("top-versionchange");
+        globalThis.__blockedUpgradeOwnerTopVersionChange = "closed";
+        globalThis.__blockedUpgradeOwnerTopDb.close();
+      });
     };
     globalThis.__blockedUpgradeOwnerTopReady = "ok";
   };
@@ -3716,10 +3718,8 @@ fn indexed_db_index_queries_and_key_ranges_work() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbIndexQueryResult)")
         .expect("indexeddb index query result should be readable");
 
-    assert_eq!(
-        result,
-        "lower,lowerOpen,upper,upperOpen|true|news|news|false|false|a|a|a,c|a,c|2"
-    );
+    // Range attributes are inherited readonly accessors, not own properties.
+    assert_eq!(result, "|true|news|news|false|false|a|a|a,c|a,c|2");
 }
 
 #[test]
@@ -3854,7 +3854,7 @@ fn indexed_db_object_store_range_count_zero_and_open_bounds_work() {
 }
 
 #[test]
-fn indexed_db_get_all_object_wrapped_query_values_stay_queries() {
+fn indexed_db_get_all_boxed_primitives_are_options_and_dates_are_keys() {
     let mut vm =
         new_storage_page_task_executor_test_vm("https://indexeddb-getall-wrapper-query.test/");
 
@@ -3870,12 +3870,14 @@ fn indexed_db_get_all_object_wrapped_query_values_stay_queries() {
     const store = writeTx.objectStore("kv");
     store.put("five", 5);
     store.put("string", "x");
-    store.put("date", 1000);
+    store.put("date", new Date(1000));
     writeTx.oncomplete = () => {
       const readStore = db.transaction("kv").objectStore("kv");
-      const numberReq = readStore.getAll(new Number(5));
+      const numberOptions = Object.assign(new Number(5), {query: "x"});
+      const numberReq = readStore.getAll(numberOptions);
       numberReq.onsuccess = () => {
-        const stringReq = readStore.getAllKeys(new String("x"));
+        const stringOptions = Object.assign(new String("x"), {query: 5});
+        const stringReq = readStore.getAllKeys(stringOptions);
         stringReq.onsuccess = () => {
           const dateReq = readStore.getAll(new Date(1000));
           dateReq.onsuccess = () => {
@@ -3899,7 +3901,7 @@ fn indexed_db_get_all_object_wrapped_query_values_stay_queries() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbGetAllWrapperQueryResult)")
         .expect("indexeddb wrapper query result should be readable");
 
-    assert_eq!(result, "five|x|date");
+    assert_eq!(result, "string|5|date");
 }
 
 #[tokio::test]
@@ -4886,7 +4888,7 @@ fn indexed_db_cursors_support_prev_directions() {
         .eval_after_selected_page_tasks("String(globalThis.__indexedDbCursorPrevResult)")
         .expect("indexeddb cursor prev result should be readable");
 
-    assert_eq!(result, "c,b,a|tech:c,news:b");
+    assert_eq!(result, "c,b,a|tech:c,news:a");
 }
 
 #[test]
@@ -5857,4 +5859,105 @@ fn indexed_db_roundtrips_image_data_with_graph_identity() {
         result,
         r#"[true,true,true,2,1,"display-p3",[1,2,3,4,5,6,7,8],true,true]"#
     );
+}
+
+#[test]
+fn indexed_db_versionchange_waits_for_connection_microtasks_before_blocked() {
+    for operation in ["upgrade", "delete"] {
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://indexeddb-notification-tasks.test/");
+        vm.eval(&format!("globalThis.operation = {operation:?};"))
+            .expect("connection operation should be set");
+        vm.eval(r#"
+globalThis.notificationEvents = [];
+const first = indexedDB.open(`notifications-${operation}`, 1);
+first.onupgradeneeded = () => first.result.createObjectStore('records');
+first.onsuccess = () => {
+  const db1 = first.result;
+  const second = indexedDB.open(db1.name);
+  second.onsuccess = () => {
+    const db2 = second.result;
+    const request = operation === 'upgrade' ? indexedDB.open(db1.name, 2) : indexedDB.deleteDatabase(db1.name);
+    db1.onversionchange = event => {
+      notificationEvents.push(`first:${event.oldVersion}:${event.newVersion}`);
+      Promise.resolve().then(() => {
+        notificationEvents.push('first-microtask');
+        request.onblocked = () => {
+          notificationEvents.push('blocked');
+          db1.close();
+          db2.close();
+        };
+      });
+    };
+    db2.onversionchange = () => {
+      notificationEvents.push('second');
+      queueMicrotask(() => notificationEvents.push('second-microtask'));
+    };
+    request.onupgradeneeded = () => notificationEvents.push('upgrade');
+    request.onerror = () => notificationEvents.push(`error:${request.error.name}`);
+    request.onsuccess = () => {
+      notificationEvents.push('success');
+      if (operation === 'upgrade') request.result.close();
+    };
+  };
+};
+"#).expect("connection notifications should be scheduled");
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify(notificationEvents)")
+            .expect("connection notification tasks should finish");
+        let expected = if operation == "upgrade" {
+            r#"["first:1:2","first-microtask","second","second-microtask","blocked","upgrade","success"]"#
+        } else {
+            r#"["first:1:null","first-microtask","second","second-microtask","blocked","success"]"#
+        };
+        assert_eq!(result, expected, "{operation} notification order");
+    }
+}
+
+#[test]
+fn indexed_db_versionchange_skips_connections_closed_by_an_earlier_microtask() {
+    for operation in ["upgrade", "delete"] {
+        let mut vm =
+            new_storage_page_task_executor_test_vm("https://indexeddb-notification-close.test/");
+        vm.eval(&format!("globalThis.operation = {operation:?};"))
+            .expect("connection operation should be set");
+        vm.eval(r#"
+globalThis.notificationEvents = [];
+const first = indexedDB.open(`notifications-close-${operation}`, 1);
+first.onupgradeneeded = () => first.result.createObjectStore('records');
+first.onsuccess = () => {
+  const db1 = first.result;
+  const second = indexedDB.open(db1.name);
+  second.onsuccess = () => {
+    const db2 = second.result;
+    db1.onversionchange = () => {
+      notificationEvents.push('first');
+      Promise.resolve().then(() => {
+        notificationEvents.push('close-microtask');
+        db1.close();
+        db2.close();
+      });
+    };
+    db2.onversionchange = () => notificationEvents.push('unexpected-second');
+    const request = operation === 'upgrade' ? indexedDB.open(db1.name, 2) : indexedDB.deleteDatabase(db1.name);
+    request.onblocked = () => notificationEvents.push('unexpected-blocked');
+    request.onupgradeneeded = () => notificationEvents.push('upgrade');
+    request.onerror = () => notificationEvents.push(`error:${request.error.name}`);
+    request.onsuccess = () => {
+      notificationEvents.push('success');
+      if (operation === 'upgrade') request.result.close();
+    };
+  };
+};
+"#).expect("closing notification should be scheduled");
+        let result = vm
+            .eval_after_selected_page_tasks("JSON.stringify(notificationEvents)")
+            .expect("closing notification tasks should finish");
+        let expected = if operation == "upgrade" {
+            r#"["first","close-microtask","upgrade","success"]"#
+        } else {
+            r#"["first","close-microtask","success"]"#
+        };
+        assert_eq!(result, expected, "{operation} must skip closed connections");
+    }
 }

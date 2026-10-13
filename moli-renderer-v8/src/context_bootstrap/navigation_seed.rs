@@ -1,4 +1,3 @@
-use super::history_runtime::native;
 use super::location_runtime::is_same_document_fragment_navigation;
 use super::navigation_entry::{history_index, navigation_entry_public_token};
 use super::navigation_serialize::{
@@ -7,6 +6,7 @@ use super::navigation_serialize::{
 use super::navigation_window::{
     runtime_window_uses_top_level_history_model, window_history_for_holder,
 };
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::native_bridge::{NavigationHistoryEntrySeed, NavigationHistorySerializedEntry};
 use crate::structured_clone::serialize_history_state;
 use moli_history::{HistoryEntry, HistoryEntryRef, ScrollRestoration};
@@ -34,6 +34,7 @@ pub(super) fn history_entry_from_snapshot(
 ) -> HistoryEntryRef {
     HistoryEntry {
         url: snapshot.url.clone(),
+        inherited_origin: snapshot.inherited_origin.clone(),
         referrer_policy: snapshot.referrer_policy.clone(),
         history_state: snapshot.history_state.clone(),
         navigation_state: snapshot.navigation_state.clone(),
@@ -75,6 +76,7 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
             let state = serialize_history_state(scope, fallback_state);
             HistoryEntry {
                 url: "about:blank".to_owned(),
+                inherited_origin: None,
                 referrer_policy: None,
                 history_state: state.clone(),
                 navigation_state: state,
@@ -89,7 +91,7 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
             }
             .into_ref()
         });
-    native::entry_wrapper(scope, owner, entry)
+    entry_wrappers::for_window(scope, owner, entry)
 }
 
 pub(super) fn history_entry_seed_for_reload<'s>(

@@ -1,6 +1,6 @@
 use super::*;
 use crate::automation::DevToolsDomNodeReference;
-use crate::domains::native::{self, NativeCommandStep, NodeLookupExecution};
+use crate::domains::native::{self, NativeCommandStep};
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeProtocolResponse as Response,
     RendererPageCommand as Command, RendererPageReply as Reply,
@@ -71,8 +71,8 @@ fn prepare(
                 .frame_id
                 .map(|id| id.as_ref().to_owned())
                 .unwrap_or_else(|| top_frame_id.clone());
-            Ok(backend_operation(
-                backend_node_id,
+            Ok(node_operation(
+                RendererDomNodeReference::BackendNodeId(backend_node_id),
                 frame_id,
                 top_frame_id,
                 AccessibilityNodeOperation::Children,
@@ -197,9 +197,8 @@ fn reference_operation(
     top_frame_id: String,
     operation: AccessibilityNodeOperation,
 ) -> Result<Operation, StartError> {
-    let frame_id = frame_id.unwrap_or_else(|| top_frame_id.clone());
     if let Some(object_id) = reference.object_id {
-        let session = cmd.session_id.map(str::to_owned);
+        let session = conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
         let command = match &operation {
             AccessibilityNodeOperation::Ancestors => {
                 Command::accessibility_node_and_ancestor_payloads_for_object_id(session, object_id)
@@ -220,59 +219,55 @@ fn reference_operation(
             project_nodes(reply, frame_id, top_frame_id, operation)
         }));
     }
-    if let Some(backend_node_id) = renderer_backend_node_id_for_reference(&reference) {
-        return Ok(backend_operation(
-            backend_node_id,
-            frame_id,
-            top_frame_id,
-            operation,
-        ));
-    }
-    let frontend_node_id = reference.node_id.ok_or_else(StartError::node_not_found)?;
-    let inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    Ok(native::with_backend_node(
-        inspector_session_id,
-        DevToolsDomNodeReference::FrontendNodeId(frontend_node_id),
-        NodeLookupExecution::NestedMain,
-        move |id| backend_operation(id, frame_id, top_frame_id, operation),
+    let frame_id = frame_id.unwrap_or_else(|| top_frame_id.clone());
+    let reference = if let Some(id) = renderer_backend_node_id_for_reference(&reference) {
+        DevToolsDomNodeReference::BackendNodeId(id)
+    } else {
+        DevToolsDomNodeReference::FrontendNodeId(
+            reference.node_id.ok_or_else(StartError::node_not_found)?,
+        )
+    };
+    let session = conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
+    Ok(node_operation(
+        reference.into_renderer_reference(session),
+        frame_id,
+        top_frame_id,
+        operation,
     ))
 }
 
-fn backend_operation(
-    backend_node_id: u32,
+fn node_operation(
+    reference: RendererDomNodeReference,
     frame_id: String,
     top_frame_id: String,
     operation: AccessibilityNodeOperation,
 ) -> Operation {
     let command = match &operation {
         AccessibilityNodeOperation::Children => {
-            Command::AccessibilityChildNodePayloadsForBackendNodeId { backend_node_id }
+            Command::AccessibilityChildNodePayloadsForNode { reference }
         }
         AccessibilityNodeOperation::Ancestors => {
-            Command::AccessibilityNodeAndAncestorPayloadsForBackendNodeId { backend_node_id }
+            Command::AccessibilityNodeAndAncestorPayloadsForNode { reference }
         }
-        AccessibilityNodeOperation::Query { .. } => {
-            Command::AccessibilityTreePayloadsForBackendNodeId {
-                backend_node_id,
-                max_depth: None,
-            }
-        }
+        AccessibilityNodeOperation::Query { .. } => Command::AccessibilityTreePayloadsForNode {
+            reference,
+            max_depth: None,
+        },
         AccessibilityNodeOperation::Partial { fetch_relatives } => {
-            Command::AccessibilityPartialTreePayloadsForBackendNodeId {
-                backend_node_id,
+            Command::AccessibilityPartialTreePayloadsForNode {
+                reference,
                 fetch_relatives: *fetch_relatives,
             }
         }
     };
     Operation::new(command, move |reply| {
-        project_nodes(reply, frame_id, top_frame_id, operation)
+        project_nodes(reply, Some(frame_id), top_frame_id, operation)
     })
 }
 
 fn project_nodes(
     reply: anyhow::Result<Reply>,
-    frame_id: String,
+    frame_id: Option<String>,
     top_frame_id: String,
     operation: AccessibilityNodeOperation,
 ) -> Response {
@@ -287,7 +282,11 @@ fn project_nodes(
         }
         _ => unreachable!("accessibility node reply"),
     };
-    if payload.frame_id.as_deref().unwrap_or(&top_frame_id) != frame_id {
+    // Object IDs identify their own frame unless the caller explicitly constrains it.
+    if frame_id
+        .as_deref()
+        .is_some_and(|frame_id| payload.frame_id.as_deref().unwrap_or(&top_frame_id) != frame_id)
+    {
         return node_not_found();
     }
     let Some(mut nodes) = payload.payloads else {

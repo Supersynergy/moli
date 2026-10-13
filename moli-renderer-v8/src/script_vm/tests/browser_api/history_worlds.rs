@@ -28,6 +28,7 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
   const derived = new DerivedEvent();
   // Optional ErrorEvent.error must not be inferred from the first instance.
   const withoutError = new ErrorEvent('without');
+  const nullError = new ErrorEvent('null', { error: null });
   const withError = new ErrorEvent('with', { error: first });
   const toggle = new ToggleEvent('toggle');
   const source = own(toggle, 'source');
@@ -40,7 +41,9 @@ fn event_field_getters_are_shared_within_a_realm_without_capturing_instances() {
     borrowed: type.get.call(child) === 'child' && detail.get.call(child) === child.detail,
     descriptor: [type.get.name, type.get.length, type.set === undefined, type.enumerable, type.configurable],
     trusted: own(first, 'isTrusted').configurable === false && first.isTrusted === false,
-    optional: !Object.hasOwn(withoutError, 'error') && Object.hasOwn(withError, 'error') && withError.error === first,
+    optional: withoutError.error === undefined && nullError.error === null && withError.error === first &&
+      [withoutError, nullError, withError].every(event => !Object.hasOwn(event, 'error')) &&
+      own(ErrorEvent.prototype, 'error').get.call(withError) === first,
     toggle: !source.enumerable && !source.configurable,
     original: derived === derived.original && derived instanceof DerivedEvent,
     illegal
@@ -688,6 +691,102 @@ fn history_worlds_navigation_entries_keep_their_own_wrappers() {
         )
         .unwrap(),
         "[true,true,7,true,true,true,true,true]"
+    );
+}
+
+#[test]
+fn history_worlds_navigation_entry_views_are_collectible_and_rejoin_the_shared_target() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+    vm.eval(
+        r#"
+        globalThis.pageEntry = navigation.currentEntry;
+        globalThis.pageDisposes = 0;
+        pageEntry.expando = 'page';
+        pageEntry.ondispose = () => pageDisposes++;
+        navigation.updateCurrentEntry({state: {value: 7}});
+        'ready'
+    "#,
+    )
+    .unwrap();
+    let isolated = vm.create_isolated_world("entry-view-gc", false).unwrap();
+    vm.eval_in_isolated_context(
+        isolated,
+        "globalThis.keptEntry = navigation.currentEntry; 'observed'",
+    )
+    .unwrap();
+    let context_ptr = &vm
+        .page_isolated_world_contexts
+        .context(isolated)
+        .unwrap()
+        .context as *const _;
+    let weak_entry = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let entry = global
+                .get(scope, crate::util::v8str(scope, "keptEntry").into())
+                .unwrap();
+            let entry = v8::Local::<v8::Object>::try_from(entry).unwrap();
+            Ok(v8::Weak::new(scope, entry))
+        })
+        .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            "String(keptEntry === navigation.currentEntry && navigation.entries().includes(keptEntry))",
+        )
+        .unwrap(),
+        "true"
+    );
+    vm.eval_in_isolated_context(isolated, "keptEntry = null; 'released'")
+        .unwrap();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(|isolate| {
+            isolate.low_memory_notification();
+            Ok(())
+        })
+        .unwrap();
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(context_ptr, |scope, _| {
+        assert!(
+            weak_entry.to_local(scope).is_none(),
+            "the owning Window must not retain an unobserved entry view"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+            globalThis.keptEntry = navigation.currentEntry;
+            globalThis.disposeFacts = [];
+            keptEntry.addEventListener('dispose', function (event) {
+                disposeFacts.push(this === keptEntry, event.target === keptEntry,
+                    event.currentTarget === keptEntry, event instanceof Event);
+            }, {once: true});
+            JSON.stringify([
+                keptEntry instanceof NavigationHistoryEntry,
+                keptEntry === navigation.currentEntry,
+                navigation.entries().includes(keptEntry),
+                keptEntry.expando === undefined,
+                keptEntry.url, keptEntry.index, keptEntry.getState().value
+            ])
+        "#,
+        )
+        .unwrap(),
+        r#"[true,true,true,true,"https://example.com/base",0,7]"#
+    );
+    assert_eq!(
+        vm.eval("String(navigation.currentEntry === pageEntry)")
+            .unwrap(),
+        "true"
+    );
+    vm.eval("history.replaceState({}, '', '#replaced'); 'replaced'")
+        .unwrap();
+    assert_eq!(vm.eval("String(pageDisposes)").unwrap(), "1");
+    assert_eq!(
+        vm.eval_in_isolated_context(isolated, "JSON.stringify(disposeFacts)")
+            .unwrap(),
+        "[true,true,true,true]"
     );
 }
 

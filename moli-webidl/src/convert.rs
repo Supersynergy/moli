@@ -1,10 +1,10 @@
 use crate::{
-    Boolean, BufferSource, ByteString, ClampedUnsignedShort, Context, DomString, DomString16,
-    Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong, UnsignedLongLong,
-    UnsignedShort, UsvString, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum,
-    WebIdlError, WebIdlErrorKind, dictionary_value, is_nullish, property_result,
-    symbol_property_result, throw_error, throw_type_error,
+    Boolean, BufferSource, ByteString, ClampedUnsignedShort, Context, Dictionary, DomString,
+    DomString16, Double, EnforceRangeLong, EnforceRangeLongLong, EnforceRangeUnsignedLong,
+    EnforceRangeUnsignedLongLong, EnumValue, Long, Record, Sequence, StringOptions,
+    UnrestrictedDouble, UnsignedLong, UnsignedLongLong, UnsignedShort, UsvString, WebIdlArguments,
+    WebIdlConverter, WebIdlDictionary, WebIdlEnum, WebIdlError, WebIdlErrorKind, dictionary_value,
+    is_nullish, property_result, symbol_property_result, throw_error, throw_type_error,
 };
 
 impl<'s> WebIdlConverter<'s> for DomString {
@@ -16,17 +16,8 @@ impl<'s> WebIdlConverter<'s> for DomString {
         context: Context,
         options: &Self::Options,
     ) -> Result<Self, WebIdlError> {
-        if value.is_null() && options.treat_null_as_empty_string {
-            return Ok(Self(String::new()));
-        }
-        if value.is_symbol() {
-            return Err(WebIdlError::new(
-                context,
-                WebIdlErrorKind::CannotConvert("DOMString"),
-            ));
-        }
-        string_value_utf16(scope, value, context, "DOMString")
-            .map(|value| Self(String::from_utf16_lossy(&value)))
+        DomString16::convert(scope, value, context, options)
+            .map(|value| Self(String::from_utf16_lossy(&value.0)))
     }
 }
 
@@ -177,6 +168,19 @@ impl<'s> WebIdlConverter<'s> for UnrestrictedDouble {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::UnrestrictedFloat {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        number_value(scope, value, context, "unrestricted float").map(|value| Self(value as f32))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for crate::Float {
     type Options = ();
 
@@ -229,6 +233,21 @@ impl<'s> WebIdlConverter<'s> for Long {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::Octet {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        // Reducing modulo 2^32 first preserves the low eight bits, including
+        // negative values and integers too large for a saturating Rust cast.
+        number_value(scope, value, context, "octet").map(|value| Self(unsigned_long(value) as u8))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for EnforceRangeLong {
     type Options = ();
 
@@ -270,6 +289,21 @@ impl<'s> WebIdlConverter<'s> for EnforceRangeUnsignedLong {
     }
 }
 
+impl<'s> WebIdlConverter<'s> for crate::Short {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        // Both 16-bit integer types truncate and reduce modulo 2^16; signed
+        // short then interprets the high bit as a negative value.
+        number_value(scope, value, context, "short").map(|value| Self(unsigned_short(value) as i16))
+    }
+}
+
 impl<'s> WebIdlConverter<'s> for UnsignedShort {
     type Options = ();
 
@@ -281,6 +315,26 @@ impl<'s> WebIdlConverter<'s> for UnsignedShort {
     ) -> Result<Self, WebIdlError> {
         number_value(scope, value, context, "unsigned short")
             .map(|value| Self(unsigned_short(value)))
+    }
+}
+
+impl<'s> WebIdlConverter<'s> for crate::EnforceRangeUnsignedShort {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let value = number_value(scope, value, context, "[EnforceRange] unsigned short")?.trunc();
+        if !value.is_finite() || !(0.0..=f64::from(u16::MAX)).contains(&value) {
+            return Err(WebIdlError::cannot_convert(
+                context,
+                "[EnforceRange] unsigned short",
+            ));
+        }
+        Ok(Self(value as u16))
     }
 }
 
@@ -309,6 +363,33 @@ impl<'s> WebIdlConverter<'s> for UnsignedLongLong {
     ) -> Result<Self, WebIdlError> {
         number_value(scope, value, context, "unsigned long long")
             .map(|value| Self(unsigned_long_long(value)))
+    }
+}
+
+impl<'s> WebIdlConverter<'s> for crate::LongLong {
+    type Options = ();
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _: &(),
+    ) -> Result<Self, WebIdlError> {
+        number_value(scope, value, context, "long long")
+            .map(|value| Self(unsigned_long_long(value) as i64))
+    }
+}
+
+impl<'s> WebIdlConverter<'s> for EnforceRangeLongLong {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let value = number_value(scope, value, context, "[EnforceRange] long long")?;
+        enforce_range_long_long(value, context).map(Self)
     }
 }
 
@@ -359,6 +440,24 @@ where
     ) -> Result<Self, WebIdlError> {
         convert_optional_sequence(scope, value, context, options)?
             .ok_or_else(|| WebIdlError::new(context, WebIdlErrorKind::CannotConvert("sequence")))
+    }
+}
+
+impl<'s, T> WebIdlConverter<'s> for Dictionary<T>
+where
+    T: WebIdlDictionary<'s>,
+{
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        _options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let object = dictionary_value(value, context)?
+            .unwrap_or_else(|| moli_v8_util::new_null_prototype_object(scope));
+        T::parse_dictionary(scope, object).map(Self)
     }
 }
 
@@ -440,6 +539,24 @@ where
             }
         }
         Ok(Self(entries))
+    }
+}
+
+impl<'s> WebIdlConverter<'s> for crate::InterfaceObject<'s> {
+    type Options = crate::InterfaceOptions;
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: Context,
+        options: &Self::Options,
+    ) -> Result<Self, WebIdlError> {
+        let object = v8::Local::<v8::Object>::try_from(value)
+            .map_err(|_| WebIdlError::cannot_convert(context, options.name))?;
+        if !(options.brand_check)(scope, object) {
+            return Err(WebIdlError::cannot_convert(context, options.name));
+        }
+        Ok(Self(object))
     }
 }
 
@@ -1337,9 +1454,27 @@ fn unsigned_long_long(value: f64) -> u64 {
     if !value.is_finite() || value == 0.0 {
         return 0;
     }
-    let integer = value.trunc();
-    let wrapped = integer.rem_euclid(2f64.powi(64));
-    wrapped as u64
+    // Adding 2^64 to a small negative remainder in f64 loses its low bits.
+    // Convert the magnitude first, then perform the sign wrap exactly in u64.
+    let magnitude = (value.trunc().abs() % 2f64.powi(64)) as u64;
+    if value.is_sign_negative() {
+        magnitude.wrapping_neg()
+    } else {
+        magnitude
+    }
+}
+
+fn enforce_range_long_long(value: f64, context: Context) -> Result<i64, WebIdlError> {
+    // ConvertToInt uses the exact JavaScript integer range for 64-bit types.
+    let value = value.trunc();
+    if !value.is_finite() || !(-9_007_199_254_740_991.0..=9_007_199_254_740_991.0).contains(&value)
+    {
+        return Err(WebIdlError::new(
+            context,
+            WebIdlErrorKind::CannotConvert("[EnforceRange] long long"),
+        ));
+    }
+    Ok(value as i64)
 }
 
 fn enforce_range_unsigned_long_long(value: f64, context: Context) -> Result<u64, WebIdlError> {
@@ -1447,6 +1582,26 @@ mod tests {
         assert_eq!(unsigned_long_long(f64::INFINITY), 0);
         assert_eq!(unsigned_long_long(-1.0), u64::MAX);
         assert_eq!(unsigned_long_long(1.9), 1);
+    }
+
+    #[test]
+    fn unsigned_long_long_preserves_low_bits_when_wrapping_negative_values() {
+        for (value, expected) in [
+            (-0.9, 0),
+            (-2.0, u64::MAX - 1),
+            (-3.9, u64::MAX - 2),
+            (-1025.0, u64::MAX - 1024),
+            (-2047.0, u64::MAX - 2046),
+            (-2f64.powi(63), 1 << 63),
+            (-2f64.powi(64) + 2048.0, 2048),
+            (-2f64.powi(64), 0),
+            (-2f64.powi(64) - 4096.0, u64::MAX - 4095),
+            (2f64.powi(64) - 2048.0, u64::MAX - 2047),
+            (2f64.powi(64), 0),
+            (2f64.powi(64) + 4096.0, 4096),
+        ] {
+            assert_eq!(unsigned_long_long(value), expected, "{value}");
+        }
     }
 
     #[test]

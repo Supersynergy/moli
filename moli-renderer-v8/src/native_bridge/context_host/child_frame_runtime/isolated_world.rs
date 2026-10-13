@@ -80,6 +80,10 @@ impl JsContextHost {
         let owner = self
             .current_child_document_task_owner(handle)
             .ok_or_else(|| anyhow::anyhow!("missing child LocalWindow owner"))?;
+        let frame_id = self
+            .frame_owner_frame_id_for_child_handle(handle)
+            .ok_or_else(|| anyhow::anyhow!("missing child frame identity"))?
+            .0;
         let execution_context_owner = WindowExecutionContextOwner::Frame(owner.local_window_id);
         let dispatch_scope = OwnerDispatchScope::Child(handle);
         if let Some((_, context)) =
@@ -134,14 +138,22 @@ impl JsContextHost {
             return Ok(context);
         }
         let stale = pending_contexts.borrow_mut().remove(&handle);
-        if let Some(stale) = stale {
+        if let Some(mut stale) = stale {
+            let stale_context = v8::Local::new(scope, &stale.context);
+            {
+                let stale_scope = &mut v8::ContextScope::new(scope, stale_context);
+                crate::native_bridge::clear_context_wrapper_cache_for_teardown(stale_scope, false);
+            }
             self.pending_history_traversal_admissions
                 .retire_owner(WindowExecutionContextOwner::Frame(stale.local_window_id));
+            self.retire_window_realm_resources(stale.runtime_observable_context_token);
             self.retire_window_execution_contexts_for_context_token(
                 stale.runtime_observable_context_token,
             );
-            let stale_context = v8::Local::new(scope, &stale.context);
-            stale_context.detach_global();
+            if self.child_window_proxy_frame_is_current(handle, &stale.frame_id) {
+                stale_context.detach_global();
+            }
+            stale.runtime.mark_closed();
         }
 
         let caller_global = scope.get_current_context().global(scope);
@@ -152,19 +164,19 @@ impl JsContextHost {
         let global_template = self.bridge.bindings.window_global_template(scope);
         let indexed_db_manager = self.indexed_db_manager.clone();
         let storage_bucket_store = Some(self.storage_bucket_store.clone());
-        let (context, runtime_observable_context_token, bridge_ref) =
-            crate::script_vm::bootstrap_child_default_context_in_scope(
-                scope,
-                global_template,
-                host,
-                config.resource_owner_id,
-                &config.promise_reject_dispatch,
-                indexed_db_manager,
-                storage_bucket_store,
-                handle,
-                owner,
-            )?;
-        let local_context = v8::Local::new(scope, &context);
+        let runtime = crate::script_vm::bootstrap_child_default_context_in_scope(
+            scope,
+            global_template,
+            host,
+            config.resource_owner_id,
+            &config.promise_reject_dispatch,
+            indexed_db_manager,
+            storage_bucket_store,
+            handle,
+            owner,
+        )?;
+        let runtime_observable_context_token = runtime.runtime_observable_context_token;
+        let local_context = v8::Local::new(scope, &runtime.context);
         self.register_window_execution_context(WindowExecutionContextBinding::new(
             execution_context_owner,
             dispatch_scope,
@@ -179,10 +191,9 @@ impl JsContextHost {
         pending_contexts.borrow_mut().insert(
             handle,
             PrebootstrappedChildDefaultContext {
+                frame_id,
                 local_window_id: owner.local_window_id,
-                context,
-                bridge_ref,
-                runtime_observable_context_token,
+                runtime,
             },
         );
         self.request_child_frame_realm_materialization(handle);

@@ -562,6 +562,7 @@ impl ScriptVm {
             match result {
                 Ok(mut response) => {
                     let response_status = response.status;
+                    let response_request_method = request_method.clone();
                     let parkable_image = (!opaque_response_blocked
                         && pending.info.resource_type == SubresourceResourceType::Image)
                         .then(|| {
@@ -673,7 +674,10 @@ impl ScriptVm {
                                 crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                                     scope,
                                     &pending.request_origin,
-                                    pending.request_mode,
+                                    crate::network_host::FetchResponseRequest {
+                                        method: &response_request_method,
+                                        mode: pending.request_mode,
+                                    },
                                     head,
                                     body,
                                     response_filter,
@@ -688,7 +692,7 @@ impl ScriptVm {
                             }
                             resolver.resolve(scope, response_obj.into());
                         }
-                        PendingSubresourceContinuation::Xhr(xhr) => {
+                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             crate::context_bootstrap::record_resource_performance_entry(
                                 scope,
                                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
@@ -859,7 +863,7 @@ impl ScriptVm {
                                 .unwrap_or_else(|| v8::undefined(scope).into());
                             resolver.reject(scope, exception);
                         }
-                        PendingSubresourceContinuation::Xhr(xhr) => {
+                        PendingSubresourceContinuation::Xhr { xhr, .. } => {
                             let xhr = v8::Local::new(scope, &xhr);
                             crate::network_host::apply_xhr_failure(scope, xhr);
                         }

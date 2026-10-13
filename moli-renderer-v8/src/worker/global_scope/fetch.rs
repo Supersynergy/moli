@@ -515,6 +515,7 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     body: Option<Vec<u8>>,
     headers: moli_fetch::RequestHeaders,
     credentials_mode: RequestCredentialsMode,
+    use_cors_preflight: bool,
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
     redirect_headers: Option<moli_fetch::RequestHeaders>,
     redirect_chain: Vec<moli_fetch::RedirectInfo>,
@@ -536,7 +537,8 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
                 .with_initiator_url(&document_url)
                 .with_credentials_mode(credentials_mode)
                 .with_network_partition_key(network_partition_key.clone())
-                .with_browser_request_metadata(BrowserRequestMetadata::Xhr);
+                .with_browser_request_metadata(BrowserRequestMetadata::Xhr)
+                .with_use_cors_preflight(use_cors_preflight);
             if let Some(referrer_policy) = referrer_policy {
                 request =
                     request.with_script_fetch_metadata(moli_fetch::ScriptFetchRequestMetadata {
@@ -862,6 +864,9 @@ pub(in crate::worker) fn continue_pending_worker_fetch_response(
             return;
         };
         if let Some(response_code) = response_code {
+            if response.head.status != response_code {
+                response.head.status_text = None;
+            }
             response.head.status = response_code;
         }
         if let Some(response_headers) = response_headers {
@@ -977,6 +982,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         document_url,
         network_partition_key,
         credentials_mode,
+        use_cors_preflight,
         xhr_id,
         resolved_url,
         method,
@@ -1020,6 +1026,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
             pending.document_url.clone(),
             network_partition_key,
             pending.credentials_mode,
+            pending.use_cors_preflight,
             request.xhr_id,
             request.url,
             request.method,
@@ -1042,6 +1049,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         body.map(|body| body.into_bytes()),
         headers,
         credentials_mode,
+        use_cors_preflight,
         auth,
         redirect_headers,
         redirect_chain,
@@ -1169,6 +1177,9 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
             return;
         };
         if let Some(response_code) = response_code {
+            if response.head.status != response_code {
+                response.head.status_text = None;
+            }
             response.head.status = response_code;
         }
         if let Some(response_headers) = response_headers {
@@ -1918,6 +1929,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
             integrity: init.integrity.unwrap_or(inherited.integrity),
             keepalive: init.keepalive.unwrap_or(inherited.keepalive),
+            use_cors_preflight: false,
         };
         (
             url,
@@ -1955,6 +1967,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             referrer_policy: init.referrer_policy.unwrap_or_default(),
             integrity: init.integrity.unwrap_or_default(),
             keepalive: init.keepalive.unwrap_or(false),
+            use_cors_preflight: false,
         };
         (
             url,
@@ -2495,6 +2508,7 @@ pub(in crate::worker) fn worker_response_from_body(
     body: RendererSyntheticResponseBody,
 ) -> Response {
     body.into_fetch_response(ResponseHead {
+        status_text: None,
         final_url,
         status,
         headers,
@@ -2624,6 +2638,7 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
                 pending.resolver.clone(),
                 pending.document_url.clone(),
                 pending.request_mode,
+                pending.request_method.clone(),
                 observable_head,
             ))
         }
@@ -2639,11 +2654,16 @@ pub(in crate::worker) fn start_worker_streaming_fetch(
         }
         return;
     }
-    if let Some((resolver, document_url, request_mode, observable_head)) = response_input {
+    if let Some((resolver, document_url, request_mode, request_method, observable_head)) =
+        response_input
+    {
         let response_obj = build_fetch_response_object_from_stream_for_request_mode(
             scope,
             &document_url,
-            request_mode,
+            crate::network_host::FetchResponseRequest {
+                method: &request_method,
+                mode: request_mode,
+            },
             observable_head,
             started.body_source_id,
         );
@@ -3019,7 +3039,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     build_fetch_response_object_from_body_source_for_request_mode(
                         scope,
                         &pending.document_url,
-                        pending.request_mode,
+                        crate::network_host::FetchResponseRequest {
+                            method: &pending.request_method,
+                            mode: pending.request_mode,
+                        },
                         head,
                         body,
                     )
@@ -3034,7 +3057,10 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     build_fetch_response_object_from_subresource_body_for_request_mode(
                         scope,
                         &pending.document_url,
-                        pending.request_mode,
+                        crate::network_host::FetchResponseRequest {
+                            method: &pending.request_method,
+                            mode: pending.request_mode,
+                        },
                         head,
                         body,
                     )

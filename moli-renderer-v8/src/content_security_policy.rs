@@ -68,7 +68,11 @@ pub(crate) enum ContentSecurityPolicyRedirectStatus {
     FollowedRedirect,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, crate::webidl::WebIdlEnum)]
+#[webidl(
+    name = "SecurityPolicyViolationEventDisposition",
+    rename_all = "kebab-case"
+)]
 pub(crate) enum ContentSecurityPolicyDisposition {
     Enforce,
     Report,
@@ -193,7 +197,7 @@ pub(crate) struct ContentSecurityPolicyViolationEventFields<'a> {
     data_properties,
     enumerable
 )]
-struct ContentSecurityPolicyViolationEventDeclaration<'scope> {
+pub(crate) struct ContentSecurityPolicyViolationEventDeclaration<'scope> {
     #[webapi(data_property = "documentURI")]
     document_uri: v8::Local<'scope, v8::String>,
     referrer: v8::Local<'scope, v8::String>,
@@ -205,9 +209,9 @@ struct ContentSecurityPolicyViolationEventDeclaration<'scope> {
     disposition: v8::Local<'scope, v8::String>,
     source_file: v8::Local<'scope, v8::String>,
     sample: v8::Local<'scope, v8::String>,
-    line_number: i32,
-    column_number: i32,
-    status_code: i32,
+    line_number: u32,
+    column_number: u32,
+    status_code: u16,
 }
 
 impl<'a> ContentSecurityPolicyViolationEventFields<'a> {
@@ -222,8 +226,8 @@ impl<'a> ContentSecurityPolicyViolationEventFields<'a> {
             disposition: violation.disposition,
             source_file: violation.source_file.as_str(),
             sample: violation.sample.as_str(),
-            line_number: 0,
-            column_number: 0,
+            line_number: violation.line_number,
+            column_number: violation.column_number,
             status_code: 0,
         }
     }
@@ -236,20 +240,14 @@ pub(crate) fn create_security_policy_violation_event<'s>(
     let declaration = security_policy_violation_event_declaration(scope, fields)?;
     let event = crate::context_bootstrap::new_event_state(scope);
     initialize_event_object(scope, event, "securitypolicyviolation", true, false);
+    event.set(
+        scope,
+        crate::util::v8str(scope, "composed").into(),
+        v8::Boolean::new(scope, true).into(),
+    )?;
     declaration.initialize(scope, event).ok()?;
     mark_event_trusted(scope, event);
     crate::context_bootstrap::new_event_wrapper(scope, event)
-}
-
-pub(crate) fn initialize_security_policy_violation_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    fields: &ContentSecurityPolicyViolationEventFields<'_>,
-) -> bool {
-    let event = crate::context_bootstrap::event_backing(scope, event);
-    security_policy_violation_event_declaration(scope, fields)
-        .and_then(|declaration| declaration.initialize(scope, event).ok())
-        .is_some()
 }
 
 fn security_policy_violation_event_declaration<'s>(
@@ -275,9 +273,11 @@ fn security_policy_violation_event_declaration<'s>(
         disposition,
         source_file,
         sample,
-        line_number: fields.line_number,
-        column_number: fields.column_number,
-        status_code: fields.status_code,
+        // Native locations use zero when unavailable. Synthetic events enter
+        // this shared state with their already converted unsigned IDL values.
+        line_number: fields.line_number.try_into().unwrap_or_default(),
+        column_number: fields.column_number.try_into().unwrap_or_default(),
+        status_code: fields.status_code.try_into().unwrap_or_default(),
     })
 }
 
@@ -2065,6 +2065,25 @@ fn inline_source_matches_hash(source: &str, hash_source: CspHashSourceValue<'_>)
         }))
 }
 
+pub(crate) fn current_script_violation_location(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(String, i32, i32)> {
+    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
+    let frame = stack.get_frame(scope, 0)?;
+    let source_file = frame
+        .get_script_name_or_source_url(scope)
+        .map(|source| source.to_rust_string_lossy(scope))
+        .map(|source| {
+            crate::content_security_policy::content_security_policy_source_file_for_report(&source)
+        })
+        .unwrap_or_default();
+    let line_number = i32::try_from(frame.get_line_number())
+        .unwrap_or_default()
+        .max(0);
+    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
+    Some((source_file, line_number, column_number))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2203,6 +2222,11 @@ mod tests {
             (
                 "img-src https://cdn.test/foo%2cbar",
                 "https://cdn.test/foo%2cbar",
+                true,
+            ),
+            (
+                "img-src https://cdn.test/foo%2cbar",
+                "https://cdn.test/foo,bar",
                 true,
             ),
             (

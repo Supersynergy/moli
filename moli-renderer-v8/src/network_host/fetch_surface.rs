@@ -1,5 +1,5 @@
 use super::headers::{build_headers_object, headers_entries, headers_list, mark_headers_immutable};
-use super::response::{ParsedResponseInit, install_response_body_methods, parse_response_init};
+use super::response::{ParsedResponseInit, install_response_body_methods};
 use super::*;
 use crate::context_bootstrap::readable_stream_disturbed;
 pub(in crate::network_host) use crate::util::constructor_prototype;
@@ -568,7 +568,7 @@ struct ResponseRedirectArgs {
 struct ResponseJsonArgs<'s> {
     #[webidl(required, converter = "raw")]
     data: v8::Local<'s, v8::Value>,
-    #[webidl(with = response_json_init_arg)]
+    #[webidl(dictionary)]
     init: ParsedResponseInit,
 }
 
@@ -739,17 +739,6 @@ fn response_json_body<'s>(
     }
 }
 
-fn response_json_init_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<ParsedResponseInit, webidl::WebIdlError> {
-    if args.length() <= index {
-        return Ok(ParsedResponseInit::default());
-    }
-    parse_response_init(scope, args.get(index))
-}
-
 fn build_response_init_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     mut parsed: ParsedResponseInit,
@@ -800,7 +789,10 @@ fn request_clone_callback<'s>(
     let Some(this) = require_request_receiver(scope, args.this()) else {
         return;
     };
-    if body_already_used(scope, this, REQUEST_BODY_USED_SLOT) {
+    if body_already_used(scope, this, REQUEST_BODY_USED_SLOT)
+        || body_stream_object(scope, this)
+            .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
+    {
         throw_type_error(
             scope,
             "Failed to execute 'clone' on 'Request': body stream already used",
@@ -831,14 +823,20 @@ fn response_clone_callback<'s>(
     let Some(this) = require_response_receiver(scope, args.this()) else {
         return;
     };
-    if body_already_used(scope, this, RESPONSE_BODY_USED_SLOT) {
+    if body_already_used(scope, this, RESPONSE_BODY_USED_SLOT)
+        || body_stream_object(scope, this)
+            .is_some_and(|stream| readable_body_stream_unusable(scope, stream))
+    {
         throw_type_error(
             scope,
             "Failed to execute 'clone' on 'Response': body stream already used",
         );
         return;
     }
-    let global = scope.get_current_context().global(scope);
+    let Some(realm) = this.get_creation_context(scope) else {
+        return;
+    };
+    let global = realm.global(scope);
     let Some(ctor) = global.get(scope, v8str(scope, "Response").into()) else {
         rv.set_undefined();
         return;
@@ -987,10 +985,9 @@ fn readable_stream_locked(
 pub(in crate::network_host) fn new_abort_signal_for_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global
-        .get(scope, v8str(scope, "AbortController").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+    let ctor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "AbortController")
+            .ok()?;
     let controller = ctor.new_instance(scope, &[])?;
     controller.get(scope, v8str(scope, "signal").into())
 }
@@ -1002,10 +999,9 @@ pub(in crate::network_host) fn new_abort_signal_for_request_with_source<'s>(
     let Some(source) = source else {
         return new_abort_signal_for_request(scope);
     };
-    let global = scope.get_current_context().global(scope);
-    let abort_signal_ctor = global
-        .get(scope, v8str(scope, "AbortSignal").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let abort_signal_ctor =
+        crate::context_bootstrap::ensure_intrinsic_interface_constructor(scope, "AbortSignal")
+            .ok()?;
     let any = abort_signal_ctor
         .get(scope, v8str(scope, "any").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;

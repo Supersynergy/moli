@@ -4,6 +4,9 @@ use crate::{util::get_private_value, webidl};
 use moli_web_errors::{DOM_EXCEPTION_CONSTANTS, dom_exception_legacy_code};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiTemplateValue};
 
+mod rtc_error;
+pub(crate) use rtc_error::rtc_error_constructor_callback;
+
 const DOM_EXCEPTION_MESSAGE_SLOT: &str = "__lmDomExceptionMessage";
 const DOM_EXCEPTION_NAME_SLOT: &str = "__lmDomExceptionName";
 const DOM_EXCEPTION_CODE_SLOT: &str = "__lmDomExceptionCode";
@@ -46,7 +49,7 @@ struct QuotaExceededErrorOptions {
 struct QuotaExceededErrorConstructorArgs {
     #[webidl(default = "")]
     message: String,
-    #[webidl(default = QuotaExceededErrorOptions::default(), with = quota_exceeded_error_options_arg)]
+    #[webidl(dictionary)]
     options: QuotaExceededErrorOptions,
 }
 
@@ -187,6 +190,7 @@ pub(crate) fn install_dom_exception_template_bindings<'s>(
                 scope, prototype,
             );
         }
+        "RTCError" => rtc_error::install(scope, prototype),
         _ => {}
     }
 }
@@ -196,7 +200,7 @@ fn dom_exception_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     if web_api_interfaces::DOMException::is_instance(scope, receiver) {
-        Some(receiver)
+        moli_webapi_declare::web_api_object_target(scope, receiver)
     } else {
         throw_type_error(
             scope,
@@ -266,11 +270,9 @@ fn dom_exception_message_getter_callback<'s>(
     let Some(receiver) = dom_exception_receiver(scope, args.this()) else {
         return;
     };
-    let message = get_private_value(scope, receiver, DOM_EXCEPTION_MESSAGE_SLOT)
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    if let Some(message) = v8_string(scope, &message) {
+    if let Some(message) = get_private_value(scope, receiver, DOM_EXCEPTION_MESSAGE_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+    {
         rv.set(message.into());
     } else {
         rv.set_empty_string();
@@ -370,7 +372,7 @@ fn dom_exception_subclass_receiver<'s>(
     if web_api_interfaces::descriptor(interface_name)
         .is_some_and(|interface| interface.is_instance(scope, receiver))
     {
-        Some(receiver)
+        moli_webapi_declare::web_api_object_target(scope, receiver)
     } else {
         throw_type_error(
             scope,
@@ -462,6 +464,16 @@ fn initialize_dom_exception<'s>(
     dom_exception_declaration(scope, message, name)
         .initialize(scope, exception)
         .expect("DOMException declaration should initialize");
+    capture_dom_exception_stack(scope, exception);
+}
+
+pub(super) fn capture_dom_exception_stack(
+    scope: &mut v8::PinScope<'_, '_>,
+    exception: v8::Local<'_, v8::Object>,
+) {
+    // V8 captures lazily formatted stack data on the native object, without
+    // looking up the mutable Error.captureStackTrace function in JavaScript.
+    let _ = v8::Exception::capture_stack_trace(scope.get_current_context(), exception);
 }
 
 fn dom_exception_declaration<'s>(
@@ -507,6 +519,7 @@ fn initialize_quota_exceeded_error<'s>(
     quota_exceeded_error_declaration(scope, message, quota, requested)
         .initialize(scope, exception)
         .expect("QuotaExceededError declaration should initialize");
+    capture_dom_exception_stack(scope, exception);
 }
 
 fn websocket_error_declaration<'s>(
@@ -530,16 +543,27 @@ pub(crate) fn new_dom_exception_value<'s>(
             scope,
             "DOMException",
         )
+        .or_else(|| {
+            // A native exception must materialize its own realm's intrinsic.
+            // Reading the public Window property can run author code or enter
+            // an access check again after navigation detaches its global.
+            crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_prototype(
+                scope,
+                "DOMException",
+            )
+            .ok()
+        })
     {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
         let _ = exception.set_prototype(scope, prototype.into());
         return exception.into();
     }
-    dom_exception_declaration(scope, message, name)
+    let exception = dom_exception_declaration(scope, message, name)
         .bind(scope)
-        .expect("DOMException declaration should bind")
-        .into()
+        .expect("DOMException declaration should bind");
+    capture_dom_exception_stack(scope, exception);
+    exception.into()
 }
 
 pub(crate) fn throw_dom_exception_value(
@@ -626,20 +650,6 @@ pub(crate) fn new_dom_error_value<'s>(
         .into()
 }
 
-fn quota_exceeded_error_options_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<QuotaExceededErrorOptions, webidl::WebIdlError> {
-    let context = webidl::Context::argument("QuotaExceededError", (index + 1) as usize);
-    if args.length() <= index {
-        return Ok(QuotaExceededErrorOptions::default());
-    }
-    let value = args.get(index);
-    webidl::parse_dictionary::<QuotaExceededErrorOptions>(scope, value, context)
-        .map(|value| value.unwrap_or_default())
-}
-
 pub(crate) fn quota_exceeded_error_constructor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -674,10 +684,11 @@ pub(crate) fn new_quota_exceeded_error_value<'s>(
     quota: Option<f64>,
     requested: Option<f64>,
 ) -> v8::Local<'s, v8::Value> {
-    quota_exceeded_error_declaration(scope, message, quota, requested)
+    let exception = quota_exceeded_error_declaration(scope, message, quota, requested)
         .bind(scope)
-        .expect("QuotaExceededError declaration should bind")
-        .into()
+        .expect("QuotaExceededError declaration should bind");
+    capture_dom_exception_stack(scope, exception);
+    exception.into()
 }
 
 pub(crate) fn initialize_websocket_error<'s>(
@@ -690,6 +701,7 @@ pub(crate) fn initialize_websocket_error<'s>(
     websocket_error_declaration(scope, message, close_code, reason)
         .initialize(scope, exception)
         .expect("WebSocketError declaration should initialize");
+    capture_dom_exception_stack(scope, exception);
 }
 
 pub(crate) fn new_websocket_error_value<'s>(
@@ -698,10 +710,11 @@ pub(crate) fn new_websocket_error_value<'s>(
     close_code: Option<u16>,
     reason: &str,
 ) -> v8::Local<'s, v8::Value> {
-    websocket_error_declaration(scope, message, close_code, reason)
+    let exception = websocket_error_declaration(scope, message, close_code, reason)
         .bind(scope)
-        .expect("WebSocketError declaration should bind")
-        .into()
+        .expect("WebSocketError declaration should bind");
+    capture_dom_exception_stack(scope, exception);
+    exception.into()
 }
 
 pub(crate) fn websocket_error_close_info<'s>(

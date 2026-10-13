@@ -52,6 +52,12 @@ impl<'a> QueryElement<'a> {
         if element.autofilled() {
             state |= ElementState::AUTOFILL;
         }
+        if element.web_mcp_form_active() {
+            state |= ElementState::TOOL_FORM_ACTIVE;
+        }
+        if element.web_mcp_submit_active() {
+            state |= ElementState::TOOL_SUBMIT_ACTIVE;
+        }
         if self.matches_validity_pseudo() {
             if self.is_invalid() {
                 state |= ElementState::INVALID;
@@ -182,15 +188,11 @@ impl<'a> QueryElement<'a> {
                     }
                     return self.element().input_value().is_empty();
                 }
-                if self.element().local_name() == "input"
+                self.element().local_name() == "input"
                     && self.input_type() == InputType::Number
                     && !self.element().input_value().is_empty()
                     && parse_input_numeric_value(InputType::Number, &self.element().input_value())
                         .is_none()
-                {
-                    return true;
-                }
-                false
             }
             _ => false,
         }

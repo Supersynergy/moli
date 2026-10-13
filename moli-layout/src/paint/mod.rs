@@ -6,6 +6,7 @@ mod form_controls;
 mod geometry;
 mod image;
 mod inline_boxes;
+mod links;
 mod mask;
 mod scrollbar;
 mod table;
@@ -128,9 +129,11 @@ enum UnavailableReplacedContentPaint {
     TransparentCanvas,
 }
 
-pub(crate) fn project_paint_snapshot<N>(
+pub(crate) fn project_paint_snapshot<N, S: crate::LayoutSource<NodeId = N>>(
     projection: &OutputProjection<'_, N>,
+    source: &S,
     capture: ResolvedPaintCapture,
+    retain_text_semantics: bool,
     embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
 ) -> PaintProjectionResult
 where
@@ -143,10 +146,12 @@ where
         (capture.base_background_color, None)
     };
     let mut snapshot = PaintSnapshot::new(projection.viewport, canvas_color);
+    snapshot.retain_text_semantics = retain_text_semantics;
     snapshot.surface = capture.surface;
     snapshot.viewport_to_surface = capture.viewport_to_surface;
     snapshot.content_size = projection.document_content_size();
     snapshot.diagnostics = projection.diagnostics.clone();
+    let links = retain_text_semantics.then(|| links::LinkProjection::new(projection, source));
     let cull_plan = PaintCullPlan::build(projection);
     let mut metrics = PaintProjectionMetrics {
         event_count: projection.paint_events.len(),
@@ -369,6 +374,11 @@ where
                     projection.background_clips[id.index()],
                     &mut snapshot,
                 );
+                if let Some(links) = &links
+                    && let Some(fragment) = projection.direct_fragments[id.index()]
+                {
+                    links.append(projection, fragment, &mut snapshot);
+                }
                 project_box_background(
                     projection,
                     id,
@@ -386,6 +396,11 @@ where
                     projection.content_clips[id.index()],
                     &mut snapshot,
                 );
+                if let Some(links) = &links {
+                    for fragment in &projection.owner_paint_fragments[id.index()] {
+                        links.append(projection, *fragment, &mut snapshot);
+                    }
+                }
                 project_box_contents(
                     projection,
                     id,

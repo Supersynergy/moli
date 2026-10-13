@@ -29,7 +29,7 @@ impl ScriptVm {
         let execution_context_id = match target {
             InspectorWindowDispatchTarget::DefaultTop => {
                 return Some(InspectorWindowDispatchScope {
-                    context_ptr: &self.page_default_context as *const _,
+                    context_ptr: &self.page_default_runtime.context as *const _,
                     child_handle: None,
                 });
             }
@@ -39,7 +39,7 @@ impl ScriptVm {
         };
         if self.runtime_observable_default_execution_context_id() == Some(execution_context_id) {
             return Some(InspectorWindowDispatchScope {
-                context_ptr: &self.page_default_context as *const _,
+                context_ptr: &self.page_default_runtime.context as *const _,
                 child_handle: None,
             });
         }
@@ -66,7 +66,7 @@ impl ScriptVm {
         realm_id: FrameRealmId,
     ) -> Result<*const v8::Global<v8::Context>> {
         if realm_id.0 == 0 {
-            return Ok(&self.page_default_context as *const _);
+            return Ok(&self.page_default_runtime.context as *const _);
         }
         self.child_frame_realm_context_ptr(realm_id)
     }
@@ -405,26 +405,37 @@ impl ScriptVm {
             Some(context) if context.local_window_id == current_owner.local_window_id => {
                 Some(context)
             }
-            Some(context) => {
+            Some(mut context) => {
+                let context_ptr = &context.context as *const v8::Global<v8::Context>;
+                self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
                 self.cancel_history_traversals_for_retiring_window(
                     crate::native_bridge::WindowExecutionContextOwner::Frame(
                         context.local_window_id,
                     ),
                 );
-                self._context_host
-                    .borrow_mut()
-                    .retire_window_execution_contexts_for_context_token(
+                {
+                    let mut host = self._context_host.borrow_mut();
+                    host.retire_window_realm_resources(context.runtime_observable_context_token);
+                    host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
                     );
+                }
                 let context_ptr = &context.context as *const v8::Global<v8::Context>;
+                let reuses_window_proxy = self
+                    ._context_host
+                    .borrow()
+                    .child_window_proxy_frame_is_current(child_handle, &context.frame_id);
                 self.renderer_document_isolate
                     .with_entered_renderer_document_isolate(|isolate| {
                         let scope = pin!(v8::HandleScope::new(isolate));
                         let scope = &mut scope.init();
                         let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                        context.detach_global();
+                        if reuses_window_proxy {
+                            context.detach_global();
+                        }
                         Ok(())
                     })?;
+                context.runtime.mark_closed();
                 // Cancellation can synchronously install a successor realm or
                 // detach the frame. Resolve both owner and pending context anew.
                 return self.create_new_child_default_world(frame_id, child_handle);
@@ -432,36 +443,27 @@ impl ScriptVm {
             None => None,
         };
         let context_host = self._context_host.clone();
-        let (context, bridge_ref, runtime_observable_context_token) =
-            if let Some(prebootstrapped) = prebootstrapped {
-                (
-                    prebootstrapped.context,
-                    prebootstrapped.bridge_ref,
-                    prebootstrapped.runtime_observable_context_token,
-                )
-            } else {
-                let context_bootstrap = self
-                    .renderer_document_isolate
-                    .with_entered_renderer_document_isolate_and_bootstrap(
-                        |isolate, isolate_bootstrap| {
-                            ScriptVmContextBootstrap::new_child_default(
-                                isolate,
-                                isolate_bootstrap,
-                                context_host,
-                                self.resource_owner_id,
-                                &self.promise_reject_dispatch,
-                                self.indexed_db_manager.clone(),
-                                Some(self.storage_bucket_store.clone()),
-                                child_handle,
-                                current_owner,
-                            )
-                        },
-                    )?;
-                let runtime_observable_context_token =
-                    context_bootstrap.runtime_observable_context_token;
-                let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
-                (context, bridge_ref, runtime_observable_context_token)
-            };
+        let runtime = if let Some(prebootstrapped) = prebootstrapped {
+            prebootstrapped.runtime
+        } else {
+            self.renderer_document_isolate
+                .with_entered_renderer_document_isolate_and_bootstrap(
+                    |isolate, isolate_bootstrap| {
+                        ScriptVmContextBootstrap::new_child_default(
+                            isolate,
+                            isolate_bootstrap,
+                            context_host,
+                            self.resource_owner_id,
+                            &self.promise_reject_dispatch,
+                            self.indexed_db_manager.clone(),
+                            Some(self.storage_bucket_store.clone()),
+                            child_handle,
+                            current_owner,
+                        )
+                    },
+                )?
+                .into_runtime()
+        };
         let document_url = self
             ._context_host
             .borrow()
@@ -474,7 +476,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate_and_inspector_mut(|isolate, inspector| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let local_context = v8::Local::new(scope, &context);
+                let local_context = v8::Local::new(scope, &runtime.context);
                 let registered_context = v8::Global::new(scope.as_ref(), local_context);
                 page_inspector.attach_child_default_context(
                     inspector_document_isolate,
@@ -508,9 +510,7 @@ impl ScriptVm {
             child_handle,
             local_window_id: current_owner.local_window_id,
             owner_realm_id,
-            context,
-            _bridge_ref: bridge_ref,
-            runtime_observable_context_token,
+            runtime,
             inspector_execution_context_id: inspector_context.id,
             inspector_execution_context_realm_id: inspector_context.unique_id,
             inspector_context_registration_id,
@@ -540,15 +540,17 @@ impl ScriptVm {
                 })
                 .collect::<Vec<_>>()
         };
-        let stale_prebootstrapped_contexts = {
+        let mut stale_prebootstrapped_contexts = {
             let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
             stale_prebootstrapped_handles
                 .into_iter()
-                .filter_map(|handle| contexts.remove(&handle))
+                .filter_map(|handle| contexts.remove(&handle).map(|context| (handle, context)))
                 .collect::<Vec<_>>()
         };
         if !stale_prebootstrapped_contexts.is_empty() {
-            for context in &stale_prebootstrapped_contexts {
+            for (_, context) in &stale_prebootstrapped_contexts {
+                let context_ptr = &context.context as *const v8::Global<v8::Context>;
+                self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
                 self.cancel_history_traversals_for_retiring_window(
                     crate::native_bridge::WindowExecutionContextOwner::Frame(
                         context.local_window_id,
@@ -557,22 +559,32 @@ impl ScriptVm {
             }
             {
                 let mut host = self._context_host.borrow_mut();
-                for context in &stale_prebootstrapped_contexts {
+                for (_, context) in &stale_prebootstrapped_contexts {
+                    host.retire_window_realm_resources(context.runtime_observable_context_token);
                     host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
                     );
                 }
             }
+            let context_host = self._context_host.clone();
             let _ = self
                 .renderer_document_isolate
                 .with_entered_renderer_document_isolate(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
-                    for context in &stale_prebootstrapped_contexts {
-                        v8::Local::new(scope, &context.context).detach_global();
+                    for (handle, context) in &stale_prebootstrapped_contexts {
+                        if context_host
+                            .borrow()
+                            .child_window_proxy_frame_is_current(*handle, &context.frame_id)
+                        {
+                            v8::Local::new(scope, &context.context).detach_global();
+                        }
                     }
                     Ok(())
                 });
+        }
+        for (_, context) in &mut stale_prebootstrapped_contexts {
+            context.runtime.mark_closed();
         }
         let refreshed_live;
         let live = if stale_prebootstrapped_contexts.is_empty() {
@@ -608,184 +620,92 @@ impl ScriptVm {
     }
 
     pub(super) fn destroy_child_default_context(&mut self, execution_context_id: i64) {
-        let Some(context) = self.child_frame_realm_store.remove(&execution_context_id) else {
+        let Some(mut context) = self.child_frame_realm_store.remove(&execution_context_id) else {
             return;
         };
+        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
+        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
         self.cancel_history_traversals_for_retiring_window(
             crate::native_bridge::WindowExecutionContextOwner::Frame(context.local_window_id),
         );
-        let retired_timer_count = self
-            .document_runtime
-            .cancel_timers_for_context_token(context.runtime_observable_context_token);
-        let runtime_binding_retirement = {
+        {
             let mut host = self._context_host.borrow_mut();
             host.clear_child_default_execution_context_if_matches(
                 context.child_handle,
                 context.owner_realm_id,
                 execution_context_id,
             );
-            let runtime_binding_retirement =
-                host.retire_runtime_binding_context_token(context.runtime_observable_context_token);
-            let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
+            host.retire_window_realm_resources(context.runtime_observable_context_token);
+            host.retire_window_execution_contexts_for_context_token(
                 context.runtime_observable_context_token,
             );
-            let retired_webcrypto_count =
-                host.retire_webcrypto_context_token(context.runtime_observable_context_token);
-            host.retire_opfs_context_token(context.runtime_observable_context_token);
-            let retired_worker_count =
-                host.retire_workers_for_context_token(context.runtime_observable_context_token);
-            let retired_shared_worker_count = host
-                .disconnect_shared_worker_clients_for_context_token(
-                    context.runtime_observable_context_token,
-                );
-            let retired_xhr_count =
-                host.retire_window_xhrs_for_context_token(context.runtime_observable_context_token);
-            let retired_fetch_count = host
-                .retire_window_fetches_for_context_token(context.runtime_observable_context_token);
-            host.retire_window_event_sources_for_context_token(
-                context.runtime_observable_context_token,
-            );
-            let retired_message_port_count = host
-                .retire_message_ports_for_context_token(context.runtime_observable_context_token);
-            let retired_window_message_count = host
-                .retire_window_messages_for_context_token(context.runtime_observable_context_token);
-            let retired_window_execution_context_count = host
-                .retire_window_execution_contexts_for_context_token(
-                    context.runtime_observable_context_token,
-                );
-            (
-                runtime_binding_retirement,
-                retired_image_decode_count,
-                retired_message_port_count,
-                retired_window_message_count,
-                retired_window_execution_context_count,
-                retired_webcrypto_count,
-                retired_worker_count,
-                retired_shared_worker_count,
-                retired_xhr_count,
-                retired_fetch_count,
-            )
-        };
-        tracing::debug!(
-            execution_context_id,
-            context_token = ?context.runtime_observable_context_token,
-            retired_runtime_binding_context_count = runtime_binding_retirement.0
-                .retired_execution_context_count(),
-            retired_image_decode_count = runtime_binding_retirement.1,
-            retired_message_port_count = runtime_binding_retirement.2,
-            retired_window_message_count = runtime_binding_retirement.3,
-            retired_window_execution_context_count = runtime_binding_retirement.4,
-            retired_webcrypto_count = runtime_binding_retirement.5,
-            retired_worker_count = runtime_binding_retirement.6,
-            retired_shared_worker_count = runtime_binding_retirement.7,
-            retired_xhr_count = runtime_binding_retirement.8,
-            aborted_fetch_count = runtime_binding_retirement.9.0,
-            detached_keepalive_fetch_count = runtime_binding_retirement.9.1,
-            retired_timer_count,
-            "retired child Runtime binding context"
-        );
-        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
-        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
+        }
         assert!(
             self.page_inspector
                 .destroy_context_registration(context.inspector_context_registration_id),
             "child default context must retain its document-owned Inspector registration"
         );
         let context_host = self._context_host.clone();
-        let detach_result = self
+        let proxy_cleanup_result = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let local_context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                local_context.detach_global();
                 let host_ptr = (*context_host).as_ptr();
                 let host = unsafe { &mut *host_ptr };
-                if host.child_browsing_context_is_live(context.child_handle)
-                    && !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
-                {
-                    anyhow::bail!("failed to park the live child WindowProxy between realms");
+                let reuses_window_proxy = host
+                    .child_window_proxy_frame_is_current(context.child_handle, &context.frame_id);
+                // Navigation within the same frame reuses its WindowProxy.
+                // Removal (including remove/reinsert of the same element)
+                // creates a different browsing context. Keep the old proxy
+                // attached to its retained Window so its constructors remain
+                // callable after execution authority has been retired.
+                if reuses_window_proxy {
+                    local_context.detach_global();
+                    if !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
+                    {
+                        anyhow::bail!("failed to park the live child WindowProxy between realms");
+                    }
                 }
-                Ok(())
+                Ok(reuses_window_proxy)
             });
-        if let Err(error) = detach_result {
-            tracing::warn!(
+        match proxy_cleanup_result {
+            Err(error) => tracing::warn!(
                 %error,
                 execution_context_id,
                 child_handle = context.child_handle.index(),
                 owner_realm_id = ?context.owner_realm_id,
-                "failed to detach retired child WindowProxy global"
-            );
-        } else {
-            tracing::debug!(
+                "failed to finalize retired child WindowProxy"
+            ),
+            Ok(reuses_window_proxy) => tracing::debug!(
                 execution_context_id,
                 child_handle = context.child_handle.index(),
                 owner_realm_id = ?context.owner_realm_id,
-                "detached retired child WindowProxy global for identity reuse"
-            );
+                reuses_window_proxy,
+                "finalized retired child WindowProxy"
+            ),
         }
+        context.runtime.mark_closed();
     }
 
     pub(super) fn destroy_isolated_world_context(&mut self, execution_context_id: i64) {
-        let Some(context) = self
+        let Some(mut context) = self
             .page_isolated_world_contexts
             .remove_context(execution_context_id)
         else {
             return;
         };
-        let retired_timer_count = self
-            .document_runtime
-            .cancel_timers_for_context_token(context.runtime_observable_context_token);
-        let (
-            runtime_binding_retirement,
-            retired_image_decode_count,
-            retired_message_port_count,
-            retired_webcrypto_count,
-            retired_worker_count,
-            retired_shared_worker_count,
-            retired_xhr_count,
-            retired_fetch_count,
-        ) = {
-            let mut host = self._context_host.borrow_mut();
-            let runtime_binding_retirement =
-                host.retire_runtime_binding_context_token(context.runtime_observable_context_token);
-            let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
-                context.runtime_observable_context_token,
-            );
-            let retired_webcrypto_count =
-                host.retire_webcrypto_context_token(context.runtime_observable_context_token);
-            host.retire_opfs_context_token(context.runtime_observable_context_token);
-            let retired_worker_count =
-                host.retire_workers_for_context_token(context.runtime_observable_context_token);
-            let retired_shared_worker_count = host
-                .disconnect_shared_worker_clients_for_context_token(
-                    context.runtime_observable_context_token,
-                );
-            let retired_xhr_count =
-                host.retire_window_xhrs_for_context_token(context.runtime_observable_context_token);
-            let retired_fetch_count = host
-                .retire_window_fetches_for_context_token(context.runtime_observable_context_token);
-            host.retire_window_event_sources_for_context_token(
-                context.runtime_observable_context_token,
-            );
-            let retired_message_port_count = host
-                .retire_message_ports_for_context_token(context.runtime_observable_context_token);
-            (
-                runtime_binding_retirement,
-                retired_image_decode_count,
-                retired_message_port_count,
-                retired_webcrypto_count,
-                retired_worker_count,
-                retired_shared_worker_count,
-                retired_xhr_count,
-                retired_fetch_count,
-            )
-        };
+        self._context_host
+            .borrow_mut()
+            .retire_window_realm_resources(context.runtime_observable_context_token);
         assert!(
             self.page_inspector
                 .destroy_context_registration(context.inspector_context_registration_id),
             "isolated context must retain its document-owned Inspector registration"
         );
+        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
+        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
         // V8 Inspector consumes the still-identifiable realm while processing
         // `context_destroyed` (including Runtime lifecycle projection for
         // named child worlds). Only after that notification may the strict
@@ -798,23 +718,13 @@ impl ScriptVm {
         tracing::debug!(
             execution_context_id,
             context_token = ?context.runtime_observable_context_token,
-            retired_runtime_binding_context_count = runtime_binding_retirement
-                .retired_execution_context_count(),
-            retired_image_decode_count,
-            retired_message_port_count,
-            retired_webcrypto_count,
-            retired_worker_count,
-            retired_shared_worker_count,
-            retired_xhr_count,
-            aborted_fetch_count = retired_fetch_count.0,
-            detached_keepalive_fetch_count = retired_fetch_count.1,
             retired_window_execution_context_realm_count,
-            retired_timer_count,
             "retired isolated-world Runtime binding context"
         );
+        context.runtime.mark_closed();
     }
 
-    pub(crate) fn retire_isolated_worlds_for_document_owner(
+    pub(super) fn retire_isolated_worlds_for_document_owner(
         &mut self,
         owner: FrameDocumentTaskOwner,
     ) -> usize {
@@ -844,7 +754,7 @@ impl ScriptVm {
         retired_count
     }
 
-    pub(crate) fn rebind_isolated_worlds_for_document_owner_transition(
+    pub(super) fn rebind_isolated_worlds_for_document_owner_transition(
         &mut self,
         retired_owner: FrameDocumentTaskOwner,
         current_owner: FrameDocumentTaskOwner,
@@ -967,7 +877,7 @@ impl ScriptVm {
                 },
             )?;
         let runtime_observable_context_token = context_bootstrap.runtime_observable_context_token;
-        let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
+        let runtime = context_bootstrap.into_runtime();
         let renderer_document_isolate = self.renderer_document_isolate.clone();
         let inspector_document_isolate = renderer_document_isolate.clone();
         let page_inspector = &mut self.page_inspector;
@@ -976,7 +886,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate_and_inspector_mut(|isolate, inspector| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let local_context = v8::Local::new(scope, &context);
+                let local_context = v8::Local::new(scope, &runtime.context);
                 let registered_context = v8::Global::new(scope.as_ref(), local_context);
                 page_inspector.attach_isolated_context(
                     inspector_document_isolate,
@@ -1007,9 +917,7 @@ impl ScriptVm {
                 frame_id,
                 child_handle,
                 document_owner,
-                context,
-                _bridge_ref: bridge_ref,
-                runtime_observable_context_token,
+                runtime,
                 inspector_execution_context_id: Some(inspector_context.id),
                 inspector_execution_context_realm_id: inspector_context.unique_id,
                 inspector_context_registration_id,

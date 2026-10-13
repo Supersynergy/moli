@@ -45,6 +45,18 @@ impl WebOrigin {
         }
     }
 
+    /// Restore a serialized tuple origin; null and invalid URLs remain opaque.
+    pub fn from_ascii_serialization(serialized: &str) -> Self {
+        Url::parse(serialized)
+            .ok()
+            .map_or(Self::Opaque, |url| Self::from_url(&url))
+    }
+
+    /// Compare a URL using origin semantics, including opaque-origin isolation.
+    pub fn same_origin_url(&self, url: &Url) -> bool {
+        self.same_origin(&Self::from_url(url))
+    }
+
     pub fn is_opaque(&self) -> bool {
         matches!(self, Self::Opaque)
     }
@@ -125,6 +137,15 @@ pub fn is_about_blank(url: &Url) -> bool {
     url.scheme() == "about" && url.path().eq_ignore_ascii_case("blank")
 }
 
+pub fn is_about_srcdoc(url: &Url) -> bool {
+    url.scheme() == "about"
+        && url.path() == "srcdoc"
+        && url.query().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.host().is_none()
+}
+
 pub fn is_potentially_trustworthy_url(url: &Url) -> bool {
     if url.scheme() == "blob" {
         return tuple_origin_url(url)
@@ -163,6 +184,25 @@ pub fn origin_ascii_serialization_with_about_blank_inheritance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_srcdoc_matches_fragments_but_not_queries_or_authorities() {
+        for input in ["about:srcdoc", "ABOUT:srcdoc", "about:srcdoc#section"] {
+            assert!(is_about_srcdoc(&url(input)), "{input}");
+        }
+        for input in [
+            "about:srcdoc?",
+            "about:srcdoc?query#section",
+            "about:SRCDOC",
+            "about:/srcdoc",
+            "about://host/srcdoc",
+            "about://user:password@host/srcdoc",
+            "about:blank#srcdoc",
+            "https://example.test/srcdoc",
+        ] {
+            assert!(!is_about_srcdoc(&url(input)), "{input}");
+        }
+    }
 
     fn url(input: &str) -> Url {
         Url::parse(input).unwrap()
@@ -303,5 +343,27 @@ mod tests {
         assert!(!is_potentially_trustworthy_url(&url(
             "blob:data:text/html,hello"
         )));
+    }
+
+    #[test]
+    fn web_origin_compares_directly_with_urls() {
+        let origin = WebOrigin::from_url(&url("https://example.test/document"));
+
+        assert!(origin.same_origin_url(&url("https://example.test/resource")));
+        assert!(!origin.same_origin_url(&url("https://other.test/resource")));
+        assert!(!WebOrigin::Opaque.same_origin_url(&url("https://example.test/resource")));
+    }
+
+    #[test]
+    fn web_origin_rehydrates_tuple_serializations_and_keeps_null_opaque() {
+        assert!(
+            WebOrigin::from_ascii_serialization("https://example.test:8443")
+                .same_origin(&WebOrigin::from_url(&url("https://example.test:8443/path")))
+        );
+        for input in ["null", "not an origin", "data:text/plain,opaque"] {
+            let opaque = WebOrigin::from_ascii_serialization(input);
+            assert!(opaque.is_opaque());
+            assert!(!opaque.same_origin(&WebOrigin::Opaque));
+        }
     }
 }

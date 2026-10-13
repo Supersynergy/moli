@@ -1,5 +1,6 @@
 use super::super::super::events;
 use super::*;
+use crate::context_bootstrap::events::EventInit;
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -62,21 +63,17 @@ fn new_version_getter<'s>(
 struct IdbVersionChangeEventConstructorArgs {
     #[webidl(required, name = "type")]
     event_type: String,
-    #[webidl(index = 1, with = parse_version_change_event_init_arg)]
+    #[webidl(index = 1, dictionary)]
     init: IdbVersionChangeEventInit,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "IDBVersionChangeEventInit")]
 struct IdbVersionChangeEventInit {
+    #[webidl(inherit)]
+    base: EventInit,
     // WebIDL reads inherited EventInit members first, then this dictionary's
-    // members in lexicographic order. The derive preserves declaration order.
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    // members in lexicographic order. The derive preserves inheritance order.
     #[webidl(nullable)]
     new_version: Option<u64>,
     #[webidl(default = 0)]
@@ -105,14 +102,14 @@ pub(in crate::context_bootstrap) fn idb_version_change_event_constructor_callbac
         scope,
         event,
         &parsed.event_type,
-        parsed.init.bubbles,
-        parsed.init.cancelable,
+        parsed.init.base.bubbles,
+        parsed.init.base.cancelable,
     );
     events::define_event_property(
         scope,
         event,
         "composed",
-        v8::Boolean::new(scope, parsed.init.composed).into(),
+        v8::Boolean::new(scope, parsed.init.base.composed).into(),
     );
     IdbVersionChangeEventFieldsDeclaration::new(
         parsed.init.old_version,
@@ -147,6 +144,7 @@ pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_event<'s
     let Some(event) = events::new_event_wrapper(scope, state) else {
         return true;
     };
+    events::mark_event_trusted(scope, event);
     dispatch_idb_event_object(scope, target, event)
 }
 
@@ -157,16 +155,4 @@ fn version_change_nullable_version_value<'s>(
     version
         .map(|value| v8::Number::new(scope, value as f64).into())
         .unwrap_or_else(|| v8::null(scope).into())
-}
-
-fn parse_version_change_event_init_arg<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> Result<IdbVersionChangeEventInit, webidl::WebIdlError> {
-    let context = webidl::Context::argument("IDBVersionChangeEvent", (index + 1) as usize);
-    webidl::dictionary_arg(args, index, context)?
-        .map(|object| webidl::parse_dictionary_object(scope, object))
-        .transpose()
-        .map(|init| init.unwrap_or_default())
 }

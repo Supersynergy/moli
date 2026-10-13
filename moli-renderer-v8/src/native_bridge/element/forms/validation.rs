@@ -488,7 +488,7 @@ fn required_value_missing_is_suppressed_for_immutable_control(
             || (element.is_html_input() && element.input_type().supports_readonly()))
 }
 
-fn control_has_datalist_ancestor(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn control_has_datalist_ancestor(runtime: &JsContextHost, handle: DomHandle) -> bool {
     let mut current = runtime.dom_host().parent_node(handle);
     while let Some(parent) = current {
         let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
@@ -570,7 +570,7 @@ fn control_suffers_pattern_mismatch(
     })
 }
 
-fn v8_pattern_is_usable(scope: &mut v8::PinScope<'_, '_>, pattern: &str) -> Option<()> {
+pub(crate) fn v8_pattern_is_usable(scope: &mut v8::PinScope<'_, '_>, pattern: &str) -> Option<()> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
     let pattern = v8_string(&scope, pattern)?;

@@ -41,6 +41,90 @@ fn trusted_types_csp_policy_creation_matches_only_valid_name_tokens() {
 }
 
 #[test]
+fn trusted_type_policy_callbacks_follow_webidl_dictionary_and_callback_rules() {
+    let mut vm = new_storage_test_vm("https://trusted-type-policy-webidl.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error.constructor.name;
+    }
+  };
+  const methodTypes = policy => [
+    typeof policy.createHTML,
+    typeof policy.createScript,
+    typeof policy.createScriptURL
+  ];
+
+  const emptyFromNull = trustedTypes.createPolicy("empty-null", null);
+  const emptyFromOmission = trustedTypes.createPolicy("empty-omitted");
+  const extra = { marker: "extra" };
+  let observed;
+  class NullCallbacks {
+    createHTML(input, ...rest) {
+      observed = [this === undefined, input, rest.length, rest[0] === extra, rest[1]];
+      return null;
+    }
+    createScript() {
+      return null;
+    }
+    createScriptURL() {
+      return null;
+    }
+  }
+  const nullPolicy = trustedTypes.createPolicy("null-results", new NullCallbacks());
+  const nullResults = [
+    String(nullPolicy.createHTML({ toString: () => "converted" }, extra, 42)),
+    String(nullPolicy.createScript("script")),
+    String(nullPolicy.createScriptURL("script-url"))
+  ];
+
+  const variadicPolicy = trustedTypes.createPolicy("variadic", {
+    createHTML: (a, b, c) => a + b + c,
+    createScript: (a, b, c) => a + b + c,
+    createScriptURL: (a, b, c) => a + b + c
+  });
+  const variadicResults = [
+    String(variadicPolicy.createHTML("a", "b", "c")),
+    String(variadicPolicy.createScript("a", "b")),
+    String(variadicPolicy.createScriptURL("a", 123, null))
+  ];
+
+  return JSON.stringify({
+    emptyMethods: [methodTypes(emptyFromNull), methodTypes(emptyFromOmission)],
+    missingCallbacks: [emptyFromNull, emptyFromOmission].map(policy =>
+      ['createHTML', 'createScript', 'createScriptURL'].map(method =>
+        errorName(() => policy[method]('input')))),
+    nullResults,
+    observed,
+    variadicResults,
+    errors: [
+      errorName(() => trustedTypes.createPolicy("primitive-options", 1)),
+      errorName(() => trustedTypes.createPolicy("non-callable", { createHTML: null })),
+      errorName(() => trustedTypes.createPolicy("throwing-getter", {
+        get createHTML() { throw new RangeError("getter"); }
+      })),
+      errorName(() => nullPolicy.createHTML())
+    ]
+  });
+})()
+"#,
+        )
+        .expect("TrustedTypePolicy WebIDL callback probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"emptyMethods":[["function","function","function"],["function","function","function"]],"missingCallbacks":[["TypeError","TypeError","TypeError"],["TypeError","TypeError","TypeError"]],"nullResults":["","",""],"observed":[true,"converted",2,true,42],"variadicResults":["abc","abundefined","a123null"],"errors":["TypeError","TypeError","RangeError","TypeError"]}"#
+    );
+}
+
+#[test]
 fn element_markup_sinks_enforce_trusted_html_and_standard_sink_names() {
     let mut vm = new_storage_test_vm("https://element-markup-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
@@ -1520,5 +1604,116 @@ fn service_worker_register_converts_options_before_the_default_policy() {
                 ["type", "returned"]
             ]
         ])
+    );
+}
+
+#[test]
+fn svg_script_href_base_val_uses_the_owner_reflected_trusted_script_url_sink() {
+    let mut vm = new_storage_test_vm("https://svg-script-href-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const violations = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    violations.push({
+      blockedURI: event.blockedURI,
+      effectiveDirective: event.effectiveDirective,
+      sample: event.sample
+    });
+  });
+  globalThis.__svgScriptHrefViolations = violations;
+
+  const svgScript = document.createElementNS("http://www.w3.org/2000/svg", "script");
+  const href = svgScript.href;
+  let illegalConstructor = false;
+  try {
+    new SVGAnimatedString();
+  } catch (error) {
+    illegalConstructor = error instanceof TypeError;
+  }
+  let plainRejected = false;
+  try {
+    href.baseVal = "plain.js";
+  } catch (error) {
+    plainRejected = error instanceof TypeError;
+  }
+  const rejectedAttribute = svgScript.getAttribute("href");
+
+  const explicit = trustedTypes.createPolicy("svg-script-href", {
+    createScriptURL: value => value
+  });
+  href.baseVal = explicit.createScriptURL("trusted.js");
+  const trustedValues = [
+    svgScript.getAttribute("href"),
+    href.baseVal,
+    href.animVal
+  ];
+  svgScript.setAttribute("href", explicit.createScriptURL("attribute.js"));
+  const externallySynced = [href.baseVal, href.animVal];
+  const className = svgScript.className;
+  className.baseVal = explicit.createScriptURL("trusted-class");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  const useHref = use.href;
+  useHref.baseVal = explicit.createScriptURL("trusted-use");
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createScriptURL: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return `safe-${value}`;
+    }
+  });
+  href.baseVal = "default-input";
+  className.baseVal = "plain-class";
+  useHref.baseVal = "plain-use";
+
+  return JSON.stringify({
+    shape: [
+      href instanceof SVGAnimatedString,
+      Object.prototype.toString.call(href),
+      svgScript.href === href,
+      illegalConstructor
+    ],
+    plainRejected,
+    rejectedAttribute,
+    trustedValues,
+    externallySynced,
+    ordinaryAnimatedStrings: [
+      className instanceof SVGAnimatedString,
+      svgScript.className === className,
+      className.baseVal,
+      className.animVal,
+      svgScript.getAttribute("class"),
+      useHref instanceof SVGAnimatedString,
+      use.href === useHref,
+      useHref.baseVal,
+      useHref.animVal,
+      use.getAttribute("href")
+    ],
+    defaulted: [svgScript.getAttribute("href"), href.baseVal, href.animVal],
+    defaultCalls,
+    violations
+  });
+})()
+"#,
+        )
+        .expect("SVGScriptElement href Trusted Types sink probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"shape":[true,"[object SVGAnimatedString]",true,true],"plainRejected":true,"rejectedAttribute":null,"trustedValues":["trusted.js","trusted.js","trusted.js"],"externallySynced":["attribute.js","attribute.js"],"ordinaryAnimatedStrings":[true,true,"plain-class","plain-class","plain-class",true,true,"plain-use","plain-use","plain-use"],"defaulted":["safe-default-input","safe-default-input","safe-default-input"],"defaultCalls":[["default-input","TrustedScriptURL","SVGScriptElement href"]],"violations":[]}"#
+    );
+
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        1
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__svgScriptHrefViolations)")
+            .expect("queued SVGScriptElement href violation should be observable"),
+        r#"[{"blockedURI":"trusted-types-sink","effectiveDirective":"require-trusted-types-for","sample":"SVGScriptElement href|plain.js"}]"#
     );
 }

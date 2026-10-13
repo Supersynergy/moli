@@ -2,6 +2,7 @@ use super::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT as WINDOW_CHILD_CONTEXT_HANDLE_SLOT,
     context_bootstrap::DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     context_bootstrap::PERFORMANCE_TIME_ORIGIN_SLOT,
+    context_bootstrap::current_performance_time_origin,
     context_bootstrap::dom_time_since_origin_millis,
     context_bootstrap::event_initialized,
     context_bootstrap::event_is_dispatching,
@@ -62,18 +63,10 @@ const WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT: &str =
 const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
 const IDLE_DEADLINE_DID_TIMEOUT_SLOT: &str = "__moliIdleDeadlineDidTimeout";
 const IDLE_DEADLINE_MS_SLOT: &str = "__moliIdleDeadlineMs";
+const IDLE_DEADLINE_TIME_ORIGIN_SLOT: &str = "__moliIdleDeadlineTimeOrigin";
 const IDLE_OPPORTUNITY_DELAY_MS: u32 = 1;
 const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
 pub(crate) const TOP_WINDOW_MESSAGE_ENDPOINT_SLOT: &str = "__moliTopWindowMessageEndpoint";
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct WindowMessageEventInitDeclaration<'scope> {
-    data: v8::Local<'scope, v8::Value>,
-    origin: v8::Local<'scope, v8::String>,
-    ports: v8::Local<'scope, v8::Array>,
-    source: v8::Local<'scope, v8::Value>,
-}
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
@@ -87,6 +80,8 @@ struct WindowDocumentEventInitDeclaration {
 struct IdleDeadlineDeclaration {
     #[webapi(slot = IDLE_DEADLINE_MS_SLOT)]
     deadline_ms: f64,
+    #[webapi(slot = IDLE_DEADLINE_TIME_ORIGIN_SLOT)]
+    time_origin_ms: f64,
     #[webapi(slot = IDLE_DEADLINE_DID_TIMEOUT_SLOT)]
     did_timeout: bool,
 }
@@ -754,7 +749,12 @@ pub(crate) fn window_post_message_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(host_ptr) = args
+        .this()
+        .get_creation_context(scope)
+        .and_then(crate::util::context_host_ptr_from_context_slot)
+        .or_else(|| context_host_ptr_from_global_bridge(scope))
+    else {
         rv.set_undefined();
         return;
     };
@@ -778,20 +778,29 @@ pub(crate) fn window_post_message_callback<'s>(
     // scope is the one necessary override; the ambient source marker is only
     // a fallback for legacy execution paths that do not expose an incumbent
     // context.
-    let source_identity = active_lightweight_popup_id(scope)
-        .map(PendingWindowMessageEndpoint::LightweightPopup)
-        .and_then(|endpoint| current_window_message_source_identity(scope, host, endpoint))
-        .or_else(|| incumbent_window_message_source_identity(scope, host))
+    let related_source = incumbent_related_page_message_source(scope, host_ptr);
+    let source_identity = related_source
+        .as_ref()
+        .map(|(identity, _, _)| *identity)
         .or_else(|| {
-            host.current_window_message_source()
+            active_lightweight_popup_id(scope)
+                .map(PendingWindowMessageEndpoint::LightweightPopup)
                 .and_then(|endpoint| current_window_message_source_identity(scope, host, endpoint))
-        })
-        .or_else(|| {
-            let endpoint = active_child_window_handle(scope)
-                .or_else(|| child_window_handle(scope, scope.get_current_context().global(scope)))
-                .map(PendingWindowMessageEndpoint::ChildWindow)
-                .unwrap_or(PendingWindowMessageEndpoint::TopWindow);
-            current_window_message_source_identity(scope, host, endpoint)
+                .or_else(|| incumbent_window_message_source_identity(scope, host))
+                .or_else(|| {
+                    host.current_window_message_source().and_then(|endpoint| {
+                        current_window_message_source_identity(scope, host, endpoint)
+                    })
+                })
+                .or_else(|| {
+                    let endpoint = active_child_window_handle(scope)
+                        .or_else(|| {
+                            child_window_handle(scope, scope.get_current_context().global(scope))
+                        })
+                        .map(PendingWindowMessageEndpoint::ChildWindow)
+                        .unwrap_or(PendingWindowMessageEndpoint::TopWindow);
+                    current_window_message_source_identity(scope, host, endpoint)
+                })
         });
     let Some((source_endpoint, source_owner, source_realm_token)) = source_identity else {
         rv.set_undefined();
@@ -812,7 +821,11 @@ pub(crate) fn window_post_message_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(source_origin) = window_message_endpoint_origin(host, source_endpoint) else {
+    let Some(source_origin) = related_source
+        .as_ref()
+        .map(|(_, origin, _)| origin.clone())
+        .or_else(|| window_message_endpoint_origin(host, source_endpoint))
+    else {
         rv.set_undefined();
         return;
     };
@@ -903,6 +916,7 @@ pub(crate) fn window_post_message_callback<'s>(
     let task_id = host.queue_window_message(PendingWindowMessage {
         target,
         source,
+        source_window: related_source.map(|(_, _, window)| window),
         data,
         origin: source_origin,
         intended_target_origin: target_origin_match,
@@ -1041,18 +1055,29 @@ pub(crate) fn scroll_window_to(
     queue_scroll_observable_effects(scope, host_ptr, document, true);
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.getComputedStyle")]
+pub(crate) struct GetComputedStyleArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Element)]
+    pub(crate) element: v8::Local<'s, v8::Object>,
+    #[webidl(nullable)]
+    pseudo_element: Option<String>,
+}
+
+impl GetComputedStyleArgs<'_> {
+    pub(crate) fn pseudo_argument(&self) -> ComputedStylePseudoArgument {
+        computed_style_pseudo_argument(self.pseudo_element.as_deref().map_or(
+            moli_selector::GetComputedStylePseudoElement::OriginatingElement,
+            moli_selector::get_computed_style_pseudo_element,
+        ))
+    }
+}
+
 pub(crate) fn window_get_computed_style_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if args.length() == 0 {
-        throw_type_error(
-            scope,
-            "Failed to execute 'getComputedStyle' on 'Window': 1 argument required, but only 0 present.",
-        );
-        return;
-    }
     let Some(host_ptr) = context_host_ptr_from_window_object(scope, args.this()) else {
         throw_type_error(
             scope,
@@ -1060,12 +1085,16 @@ pub(crate) fn window_get_computed_style_callback<'s>(
         );
         return;
     };
-    let Some(handle) = current_or_live_delegate_node_arg_handle(scope, host_ptr, args.get(0))
+    let Some(parsed) = webidl::parse_args::<GetComputedStyleArgs>(scope, &args) else {
+        return;
+    };
+    let Some(handle) =
+        current_or_live_delegate_node_arg_handle(scope, host_ptr, parsed.element.into())
     else {
         rv.set_null();
         return;
     };
-    let pseudo_argument = computed_style_pseudo_argument_from_function_args(scope, &args);
+    let pseudo_argument = parsed.pseudo_argument();
     let child_window_handle = object_child_window_handle(scope, args.this())
         .or_else(|| dom_handle_from_marker_value(scope, args.data()));
     match build_computed_style_object(
@@ -1231,13 +1260,6 @@ impl ComputedStylePseudoArgument {
     }
 }
 
-pub(crate) fn computed_style_pseudo_argument_from_function_args<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> ComputedStylePseudoArgument {
-    computed_style_pseudo_argument(get_computed_style_pseudo_element_argument(scope, args))
-}
-
 fn computed_style_pseudo_argument(
     pseudo_element: moli_selector::GetComputedStylePseudoElement,
 ) -> ComputedStylePseudoArgument {
@@ -1276,19 +1298,6 @@ fn computed_style_pseudo_argument(
 
 fn computed_style_pseudo_element_supported_by_stylo(pseudo_element: &str) -> bool {
     ComputedStylePseudoKey::from_stylo_pseudo(pseudo_element).is_some()
-}
-
-fn get_computed_style_pseudo_element_argument<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-) -> moli_selector::GetComputedStylePseudoElement {
-    if args.length() < 2 || args.get(1).is_undefined() {
-        return moli_selector::GetComputedStylePseudoElement::OriginatingElement;
-    }
-    let Some(value) = args.get(1).to_string(scope) else {
-        return moli_selector::GetComputedStylePseudoElement::EmptyStyle;
-    };
-    moli_selector::get_computed_style_pseudo_element(&value.to_rust_string_lossy(scope))
 }
 
 fn mouse_event_offset_getter(
@@ -1438,6 +1447,10 @@ fn dispatch_window_message_in_current_target_context(
     let target_endpoint =
         PendingWindowMessageEndpoint::from_dispatch_scope(message.target.dispatch_scope());
     let source_endpoint = message.source.endpoint();
+    let source_window = message
+        .source_window
+        .as_ref()
+        .map(|window| v8::Local::new(scope, window));
     let target_origin = window_message_endpoint_origin(host, target_endpoint);
     if !target_origin.as_deref().is_some_and(|target_origin| {
         target_origin_matches(message.intended_target_origin.as_deref(), target_origin)
@@ -1457,14 +1470,6 @@ fn dispatch_window_message_in_current_target_context(
         return WindowMessageDispatchOutcome::Consumed;
     }
 
-    let global = scope.get_current_context().global(scope);
-    let Some(message_ctor) = global
-        .get(scope, v8str(scope, "MessageEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        host.retire_transferred_window_message_ports(&message);
-        return WindowMessageDispatchOutcome::Consumed;
-    };
     if window_message_requires_messageerror(&message, target_origin.as_deref()) {
         if moli_trace::window_message_trace_enabled() {
             tracing::info!(
@@ -1481,9 +1486,9 @@ fn dispatch_window_message_in_current_target_context(
             scope,
             host_ptr,
             host,
-            message_ctor,
             target_endpoint,
             source_endpoint,
+            source_window,
             "messageerror",
             v8::null(scope).into(),
             &message.origin,
@@ -1529,9 +1534,9 @@ fn dispatch_window_message_in_current_target_context(
             scope,
             host_ptr,
             host,
-            message_ctor,
             target_endpoint,
             source_endpoint,
+            source_window,
             "messageerror",
             v8::null(scope).into(),
             &message.origin,
@@ -1555,9 +1560,9 @@ fn dispatch_window_message_in_current_target_context(
         scope,
         host_ptr,
         host,
-        message_ctor,
         target_endpoint,
         source_endpoint,
+        source_window,
         "message",
         data,
         &message.origin,
@@ -1571,9 +1576,11 @@ fn window_message_endpoint_origin(
     endpoint: PendingWindowMessageEndpoint,
 ) -> Option<String> {
     match endpoint {
-        PendingWindowMessageEndpoint::TopWindow => {
-            Some(moli_url::origin_ascii_serialization(host.document_url()))
-        }
+        PendingWindowMessageEndpoint::TopWindow => Some(
+            host.current_main_document_resource_loader()
+                .map(|loader| loader.fetch_context().origin().to_owned())
+                .unwrap_or_else(|| moli_url::origin_ascii_serialization(host.document_url())),
+        ),
         PendingWindowMessageEndpoint::ChildWindow(handle) => {
             host.child_browsing_context_target_origin(handle)
         }
@@ -1616,41 +1623,43 @@ fn dispatch_window_message_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
     host: &mut JsContextHost,
-    message_ctor: v8::Local<'s, v8::Function>,
     target: PendingWindowMessageEndpoint,
     source_endpoint: PendingWindowMessageEndpoint,
+    source_window: Option<v8::Local<'s, v8::Object>>,
     event_type: &str,
     data: v8::Local<'s, v8::Value>,
     origin: &str,
     ports: v8::Local<'s, v8::Array>,
 ) {
     let global = scope.get_current_context().global(scope);
-    let Some(origin) = v8_string(scope, origin) else {
-        return;
-    };
-    let source: v8::Local<'_, v8::Value> = match source_endpoint {
-        PendingWindowMessageEndpoint::TopWindow => {
-            top_window_message_source_for_target(scope, host, target)
-                .unwrap_or_else(|| global.into())
-        }
-        PendingWindowMessageEndpoint::ChildWindow(handle) => {
-            child_window_message_source(scope, host, handle)
-                .map(Into::into)
-                .unwrap_or_else(|| v8::null(scope).into())
-        }
-        PendingWindowMessageEndpoint::LightweightPopup(popup_id) => host
-            .lightweight_popup_window(scope, popup_id)
+    let source: v8::Local<'_, v8::Value> =
+        source_window
             .map(Into::into)
-            .unwrap_or_else(|| v8::null(scope).into()),
-    };
-    let init = WindowMessageEventInitDeclaration::new(data, origin, ports, source)
-        .bind(scope)
-        .expect("Window MessageEvent init declaration should bind");
+            .unwrap_or_else(|| match source_endpoint {
+                PendingWindowMessageEndpoint::TopWindow => {
+                    top_window_message_source_for_target(scope, host, target)
+                        .unwrap_or_else(|| global.into())
+                }
+                PendingWindowMessageEndpoint::ChildWindow(handle) => {
+                    child_window_message_source(scope, host, handle)
+                        .map(Into::into)
+                        .unwrap_or_else(|| v8::null(scope).into())
+                }
+                PendingWindowMessageEndpoint::LightweightPopup(popup_id) => host
+                    .lightweight_popup_window(scope, popup_id)
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into()),
+            });
     let event_name = event_type;
-    let Some(event_type) = v8_string(scope, event_name) else {
-        return;
-    };
-    let Some(event) = message_ctor.new_instance(scope, &[event_type.into(), init.into()]) else {
+    let Some(event) = crate::context_bootstrap::construct_original_message_event(
+        scope,
+        event_type,
+        data,
+        origin,
+        &[],
+        source,
+        ports,
+    ) else {
         return;
     };
     mark_event_trusted(scope, event);
@@ -1867,7 +1876,8 @@ pub(crate) fn build_window_idle_deadline<'s>(
     } else {
         now_ms + IDLE_CALLBACK_BUDGET_MS
     };
-    IdleDeadlineDeclaration::new(deadline_ms, did_timeout)
+    let time_origin_ms = current_performance_time_origin(scope);
+    IdleDeadlineDeclaration::new(deadline_ms, time_origin_ms, did_timeout)
         .bind(scope)
         .ok()
 }
@@ -1915,9 +1925,20 @@ fn window_idle_deadline_time_remaining_callback<'s>(
         return;
     };
     let now_ms = current_time_ms();
+    let time_origin_ms = get_private_value(scope, deadline, IDLE_DEADLINE_TIME_ORIGIN_SLOT)
+        .and_then(|value| value.number_value(scope))
+        .unwrap_or(0.0);
     let remaining_ms = get_private_value(scope, deadline, IDLE_DEADLINE_MS_SLOT)
         .and_then(|value| value.number_value(scope))
-        .map_or(0.0, |deadline_ms| (deadline_ms - now_ms).max(0.0));
+        .map_or(0.0, |deadline_ms| {
+            // Use the captured origin even if timeRemaining is borrowed from
+            // another realm. Both timestamps must match performance.now()'s
+            // relative clock and precision rather than the raw wall clock.
+            moli_time::coarsened_dom_time_remaining_millis(
+                (deadline_ms - time_origin_ms).max(0.0),
+                (now_ms - time_origin_ms).max(0.0),
+            )
+        });
     rv.set(v8::Number::new(scope, remaining_ms).into());
 }
 
@@ -2017,6 +2038,16 @@ fn window_message_endpoint_from_receiver<'s>(
                 .unwrap_or(PendingWindowMessageEndpoint::TopWindow),
         );
     }
+    if let Some(context) = object.get_creation_context(scope)
+        && object.strict_equals(context.global(scope).into())
+        && let Some(host) = crate::util::context_host_ptr_from_context_slot(context)
+        && let Some(identity) =
+            unsafe { &*host }.window_execution_context_identity_for_access_check(context)
+    {
+        return Some(PendingWindowMessageEndpoint::from_dispatch_scope(
+            identity.dispatch_scope(),
+        ));
+    }
 
     if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, object) {
         return Some(PendingWindowMessageEndpoint::LightweightPopup(popup_id));
@@ -2053,6 +2084,42 @@ fn current_window_message_source_identity(
     let owner = host.current_window_execution_context_owner(dispatch_scope)?;
     let (realm_token, _) = host.window_execution_context(scope, owner, dispatch_scope)?;
     Some((endpoint, owner, realm_token))
+}
+
+fn incumbent_related_page_message_source(
+    scope: &mut v8::PinScope<'_, '_>,
+    target_host: *mut JsContextHost,
+) -> Option<(
+    (
+        PendingWindowMessageEndpoint,
+        WindowExecutionContextOwner,
+        RuntimeObservableContextToken,
+    ),
+    String,
+    v8::Global<v8::Object>,
+)> {
+    let context = scope.get_incumbent_context()?;
+    let source_host = crate::util::context_host_ptr_from_context_slot(context)?;
+    if source_host == target_host {
+        return None;
+    }
+    let host = unsafe { &*source_host };
+    let identity = host.window_execution_context_identity_for_access_check(context)?;
+    if !host.window_execution_context_identity_is_current(identity) {
+        return None;
+    }
+    let endpoint = PendingWindowMessageEndpoint::from_dispatch_scope(identity.dispatch_scope());
+    let origin = window_message_endpoint_origin(host, endpoint)?;
+    // MessageEvent.source is the default-world WindowProxy even when the
+    // incumbent script executes in an isolated world of that Window.
+    let (_, context) =
+        host.window_execution_context(scope, identity.owner(), identity.dispatch_scope())?;
+    let window = context.global(scope);
+    Some((
+        (endpoint, identity.owner(), identity.realm_token()),
+        origin,
+        v8::Global::new(scope, window),
+    ))
 }
 
 fn incumbent_window_message_source_identity(
@@ -2120,6 +2187,7 @@ mod tests {
         };
         let message = PendingWindowMessage {
             target: WindowTaskTarget::new(endpoint.dispatch_scope(), owner),
+            source_window: None,
             source: PendingWindowMessageSource::new(
                 endpoint,
                 owner,

@@ -191,3 +191,51 @@ fn parser_inserted_frameset_window_event_handlers_reflect_on_window() {
 }
 
 mod node_compilation;
+
+mod document_replacement;
+
+#[test]
+fn added_window_and_dom_handler_properties_share_native_registration() {
+    let mut vm = new_parsed_test_vm(
+        "https://native-handler-surface.test/",
+        "<body><iframe id=child></iframe></body>",
+    );
+    assert_eq!(
+        vm.eval(include_str!("event_handlers/native_surface_split.js"))
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
+fn device_window_handler_properties_follow_secure_context_exposure() {
+    for url in [
+        "https://native-device-handler.test/",
+        "http://native-device-handler.test/",
+    ] {
+        let mut vm = new_parsed_test_vm(url, "<body><iframe id=child></iframe></body>");
+        assert_eq!(
+            vm.eval(include_str!("event_handlers/native_secure_split.js"))
+                .unwrap(),
+            "true",
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn pointer_raw_update_handler_properties_follow_secure_context_exposure() {
+    for (url, secure_context) in [
+        ("http://native-pointer-raw-update.test/", false),
+        ("https://native-pointer-raw-update.test/", true),
+        ("http://localhost/pointer-raw-update", true),
+        ("http://127.0.0.1/pointer-raw-update", true),
+    ] {
+        let mut vm = new_parsed_test_vm(url, "<body><iframe id=child></iframe></body>");
+        let script = format!(
+            "{}({secure_context})",
+            include_str!("event_handlers/pointer_raw_update_secure_split.js")
+        );
+        assert_eq!(vm.eval(&script).unwrap(), "true", "{url}");
+    }
+}

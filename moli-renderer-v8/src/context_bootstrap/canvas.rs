@@ -197,6 +197,8 @@ mod state;
 mod transform;
 mod webgl;
 
+pub(crate) use transform::install_canvas_transform_bindings;
+
 pub(crate) use backing_store::{
     attach_canvas_like_context_object, canvas_like_to_data_url,
     reset_html_canvas_backing_store_for_dimension_assignment,
@@ -213,12 +215,11 @@ pub(crate) use context2d::{
     canvas_context_clear_rect_callback, canvas_context_close_path_callback,
     canvas_context_create_image_data_callback, canvas_context_create_linear_gradient_callback,
     canvas_context_draw_image_callback, canvas_context_ellipse_callback,
-    canvas_context_fill_callback, canvas_context_fill_rect_callback,
-    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
-    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
-    canvas_context_font_setter_callback, canvas_context_get_image_data_callback,
-    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
-    canvas_context_global_alpha_setter_callback,
+    canvas_context_fill_callback, canvas_context_fill_style_getter_callback,
+    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
+    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
+    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
+    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
@@ -240,7 +241,7 @@ pub(crate) use context2d::{
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
     canvas_context_transform_callback, canvas_context_translate_callback,
-    canvas_gradient_add_color_stop_callback,
+    canvas_gradient_add_color_stop_callback, install_canvas_fill_rect_bindings,
 };
 pub(crate) use image_bitmap::window_create_image_bitmap_callback;
 pub(crate) use objects::{

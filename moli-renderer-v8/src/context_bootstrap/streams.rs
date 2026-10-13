@@ -1,11 +1,10 @@
 use super::specs::{ConstructorKind, ConstructorSpec};
 use super::stream_adapter::{
-    StreamQueuingStrategy, cancel_readable_stream, close_stream, enqueue_chunk,
+    QueuingStrategyMembers, cancel_readable_stream, close_stream, enqueue_chunk,
     initialize_transform_stream_object, initialize_webidl_readable_stream_object,
     initialize_webidl_transform_stream_object, initialize_webidl_writable_stream_object,
-    parse_readable_stream_source_object, parse_stream_strategy_arg,
-    parse_transform_stream_transformer_object, parse_writable_stream_sink_object,
-    readable_stream_byob_request_respond_callback,
+    parse_readable_stream_source_object, parse_transform_stream_transformer_object,
+    parse_writable_stream_sink_object, readable_stream_byob_request_respond_callback,
     readable_stream_byob_request_respond_with_new_view_callback,
     readable_stream_byob_request_view_getter, readable_stream_is_byte_stream,
     readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_object,
@@ -222,13 +221,13 @@ struct ReadableStreamPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WritableStream, enumerable)]
+#[webapi(interface = web_api_interfaces::WritableStream, enumerable, receiver)]
 struct WritableStreamPrototypeDeclaration {
     #[webapi(method, length = 0, callback = writable_stream_get_writer_callback)]
     get_writer: (),
-    #[webapi(method, length = 0, callback = writable_stream_abort_callback)]
+    #[webapi(method, returns_promise, length = 0, callback = writable_stream_abort_callback)]
     abort: (),
-    #[webapi(method, length = 0, callback = writable_stream_close_callback)]
+    #[webapi(method, returns_promise, length = 0, callback = writable_stream_close_callback)]
     close: (),
     #[webapi(accessor_property, getter = writable_stream_locked_getter)]
     locked: (),

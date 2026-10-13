@@ -8,18 +8,14 @@ impl RendererPageCommand {
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
         use RendererDevToolsMainNestedDispatch::{InspectorSession, OwnerOnly, PageAgent};
         match self {
-            Self::Native(command) => {
-                if command.operation.can_dispatch_on_nested_main() {
-                    PageAgent
-                } else {
-                    OwnerOnly
-                }
-            }
+            Self::WebMcp { .. } => OwnerOnly,
+            Self::Native(command) => command.operation.nested_dispatch(),
             Self::Inspector(envelope)
                 if envelope.can_dispatch_at_nested_inspector_session_boundary() =>
             {
                 InspectorSession
             }
+            Self::Inspector(envelope) if envelope.is_runtime_binding_removal_commit() => PageAgent,
             Self::Inspector(_) => OwnerOnly,
             // Printing temporarily switches media and synchronizes document
             // fonts through V8. A regular screenshot only reads native layout.
@@ -34,21 +30,22 @@ impl RendererPageCommand {
             | Self::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | Self::DomDebuggerConfigureXhrBreakpoint { .. }
             | Self::DomDebuggerConfigureDomBreakpoint { .. }
-            | Self::ComputedStylePropertiesForBackendNodeId { .. }
+            | Self::ComputedStyleProperties { .. }
             | Self::ClientRectForBackendNodeId { .. }
-            | Self::DocumentGeometryForBackendNodeId { .. }
+            | Self::DocumentGeometryForNode { .. }
             | Self::DocumentHitTest { .. }
             | Self::NodeHasGeometryForBackendNodeId { .. }
+            | Self::DocumentNodeExistsForBackendNodeId { .. }
             | Self::DocumentNodeSnapshotForBackendNodeId { .. }
-            | Self::DocumentNodeSnapshotForBackendNodeIdInInspectorSession { .. }
+            | Self::DocumentNodeSnapshotForNodeInInspectorSession { .. }
             | Self::DocumentNodeSnapshotForDocument { .. }
             | Self::DiscardDomAgentFrontendBindings { .. }
             | Self::DomSnapshotCapture { .. }
-            | Self::DocumentChildNodeSnapshotEventsForBackendNodeId { .. }
+            | Self::DocumentChildNodeSnapshotEventsForNode { .. }
             | Self::DocumentQuerySelectorForDocument { .. }
-            | Self::DocumentQuerySelectorForChildFrameBackendNodeId { .. }
-            | Self::DocumentQuerySelectorForBackendNodeId { .. }
-            | Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId { .. }
+            | Self::DocumentQuerySelectorForChildFrameNode { .. }
+            | Self::DocumentQuerySelectorForNode { .. }
+            | Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode { .. }
             | Self::DocumentPerformSearch { .. }
             | Self::DocumentGetSearchResults { .. }
             | Self::DocumentDiscardSearchResults { .. }
@@ -59,22 +56,23 @@ impl RendererPageCommand {
             | Self::DocumentBidiNodeBinding { .. }
             | Self::DocumentBidiNodeSharedIdForBackendNodeId { .. }
             | Self::DocumentNodeAttributes { .. }
-            | Self::DocumentNodeTextForBackendNodeId { .. }
-            | Self::DocumentNodePropertyForBackendNodeId { .. }
+            | Self::DocumentNodeText { .. }
+            | Self::DocumentNodeProperty { .. }
+            | Self::AccessibilityTreeNodes { .. }
             | Self::AccessibilityTreePayloadsForDocument { .. }
             | Self::AccessibilityNodePayloadForDocument
-            | Self::AccessibilityTreePayloadsForBackendNodeId { .. }
-            | Self::AccessibilityNodePayloadForBackendNodeId { .. }
-            | Self::AccessibilityNodeAndAncestorPayloadsForBackendNodeId { .. }
-            | Self::AccessibilityChildNodePayloadsForBackendNodeId { .. }
-            | Self::AccessibilityPartialTreePayloadsForBackendNodeId { .. }
+            | Self::AccessibilityTreePayloadsForNode { .. }
+            | Self::AccessibilityNodePayloadForNode { .. }
+            | Self::AccessibilityNodeAndAncestorPayloadsForNode { .. }
+            | Self::AccessibilityChildNodePayloadsForNode { .. }
+            | Self::AccessibilityPartialTreePayloadsForNode { .. }
             | Self::AccessibilityTreePayloadsForChildFrame { .. }
             | Self::AccessibilityNodePayloadForChildFrame { .. }
             | Self::StyleSheetPayloadForStyleSheetId { .. }
             | Self::StyleSheetInventoryForDocument { .. }
             | Self::ResetCssAgentSession { .. }
             | Self::OuterHtmlForDocument { .. }
-            | Self::OuterHtmlForBackendNodeId { .. }
+            | Self::OuterHtmlForNode { .. }
             | Self::SerializeDocument
             | Self::LayoutMetrics
             | Self::PublishLayout
@@ -150,18 +148,18 @@ impl RendererPageCommand {
             | Self::RuntimeCollectGarbage
             | Self::StopDocumentLifecycle
             | Self::SetInlineStyleSheetTextForStyleSheetId { .. }
-            | Self::ScrollBackendNodeIntoViewIfNeeded { .. }
-            | Self::RemoveDocumentBackendNodeId { .. }
-            | Self::MutateDocumentBackendNodeAttribute { .. }
+            | Self::ScrollNodeIntoViewIfNeeded { .. }
+            | Self::RemoveDocumentNode { .. }
+            | Self::MutateDocumentNodeAttribute { .. }
             | Self::EditDocumentNode { .. }
-            | Self::FocusDocumentBackendNode { .. }
+            | Self::FocusDocumentNode { .. }
             | Self::TriggerAutofill(..)
             | Self::ResetNavigationHistory
             | Self::SetFileInputFilesForBackendNodeId { .. }
             | Self::RenderPageDump { .. }
+            | Self::PrintToPdf(..)
             | Self::CaptureScreenshot(..)
-            | Self::SearchTextByLines { .. }
-            | Self::SearchChildFrameResourceByLines { .. }
+            | Self::SearchResourceByLines(..)
             | Self::ContinuePendingSubresourceFetch { .. }
             | Self::ContinuePendingSubresourceAuth { .. }
             | Self::CancelPendingSubresourceAuth { .. }
@@ -185,8 +183,10 @@ impl RendererPageCommand {
             | Self::PublishAppManifestLoad(..)
             | Self::SetIdleOverride(..)
             | Self::SetNavigatorOverrides(..)
+            | Self::SetNavigatorAndDocumentActivity { .. }
             | Self::SetDocumentActivity(..)
             | Self::SetEmulatedMedia(..)
+            | Self::SetScrollbarsHidden(..)
             | Self::SetViewportSurface(..) => OwnerOnly,
 
             #[cfg(test)]

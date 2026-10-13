@@ -21,14 +21,6 @@ pub(crate) enum NetworkActivityOutput {
     SubresourceFetchInterception,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NetworkOutputProjectionStep {
-    PendingSubresourceContinueEvents,
-    RendererNetworkLive,
-    NetworkBacklog,
-    SubresourceFetchInterception,
-}
-
 #[derive(Debug, Default)]
 pub(crate) struct NetworkPreparedOutputs {
     pending_subresource_continue_actions: Vec<PreparedSubresourceContinueAction>,
@@ -361,105 +353,76 @@ pub(in crate::domains) const SLOT_NETWORK_BACKLOG: ProtocolOutputSlot =
 pub(in crate::domains) const SLOT_SUBRESOURCE_FETCH_INTERCEPTION: ProtocolOutputSlot =
     ProtocolOutputSlot::SubresourceFetchInterception;
 
-impl NetworkOutputProjectionStep {
-    async fn project_async(
-        self,
-        conn: &mut CdpConnection,
-        context: &mut ProtocolOutputProjectionContext<'_>,
-        prepared_outputs: Option<&mut ProtocolOutputPayloads>,
-    ) {
-        let owner = context.owner().clone();
-        match self {
-            NetworkOutputProjectionStep::PendingSubresourceContinueEvents => {
-                if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::network_mut) {
-                    slot.emit_pending_subresource_continue_background_events(
-                        conn,
-                        context.command.protocol_events_mut(),
-                        &owner,
-                    )
-                    .await;
-                }
-            }
-            NetworkOutputProjectionStep::RendererNetworkLive => {
-                if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::network_mut) {
-                    slot.emit_renderer_live_background_events(
-                        conn,
-                        context.command.protocol_events_mut(),
-                        &owner,
-                    );
-                }
-            }
-            NetworkOutputProjectionStep::NetworkBacklog => {
-                if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::network_mut) {
-                    slot.emit_backlog_activity_background_events(
-                        conn,
-                        context.command.protocol_events_mut(),
-                        &owner,
-                        context.subresource_frame_id,
-                        context.subresource_timestamp,
-                        context.subresource_network_request_id,
-                    );
-                }
-            }
-            NetworkOutputProjectionStep::SubresourceFetchInterception => {
-                if let Some(pauses) = prepared_outputs
-                    .and_then(ProtocolOutputPayloads::network_mut)
-                    .and_then(NetworkPreparedOutputSlot::take_subresource_fetch_pauses)
-                {
-                    let mut events = Vec::new();
-                    let network_session_ids = conn.network_event_session_ids_for_owner(&owner);
-                    fetch::emit_subresource_fetch_pause_outputs(
-                        conn,
-                        &mut events,
-                        &owner,
-                        &network_session_ids,
-                        pauses,
-                    );
-                    context.command.protocol_events_mut().extend(events);
-                }
-            }
-        }
-    }
-}
-
 pub(in crate::domains) async fn project_pending_subresource_continue_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    NetworkOutputProjectionStep::PendingSubresourceContinueEvents
-        .project_async(conn, context, prepared_outputs)
+    let owner = context.owner().clone();
+    if let Some(slot) = prepared_outputs.network_mut() {
+        slot.emit_pending_subresource_continue_background_events(
+            conn,
+            context.command.protocol_events_mut(),
+            &owner,
+        )
         .await;
+    }
 }
 
 pub(in crate::domains) async fn project_network_backlog_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    NetworkOutputProjectionStep::NetworkBacklog
-        .project_async(conn, context, prepared_outputs)
-        .await;
+    let owner = context.owner().clone();
+    if let Some(slot) = prepared_outputs.network_mut() {
+        slot.emit_backlog_activity_background_events(
+            conn,
+            context.command.protocol_events_mut(),
+            &owner,
+            context.subresource_frame_id,
+            context.subresource_timestamp,
+            context.subresource_network_request_id,
+        );
+    }
 }
 
 pub(in crate::domains) async fn project_renderer_network_live_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    NetworkOutputProjectionStep::RendererNetworkLive
-        .project_async(conn, context, prepared_outputs)
-        .await;
+    let owner = context.owner().clone();
+    if let Some(slot) = prepared_outputs.network_mut() {
+        slot.emit_renderer_live_background_events(
+            conn,
+            context.command.protocol_events_mut(),
+            &owner,
+        );
+    }
 }
 
 pub(in crate::domains) async fn project_subresource_fetch_interception_async(
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    NetworkOutputProjectionStep::SubresourceFetchInterception
-        .project_async(conn, context, prepared_outputs)
-        .await;
+    let owner = context.owner().clone();
+    if let Some(pauses) = prepared_outputs
+        .network_mut()
+        .and_then(NetworkPreparedOutputSlot::take_subresource_fetch_pauses)
+    {
+        let mut events = Vec::new();
+        let network_session_ids = conn.network_event_session_ids_for_owner(&owner);
+        fetch::emit_subresource_fetch_pause_outputs(
+            conn,
+            &mut events,
+            &owner,
+            &network_session_ids,
+            pauses,
+        );
+        context.command.protocol_events_mut().extend(events);
+    }
 }
 
 pub(in crate::domains) fn network_backlog_prepared_outputs_for_owner(
@@ -646,8 +609,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::NetworkOutputProjectionStep::PendingSubresourceContinueEvents
-            .project_async(&mut conn, &mut context, Some(&mut prepared))
+        super::project_pending_subresource_continue_async(&mut conn, &mut context, &mut prepared)
             .await;
 
         assert!(
@@ -776,8 +738,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::NetworkOutputProjectionStep::SubresourceFetchInterception
-            .project_async(&mut conn, &mut context, Some(&mut prepared))
+        super::project_subresource_fetch_interception_async(&mut conn, &mut context, &mut prepared)
             .await;
 
         assert!(
@@ -834,8 +795,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::NetworkOutputProjectionStep::SubresourceFetchInterception
-            .project_async(&mut conn, &mut context, Some(&mut prepared))
+        super::project_subresource_fetch_interception_async(&mut conn, &mut context, &mut prepared)
             .await;
 
         let out = context

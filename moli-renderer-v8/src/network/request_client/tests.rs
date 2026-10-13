@@ -94,7 +94,14 @@ fn loader_clones_share_one_resource_disk_pool() {
 fn loader_clones_share_one_parkable_image_manager() {
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
     let clone = loader.clone();
-    let runner = crate::network::RendererResourceTaskRunner::for_test();
+    // Test shared ownership without a concurrent sweep temporarily retaining
+    // the image. Background scheduling has its own live-runtime coverage.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("image-manager ownership test runtime");
+    let runner =
+        crate::network::RendererResourceTaskRunner::from_tokio_handle(runtime.handle().clone());
     let image = loader
         .parkable_image_manager(&runner)
         .from_frozen_bytes(vec![7; 2 * 1024]);
@@ -271,6 +278,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
     let (mut completion_tx, completion_rx) = oneshot::channel();
     let inner = StreamingRawResponse::new_with_head(
         ResponseHead {
+            status_text: None,
             final_url: request.url.clone(),
             status: 200,
             headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
@@ -1570,6 +1578,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
     let final_url = Url::parse("http://example.test/final.txt")?;
     let response = RawResponse::from_head_and_body(
         ResponseHead {
+            status_text: None,
             final_url: final_url.clone(),
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],

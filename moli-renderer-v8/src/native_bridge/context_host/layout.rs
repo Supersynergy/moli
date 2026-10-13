@@ -14,6 +14,16 @@ use crate::{
     style_engine::{StyleViewport, StyloStyleEnvironment},
 };
 
+/// Invalidation required by a changed native input. Publication is a separate
+/// owner decision; these changes retain the last frozen layout for readers.
+#[derive(Clone, Copy)]
+pub(crate) enum LayoutInputChange {
+    /// Media and viewport changes invalidate computed styles through Stylo.
+    StyleEnvironment,
+    /// Scrollbar policy and interactions change future geometry/paint output.
+    UsedGeometry,
+}
+
 /// Resets the entry flag on every return path, including unwinding.
 ///
 /// This is a synchronous ownership guard, not a generation or a retry fence.
@@ -55,6 +65,33 @@ impl JsContextHost {
 
     pub(crate) const fn layout_policy(&self) -> moli_page_types::LayoutPolicy {
         self.layout_policy
+    }
+
+    pub(crate) fn set_scrollbars_hidden(&mut self, hidden: bool) -> bool {
+        let changed = self.scrollbars_hidden != hidden;
+        if changed {
+            self.scrollbars_hidden = hidden;
+            self.invalidate_layout_inputs(LayoutInputChange::UsedGeometry);
+        }
+        changed
+    }
+
+    pub(crate) fn invalidate_layout_inputs(&self, change: LayoutInputChange) {
+        match change {
+            LayoutInputChange::StyleEnvironment => self
+                .style_engine
+                .bump_target_context_epoch_for_document(self.document_handle()),
+            LayoutInputChange::UsedGeometry => {
+                self.clear_layout_rect_cache();
+                self.document_layout_state
+                    .borrow_mut()
+                    .mark_visual_state_dirty();
+            }
+        }
+    }
+
+    pub(crate) const fn scrollbars_hidden(&self) -> bool {
+        self.scrollbars_hidden
     }
 
     pub(crate) fn active_layout_document_handles(&self) -> Vec<DomHandle> {
@@ -505,12 +542,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn invalidate_layout_after_interaction_state_change(&self) {
-        self.clear_layout_rect_cache();
-        // Interactions dirty future visual publication, while ordinary geometry
-        // and input keep consuming the last published frozen snapshot.
-        self.document_layout_state
-            .borrow_mut()
-            .mark_visual_state_dirty();
+        self.invalidate_layout_inputs(LayoutInputChange::UsedGeometry);
     }
 
     pub(crate) fn document_web_font_resources_are_current(
@@ -557,7 +589,21 @@ impl JsContextHost {
         &self,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        self.document_layout_state.borrow_mut().complete(terminal)
+        let completion = self.document_layout_state.borrow_mut().complete(terminal);
+        if matches!(&completion, DocumentWebFontCompletion::Registered(_)) {
+            // Geometry sampled while the request was pending contains fallback
+            // glyph advances. Retire that tree before fonts.ready observers run.
+            self.document_layout_state
+                .borrow_mut()
+                .clear_latest_layout();
+        }
+        completion
+    }
+
+    pub(crate) fn document_web_fonts_have_pending_requests(&self) -> bool {
+        self.document_layout_state
+            .borrow()
+            .web_fonts_have_pending_requests()
     }
 
     #[cfg(test)]
@@ -580,6 +626,22 @@ impl JsContextHost {
             self.completed_layout_pass_time.get(),
             self.last_layout_pass_metrics.get(),
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_layout_test_font(&self, family: &str, bytes: Vec<u8>) {
+        let document = self.document_handle();
+        self.document_layout_state
+            .borrow_mut()
+            .with_services_for_document(document, document, |services, _| {
+                services
+                    .register_web_font(moli_layout::WebFontRegistration::new(
+                        "layout-test-font",
+                        moli_layout::WebFontFace::new(family),
+                        bytes,
+                    ))
+                    .expect("valid layout test font");
+            });
     }
 
     #[cfg(test)]

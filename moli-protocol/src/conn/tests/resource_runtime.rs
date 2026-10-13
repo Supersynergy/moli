@@ -71,6 +71,9 @@ async fn commit_navigation_outcome_for_session_test(
         NavigationLoadOutcome::Download(_) => {
             panic!("test navigation should not resolve to a download")
         }
+        NavigationLoadOutcome::NoContent(_) => {
+            panic!("test navigation should produce a document")
+        }
         NavigationLoadOutcome::NetworkFailure(error_text) => {
             panic!("test navigation should not fail: {error_text}")
         }
@@ -103,6 +106,10 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
 
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
     let navigation = NavigationDispatchState {
+        web_mcp_invocation: None,
+        navigation_initiator: None,
+        initial_document_environment: None,
+        auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: Some(1),

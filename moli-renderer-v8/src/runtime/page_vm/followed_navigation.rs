@@ -17,7 +17,6 @@ use crate::runtime::{
     ExternalRawDocumentBodyStream, PageId, PageVmFollowNavigationTurnOutcome,
     PageVmFollowedNavigationBuildOutcome, PageVmFollowedNavigationMetadata, PageVmInitStage,
     PageVmPendingPhaseOneNavigation, PendingDocumentLifecycleTurn, RendererBrowserContextRuntime,
-    RendererDocumentLifecycleTransition, RendererDocumentTerminationReason,
     RendererLifecycleStartReason, RendererPendingDownloadActivation,
     RendererPendingDownloadResponse,
 };
@@ -481,6 +480,7 @@ fn about_blank_navigation_response(url: &Url) -> Option<moli_fetch::Response> {
     }
     Some(moli_fetch::Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: url.clone(),
             status: 200,
             headers: vec![(
@@ -526,10 +526,34 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     service_worker_client_navigate: Option<crate::types::ServiceWorkerClientNavigateContinuation>,
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     stage: PageVmInitStage,
 }
 
-struct PageVmCommittedNavigationBootstrapPayload {
+/// All fallible checks and bootstrap allocations complete while the source
+/// Page remains live. Consuming this value does not itself detach or retire it.
+pub(in crate::runtime) struct PageVmValidatedFollowedNavigationCommit {
+    source_commit: PageVmSourceDocumentCommit,
+    navigation: Box<PageVmCommittedNavigationBootstrap>,
+}
+
+impl PageVmValidatedFollowedNavigationCommit {
+    pub(in crate::runtime) fn into_parts(
+        self,
+    ) -> (
+        PageVmSourceDocumentCommit,
+        Box<PageVmCommittedNavigationBootstrap>,
+    ) {
+        (self.source_commit, self.navigation)
+    }
+}
+
+pub(in crate::runtime) enum PageVmSourceDocumentCommit {
+    ReplaceWindow(crate::script_vm::MainWindowProxyNavigationCommit),
+    ReuseInitialWindow(std::rc::Rc<std::cell::RefCell<Option<crate::script_vm::ScriptVm>>>),
+}
+
+struct FollowedNavigationBootstrapPayload {
     page_id: PageId,
     local_executor: JsLocalExecutor,
     request_client: ResourceRequestClient,
@@ -538,6 +562,19 @@ struct PageVmCommittedNavigationBootstrapPayload {
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     loaded: LoadedFollowedLocationNavigation,
     stage: PageVmInitStage,
+}
+
+enum PageVmCommittedNavigationBootstrapPayload {
+    Followed(Box<FollowedNavigationBootstrapPayload>),
+    PreparedResponse(Box<PreparedResponseBootstrapPayload>),
+}
+
+struct PreparedResponseBootstrapPayload {
+    page_id: PageId,
+    local_executor: JsLocalExecutor,
+    runtime_hooks: PageVmRuntimeHooks,
+    request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
+    navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
 }
 
 /// Owns all continuation state after the source Document has committed away
@@ -557,25 +594,76 @@ pub(in crate::runtime) struct PageVmCommittedNavigationBootstrap {
 }
 
 impl PageVmCommittedNavigationBootstrap {
+    #[cfg(test)]
+    pub(in crate::runtime) fn inject_commit_panic_for_test(&self, injection_header: &str) {
+        if self.payload.as_ref().is_some_and(|payload| match payload {
+            PageVmCommittedNavigationBootstrapPayload::Followed(payload) => {
+                payload.loaded.has_header_for_test(injection_header)
+            }
+            PageVmCommittedNavigationBootstrapPayload::PreparedResponse(payload) => payload
+                .request
+                .response_headers
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case(injection_header) && value == b"1"),
+        }) {
+            panic!("injected navigation commit panic for testing: {injection_header}");
+        }
+    }
+
     pub(in crate::runtime) async fn bootstrap(
         &mut self,
     ) -> Result<PageVmFollowedNavigationBuildOutcome> {
         let payload = self.payload.take().ok_or_else(|| {
             anyhow!("committed location-navigation bootstrap was already consumed")
         })?;
-        bootstrap_committed_followed_location_navigation(
-            payload.page_id,
-            payload.local_executor,
-            payload.request_client,
-            payload.env,
-            payload.runtime_hooks,
-            payload.navigation_bootstrap_entry,
-            self.reserved_service_worker_client_id,
-            payload.stage,
-            payload.loaded,
-            FollowedLocationNavigationBootstrapBoundary::DocumentCommit,
-        )
-        .await
+        match payload {
+            PageVmCommittedNavigationBootstrapPayload::Followed(payload) => {
+                bootstrap_committed_followed_location_navigation(
+                    payload.page_id,
+                    payload.local_executor,
+                    payload.request_client,
+                    payload.env,
+                    payload.runtime_hooks,
+                    payload.navigation_bootstrap_entry,
+                    self.reserved_service_worker_client_id,
+                    payload.stage,
+                    payload.loaded,
+                    FollowedLocationNavigationBootstrapBoundary::DocumentCommit,
+                )
+                .await
+            }
+            PageVmCommittedNavigationBootstrapPayload::PreparedResponse(payload) => {
+                let PreparedResponseBootstrapPayload {
+                    page_id,
+                    local_executor,
+                    runtime_hooks,
+                    request,
+                    navigation_bootstrap_entry,
+                } = *payload;
+                let mut response = PageVmNavigationResponse {
+                    requested_url: request.requested_url.clone(),
+                    redirected: request.navigation_redirected,
+                    redirect_count: request.navigation_redirect_count,
+                    redirect_chain: request.navigation_redirect_chain.clone(),
+                    status: request.response_status,
+                    headers: request.response_headers.clone(),
+                };
+                let result = request
+                    .bootstrap_with_navigation_seed(
+                        page_id,
+                        local_executor,
+                        runtime_hooks,
+                        navigation_bootstrap_entry,
+                    )
+                    .await?;
+                let (mut outcome, status, headers) =
+                    streaming_navigation_result_to_turn_outcome(result).await?;
+                response.status = status;
+                response.headers = headers;
+                attach_followed_navigation_response(&mut outcome, response);
+                Ok(outcome)
+            }
+        }
     }
 
     pub(in crate::runtime) fn finalize_build_outcome(
@@ -687,6 +775,7 @@ impl PageVm {
             .reserved_service_worker_client
             .map(|reserved| reserved.release());
         let service_worker_client_navigate = pending.service_worker_client_navigate;
+        let web_mcp_invocation = pending.web_mcp_invocation;
         tracing::debug!(stage = ?stage, %url, "following pending location navigation asynchronously");
 
         if navigation_kind == crate::native_bridge::PendingLocationNavigationKind::JavascriptUrl {
@@ -755,6 +844,9 @@ impl PageVm {
         {
             Ok(loaded) => loaded,
             Err(error) => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
                 self.reject_failed_followed_location_navigation(
                     &initiator_url,
                     reserved_service_worker_client_id,
@@ -766,6 +858,9 @@ impl PageVm {
         };
         let loaded = match loaded {
             LoadedFollowedLocationNavigation::NoDocument => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
                 self.abort_followed_navigation_without_document(
                     &initiator_url,
                     reserved_service_worker_client_id,
@@ -776,6 +871,9 @@ impl PageVm {
                 )));
             }
             LoadedFollowedLocationNavigation::Download(download) => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
                 self.abort_followed_navigation_without_document(
                     &initiator_url,
                     reserved_service_worker_client_id,
@@ -789,21 +887,6 @@ impl PageVm {
             | LoadedFollowedLocationNavigation::ExternalDocument { .. }) => loaded,
         };
 
-        let termination = self.document_lifecycle.request_termination(
-            self.document_lifecycle.identity(),
-            RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
-        );
-        debug_assert!(
-            matches!(
-                termination,
-                RendererDocumentLifecycleTransition::Recorded(_)
-                    | RendererDocumentLifecycleTransition::Deferred
-                    | RendererDocumentLifecycleTransition::Duplicate
-            ),
-            "cross-document navigation should terminate the active renderer document: {termination:?}"
-        );
-        *pending_document_lifecycle_turn = None;
-
         Ok(PageVmDocumentCommitPreparation::Prepared(Box::new(
             PageVmPreparedFollowedNavigationCommit {
                 initiator_url,
@@ -812,6 +895,7 @@ impl PageVm {
                 navigation_bootstrap_entry: pending.entry_seed,
                 reserved_service_worker_client_id,
                 service_worker_client_navigate,
+                web_mcp_invocation,
                 stage,
             },
         )))
@@ -829,6 +913,7 @@ impl PageVm {
             navigation_bootstrap_entry,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
+            web_mcp_invocation,
             stage,
             ..
         } = prepared;
@@ -837,6 +922,7 @@ impl PageVm {
                 loaded,
                 navigation_bootstrap_entry,
                 reserved_service_worker_client_id,
+                web_mcp_invocation,
                 stage,
                 FollowedLocationNavigationBootstrapBoundary::ContinuePhaseOne,
             )
@@ -928,10 +1014,10 @@ impl PageVm {
         })
     }
 
-    pub(in crate::runtime) fn commit_prepared_followed_location_navigation(
+    pub(in crate::runtime) fn validate_prepared_followed_location_navigation(
         &mut self,
         prepared: PageVmPreparedFollowedNavigationCommit,
-    ) -> Result<PageVmCommittedNavigationBootstrap> {
+    ) -> Result<PageVmValidatedFollowedNavigationCommit> {
         let PageVmPreparedFollowedNavigationCommit {
             initiator_url,
             navigation_handoff,
@@ -939,46 +1025,193 @@ impl PageVm {
             navigation_bootstrap_entry,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
+            web_mcp_invocation,
             stage,
         } = prepared;
         let env = self.followed_location_navigation_env();
-        let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        runtime_hooks.web_mcp_navigation = web_mcp_invocation.clone();
+        #[cfg(test)]
+        let runtime_hooks = {
+            let mut runtime_hooks = runtime_hooks;
+            if loaded.has_header_for_test("x-moli-test-missing-navigation-script-environment") {
+                runtime_hooks.renderer_page_script_environment = None;
+            }
+            runtime_hooks
+        };
         let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
         let local_executor = self.local_executor.clone();
         let request_client = self.request_client.clone();
         let page_id = self.page_id;
+        #[cfg(test)]
+        let commit_page_id =
+            if loaded.has_header_for_test("x-moli-test-mismatched-navigation-page-id") {
+                PageId::new_for_testing(page_id.as_u64() + 1)
+            } else {
+                page_id
+            };
+        #[cfg(not(test))]
+        let commit_page_id = page_id;
         let commit_result = (|| {
             ensure!(
                 runtime_hooks.has_renderer_page_script_environment(),
                 "owner-managed navigation commit requires a renderer Page script environment"
             );
-            self.commit_main_window_proxy_navigation()
+            self.prepare_main_window_proxy_navigation(commit_page_id)
         })();
-        if let Err(error) = commit_result {
-            self.reject_failed_followed_location_navigation(
-                &initiator_url,
-                reserved_service_worker_client_id,
-                service_worker_client_navigate,
-                &error,
-            );
-            return Err(error);
-        }
-        Ok(PageVmCommittedNavigationBootstrap {
-            payload: Some(PageVmCommittedNavigationBootstrapPayload {
-                page_id,
-                local_executor,
-                request_client,
-                env,
-                runtime_hooks,
-                navigation_bootstrap_entry,
-                loaded,
-                stage,
-            }),
+        let window_proxy_commit = match commit_result {
+            Ok(commit) => commit,
+            Err(error) => {
+                if let Some(id) = web_mcp_invocation {
+                    self.vm_mut().fail_web_mcp_navigation(id);
+                }
+                self.reject_failed_followed_location_navigation(
+                    &initiator_url,
+                    reserved_service_worker_client_id,
+                    service_worker_client_navigate,
+                    &error,
+                );
+                return Err(error);
+            }
+        };
+        let navigation = Box::new(PageVmCommittedNavigationBootstrap {
+            payload: Some(PageVmCommittedNavigationBootstrapPayload::Followed(
+                Box::new(FollowedNavigationBootstrapPayload {
+                    page_id,
+                    local_executor,
+                    request_client,
+                    env,
+                    runtime_hooks,
+                    navigation_bootstrap_entry,
+                    loaded,
+                    stage,
+                }),
+            )),
             browser_context_runtime,
             initiator_url: Some(initiator_url),
             navigation_handoff,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
+        });
+        Ok(PageVmValidatedFollowedNavigationCommit {
+            source_commit: PageVmSourceDocumentCommit::ReplaceWindow(window_proxy_commit),
+            navigation,
+        })
+    }
+
+    pub(in crate::runtime) fn validate_prepared_document_response(
+        &mut self,
+        request: crate::runtime::owner::RendererCreateStreamingRawPageRequest,
+        mut bootstrap: crate::script_vm::RendererDocumentIsolateBootstrap,
+        reservation: crate::runtime::owner_local_store::RendererDocumentIsolateReservation,
+    ) -> Result<PageVmValidatedFollowedNavigationCommit> {
+        request.validate_bootstrap_configuration()?;
+        let navigation_bootstrap_entry = match request
+            .main_document_commit
+            .as_ref()
+            .and_then(|commit| commit.session_history_position)
+        {
+            Some(position) => self
+                .vm_mut()
+                .capture_inherited_history_for_browser_commit(&request.final_url, position)?,
+            None => None,
+        };
+        if moli_url::is_about_blank(&request.final_url)
+            && let Some(replacement) = request.document_replacement.as_ref()
+        {
+            if let Some(environment) = replacement.initial_document_environment.as_ref() {
+                bootstrap.initial_document_environment = Some(
+                    environment.take(
+                        bootstrap
+                            .clone_renderer_document_isolate_handle_for_owner_retention()
+                            .identity_key(),
+                    )?,
+                );
+            } else if let Some(preserve_referrer) = replacement.reload_preserves_navigation_referrer
+            {
+                bootstrap.initial_document_environment = Some(
+                    self.vm_mut()
+                        .capture_about_blank_reload_environment(preserve_referrer)?,
+                );
+            }
+        }
+        ensure!(
+            request.lifecycle_decider.is_none(),
+            "a Page replacement cannot use a Page-creation lifecycle decider"
+        );
+        let environment = self
+            .runtime_hooks
+            .renderer_page_script_environment
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow!("prepared replacement requires the current Page script environment")
+            })?;
+        let navigation_handoff = environment
+            .page_runtime_task_source()
+            .next_top_level_navigation_handoff();
+        let policy = bootstrap
+            .initial_document_environment
+            .as_ref()
+            .map(|environment| environment.policy_container.clone())
+            .unwrap_or_else(|| {
+                crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                    &request.response_headers,
+                    &request.final_url,
+                )
+                .with_content_security_policy_bypass(
+                    request.document_settings.bypass_content_security_policy,
+                )
+            });
+        let origin = bootstrap
+            .initial_document_environment
+            .as_ref()
+            .map(|environment| environment.origin().to_owned())
+            .unwrap_or_else(|| moli_url::origin_ascii_serialization(&request.final_url));
+        let local_window_transition = self.vm().initial_window_transition_for_commit(
+            &origin,
+            &policy,
+            bootstrap.initial_document_environment.as_ref(),
+        )?;
+        let mut runtime_hooks = self
+            .runtime_hooks
+            .clone()
+            .for_cross_document_commit()
+            .with_prepared_renderer_document_isolate(bootstrap, reservation)?;
+        let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
+        let local_executor = self.local_executor.clone();
+        let page_id = self.page_id;
+        // Prepare the ownership action while the source is live. The local-task
+        // guard publishes Committed before detaching or transferring this Window.
+        let source_commit = if local_window_transition
+            == crate::frame_owner_model::FrameDocumentLocalWindowTransition::ReuseInitialEmptyLocalWindow
+        {
+            let window = std::rc::Rc::new(std::cell::RefCell::new(None));
+            runtime_hooks.reused_initial_window = Some(window.clone());
+            PageVmSourceDocumentCommit::ReuseInitialWindow(window)
+        } else {
+            PageVmSourceDocumentCommit::ReplaceWindow(
+                self.prepare_main_window_proxy_navigation(page_id)?,
+            )
+        };
+        let navigation = Box::new(PageVmCommittedNavigationBootstrap {
+            payload: Some(PageVmCommittedNavigationBootstrapPayload::PreparedResponse(
+                Box::new(PreparedResponseBootstrapPayload {
+                    page_id,
+                    local_executor,
+                    runtime_hooks,
+                    request,
+                    navigation_bootstrap_entry,
+                }),
+            )),
+            browser_context_runtime,
+            initiator_url: None,
+            navigation_handoff,
+            reserved_service_worker_client_id: None,
+            service_worker_client_navigate: None,
+        });
+        Ok(PageVmValidatedFollowedNavigationCommit {
+            source_commit,
+            navigation,
         })
     }
 
@@ -1192,13 +1425,10 @@ impl PageVm {
             },
             document_default_language: None,
             document_last_modified: None,
-            script_execution_disabled: self.script_execution_disabled(),
-            bypass_content_security_policy: self.bypass_content_security_policy,
-            emulated_media: self.emulated_media.clone(),
-            idle_override: self.idle_override,
-            navigator_overrides: self.navigator_overrides.clone(),
-            viewport_surface: self.viewport_surface,
-            document_activity: self.document_activity,
+            document_settings: moli_page_types::DocumentSettings {
+                script_execution_disabled: self.script_execution_disabled(),
+                ..self.document_settings.clone()
+            },
             network_offline: self.network_offline,
             blocked_url_patterns: self.blocked_url_patterns.clone(),
             indexed_db_manager: self.indexed_db_manager.clone(),
@@ -1206,7 +1436,7 @@ impl PageVm {
             fetch_subresource_interception_enabled: self.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: self
                 .fetch_subresource_interception_resource_type,
-            layout_policy: self.layout_policy,
+            layout_configuration: self.layout_configuration,
             wpt_extensions_enabled: self.wpt_extensions_enabled,
             root_frame_id: self.vm().root_frame_id().map(str::to_owned),
             top_level_storage_key: None,
@@ -1223,6 +1453,7 @@ impl PageVm {
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
         >,
+        web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
         stage: PageVmInitStage,
         boundary: FollowedLocationNavigationBootstrapBoundary,
     ) -> Result<PageVmFollowedNavigationBuildOutcome> {
@@ -1236,9 +1467,21 @@ impl PageVm {
                 | LoadedFollowedLocationNavigation::ExternalDocument { .. }
         ));
         let env = self.followed_location_navigation_env();
-        let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
+        runtime_hooks.web_mcp_navigation = web_mcp_invocation;
         if runtime_hooks.has_renderer_page_script_environment() {
-            self.commit_main_window_proxy_navigation()?;
+            self.prepare_main_window_proxy_navigation(self.page_id)?
+                .detach();
+            self.record_main_navigation_commit();
+            self.retire_committed_main_script_vm();
+        } else {
+            self.record_main_navigation_commit();
+            // This low-level fixture deliberately rebuilds an isolate while
+            // retaining the Page task sources. Retire the old registration
+            // before rebinding that source; production Page replacements
+            // retain their admitted isolate and take the branch above.
+            self.vm()
+                .unregister_document_isolate_platform_for_context_teardown();
         }
         bootstrap_committed_followed_location_navigation(
             self.page_id,

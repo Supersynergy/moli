@@ -218,9 +218,8 @@ pub(super) use detached_surface::{
     bridge_detached_character_data_getter_callback, bridge_detached_character_data_setter_callback,
     bridge_detached_child_element_count_callback, bridge_detached_child_nodes_callback,
     bridge_detached_children_callback, bridge_detached_clone_node_callback,
-    bridge_detached_contains_callback, bridge_detached_create_cdata_section_callback,
-    bridge_detached_create_comment_callback, bridge_detached_create_document_fragment_callback,
-    bridge_detached_create_element_callback,
+    bridge_detached_create_cdata_section_callback, bridge_detached_create_comment_callback,
+    bridge_detached_create_document_fragment_callback, bridge_detached_create_element_callback,
     bridge_detached_create_processing_instruction_callback, bridge_detached_create_text_callback,
     bridge_detached_doctype_name_callback, bridge_detached_doctype_public_id_callback,
     bridge_detached_doctype_system_id_callback, bridge_detached_document_base_uri_callback,
@@ -238,8 +237,7 @@ pub(super) use detached_surface::{
     bridge_detached_get_attribute_names_callback, bridge_detached_get_attribute_ns_callback,
     bridge_detached_has_attribute_callback, bridge_detached_has_attribute_ns_callback,
     bridge_detached_has_child_nodes_callback, bridge_detached_insert_before_callback,
-    bridge_detached_is_connected_callback, bridge_detached_is_equal_node_callback,
-    bridge_detached_is_same_node_callback, bridge_detached_last_child_callback,
+    bridge_detached_is_connected_callback, bridge_detached_last_child_callback,
     bridge_detached_last_element_child_callback, bridge_detached_move_before_callback,
     bridge_detached_next_element_sibling_callback, bridge_detached_next_sibling_callback,
     bridge_detached_node_name_callback, bridge_detached_node_type_callback,
@@ -299,6 +297,7 @@ pub(in crate::native_bridge::document) use structure::set_document_body_for_nati
 
 pub(crate) const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
+pub(crate) const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 
 #[derive(WebApiFunctionTemplate)]
@@ -343,6 +342,11 @@ struct DocumentStructurePrototypeDeclaration {
         getter = document_document_element_getter_function
     )]
     document_element: (),
+    #[webapi(
+        accessor_property = "rootElement",
+        getter = document_root_element_getter_function
+    )]
+    root_element: (),
     #[webapi(accessor_property, getter = document_doctype_getter_function)]
     doctype: (),
     #[webapi(accessor_property, getter = document_head_getter_function)]
@@ -399,6 +403,11 @@ struct DocumentStatePrototypeDeclaration {
     visibility_state: (),
     #[webapi(accessor_property, getter = document_prerendering_getter_function)]
     prerendering: (),
+    #[webapi(
+        accessor_property = "wasDiscarded",
+        getter = document_was_discarded_getter_function
+    )]
+    was_discarded: (),
     #[webapi(
         accessor_property,
         getter = document_domain_getter_function,
@@ -696,6 +705,31 @@ fn document_document_element_getter_function<'s>(
     set_document_node_return_value_for_receiver(scope, &mut rv, runtime_ptr, receiver, element);
 }
 
+fn document_root_element_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("generated receiver check validates native Document identity");
+    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
+        rv.set_null();
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    let dom = runtime.dom_host().dom();
+    let root = dom
+        .node(handle)
+        .and_then(Node::as_document)
+        .and_then(|document| document.document_element_handle(dom, handle))
+        .filter(|root| {
+            dom.node(*root).is_some_and(|node| {
+                node.namespace() == Some(SVG_NS) && node.local_name() == Some("svg")
+            })
+        });
+    set_document_node_return_value_for_receiver(scope, &mut rv, runtime_ptr, receiver, root);
+}
+
 fn document_doctype_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -941,6 +975,14 @@ fn document_referrer_getter_function<'s>(
     let referrer = runtime
         .child_browsing_context_referrer_for_document_handle(handle)
         .or_else(|| runtime.lightweight_popup_referrer_for_document_handle(handle))
+        .or_else(|| {
+            (handle == runtime.document_handle()).then(|| {
+                runtime
+                    .document_policy_container()
+                    .document_referrer
+                    .as_str()
+            })
+        })
         .unwrap_or("");
     set_document_string_return_value(scope, &mut rv, referrer);
 }
@@ -1107,6 +1149,14 @@ fn document_prerendering_getter_function<'s>(
         rv.set_undefined();
         return;
     }
+    rv.set_bool(false);
+}
+
+fn document_was_discarded_getter_function<'s>(
+    _scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
     rv.set_bool(false);
 }
 

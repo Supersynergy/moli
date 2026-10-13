@@ -110,8 +110,13 @@ pub(super) enum ClientTurnPredecessor {
 impl ProtocolSchedulerResidence {
     pub(super) fn navigation_dependency(&self) -> ProtocolNavigationDependency {
         match self {
+            // These events were already authorized and projected from a
+            // concrete renderer publication. Their exact load and client-turn
+            // predecessors control delivery. A new NavigationRequest on the
+            // same target must not also suspend the active document's output
+            // until that unrelated response arrives.
+            Self::RendererOutputPublication(_) => ProtocolNavigationDependency::Independent,
             Self::ProtocolWork { work, .. } => work.navigation_dependency(),
-            Self::RendererOutputPublication(_) => ProtocolNavigationDependency::AfterLoad,
         }
     }
 
@@ -519,6 +524,6 @@ fn protocol_residence_is_external_load_wait_activity(
                 && load_predecessors.is_empty()
                 && (work.is_root_frame_stopped_loading()
                 || work.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                || work.is_top_level_location_navigation_owner_action())
+                || work.navigation_dependency() == ProtocolNavigationDependency::ReplacesPendingLoad)
     )
 }

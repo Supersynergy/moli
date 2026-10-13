@@ -1,3 +1,4 @@
+use super::super::message;
 use super::*;
 use crate::web_api_interfaces;
 
@@ -42,9 +43,56 @@ fn event_subclass_constructor_callback<'s>(
             init_arg.to_object(scope)
         }
     };
-    let (bubbles, cancelable, composed) = read_event_init(scope, &args);
+    let storage_event_init = if kind == EventSubclassKind::StorageEvent {
+        let Some(init) = data::parse_storage_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let security_policy_init = if kind == EventSubclassKind::SecurityPolicyViolationEvent {
+        let Some(init) = security_policy::parse_security_policy_violation_event_init(scope, &args)
+        else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let message_event_init = if kind == EventSubclassKind::MessageEvent {
+        let Some(init) = message::parse_message_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let error_init = if kind == EventSubclassKind::ErrorEvent {
+        let Some(init) = error::parse_error_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let (bubbles, cancelable, composed) = security_policy_init
+        .as_ref()
+        .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
+        .or_else(|| error_init.as_ref().map(error::ErrorEventInit::event_flags))
+        .or_else(|| {
+            storage_event_init
+                .as_ref()
+                .map(data::StorageEventInitMembers::event_flags)
+        })
+        .or_else(|| {
+            message_event_init
+                .as_ref()
+                .map(message::MessageEventInit::event_flags)
+        })
+        .unwrap_or_else(|| read_event_init(scope, &args));
 
-    initialize_event_object(scope, event, &event_type, bubbles, cancelable);
+    initialize_event_object_with_type(scope, event, event_type, bubbles, cancelable);
     define_event_property(
         scope,
         event,
@@ -111,22 +159,30 @@ fn event_subclass_constructor_callback<'s>(
         EventSubclassKind::TouchEvent => {
             crate::context_bootstrap::touch_runtime::initialize_touch_event(scope, event, init);
         }
-        EventSubclassKind::MessageEvent => data::initialize_message_event(scope, event, init),
+        EventSubclassKind::MessageEvent => message::initialize_message_event(
+            scope,
+            event,
+            message_event_init.expect("MessageEvent init should be parsed"),
+        ),
         EventSubclassKind::StorageEvent => {
-            if !data::initialize_storage_event(scope, event, init) {
-                return;
-            }
+            data::initialize_storage_event(
+                scope,
+                event,
+                storage_event_init.expect("StorageEvent init should be parsed"),
+            );
         }
-        EventSubclassKind::ErrorEvent => data::initialize_error_event(scope, event, init),
+        EventSubclassKind::ErrorEvent => error_init
+            .expect("ErrorEvent init is parsed")
+            .initialize(scope, event),
         EventSubclassKind::PromiseRejectionEvent => {
             if !data::initialize_promise_rejection_event(scope, event, init) {
                 return;
             }
         }
         EventSubclassKind::SecurityPolicyViolationEvent => {
-            if !data::initialize_security_policy_violation_event(scope, event, init) {
-                return;
-            }
+            security_policy_init
+                .expect("SecurityPolicyViolationEvent init is parsed")
+                .initialize(scope, event);
         }
         EventSubclassKind::NavigationCurrentEntryChangeEvent => {
             if !data::initialize_navigation_current_entry_change_event(scope, event, init) {
@@ -157,6 +213,11 @@ fn event_subclass_constructor_callback<'s>(
         }
         EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
         EventSubclassKind::PopStateEvent => data::initialize_pop_state_event(scope, event, init),
+        EventSubclassKind::HashChangeEvent => {
+            if !data::initialize_hash_change_event(scope, event, init) {
+                return;
+            }
+        }
         EventSubclassKind::PageTransitionEvent => {
             data::initialize_page_transition_event(scope, event, init);
         }

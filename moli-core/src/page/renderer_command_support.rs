@@ -126,6 +126,10 @@ impl Page {
         self.handle.owner_local_host_id()
     }
 
+    pub fn document_isolate_identity_for_diagnostics(&self) -> usize {
+        self.page_state.state().document_isolate_identity
+    }
+
     pub fn service_worker_client_id(&self) -> u64 {
         self.page_state.state().service_worker_client_id
     }
@@ -340,13 +344,20 @@ impl Page {
         )
     }
 
+    pub fn start_computed_style_properties(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::ComputedStyleProperties { reference })
+    }
+
     pub fn start_computed_style_properties_for_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::ComputedStylePropertiesForBackendNodeId { backend_node_id },
-        )
+        self.start_computed_style_properties(RendererDomNodeReference::BackendNodeId(
+            backend_node_id,
+        ))
     }
 
     pub fn start_computed_style_properties_for_object_id_in_inspector_session(
@@ -402,15 +413,23 @@ impl Page {
         ))
     }
 
+    pub fn start_scroll_node_into_view_if_needed(
+        &self,
+        reference: RendererDomNodeReference,
+        rect: Option<moli_page_types::DomScrollIntoViewRect>,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::ScrollNodeIntoViewIfNeeded { reference, rect })
+    }
+
     pub fn start_scroll_backend_node_into_view_if_needed(
         &self,
         backend_node_id: u32,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ScrollBackendNodeIntoViewIfNeeded {
-            backend_node_id,
+        self.start_scroll_node_into_view_if_needed(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
             rect,
-        })
+        )
     }
 
     pub fn finish_node_has_geometry_for_object_id(
@@ -543,20 +562,34 @@ impl Page {
         self.finish_document_geometry(completion, "document geometry object id page command")
     }
 
+    pub fn start_document_geometry_for_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentGeometryForNode { reference })
+    }
+
     pub fn start_document_geometry_for_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentGeometryForBackendNodeId {
+        self.start_document_geometry_for_node(RendererDomNodeReference::BackendNodeId(
             backend_node_id,
-        })
+        ))
     }
 
     pub fn finish_document_geometry_for_backend_node_id(
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<Option<RendererDocumentNodeGeometry>> {
-        self.finish_document_geometry(completion, "document geometry backend node id page command")
+        self.finish_document_geometry_for_node(completion)
+    }
+
+    pub fn finish_document_geometry_for_node(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Option<RendererDocumentNodeGeometry>> {
+        self.finish_document_geometry(completion, "document geometry node page command")
     }
 
     fn finish_document_geometry(
@@ -603,26 +636,50 @@ impl Page {
         )
     }
 
+    pub fn start_remove_document_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::RemoveDocumentNode { reference })
+    }
+
     pub fn start_remove_document_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RemoveDocumentBackendNodeId {
-            backend_node_id,
-        })
+        self.start_remove_document_node(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
     pub fn finish_remove_document_node(
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<bool> {
+        self.finish_remove_document_node_reference(completion)
+            .map(|removed| removed.unwrap_or(false))
+    }
+
+    pub fn finish_remove_document_node_reference(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Option<bool>> {
         let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
             "remove document node page command",
-            "a bool reply",
-            RendererPageReply::Bool(value) => Ok(value),
+            "an optional bool reply",
+            RendererPageReply::OptionalBool(value) => Ok(value),
         )
+    }
+
+    pub fn start_mutate_document_node_attribute(
+        &self,
+        reference: RendererDomNodeReference,
+        mutation: RendererDomAttributeMutation,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::MutateDocumentNodeAttribute {
+            reference,
+            mutation,
+        })
     }
 
     pub fn start_mutate_document_backend_node_attribute(
@@ -630,10 +687,10 @@ impl Page {
         backend_node_id: u32,
         mutation: RendererDomAttributeMutation,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::MutateDocumentBackendNodeAttribute {
-            backend_node_id,
+        self.start_mutate_document_node_attribute(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
             mutation,
-        })
+        )
     }
 
     pub fn finish_mutate_document_node_attribute(
@@ -673,11 +730,18 @@ impl Page {
         )
     }
 
+    pub fn start_focus_document_node(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::FocusDocumentNode { reference })
+    }
+
     pub fn start_focus_document_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::FocusDocumentBackendNode { backend_node_id })
+        self.start_focus_document_node(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
     pub fn finish_focus_document_node_id(
@@ -808,6 +872,23 @@ impl Page {
         )
     }
 
+    pub fn start_document_node_exists_for_backend_node_id(
+        &self,
+        backend_node_id: u32,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentNodeExistsForBackendNodeId {
+            backend_node_id,
+        })
+    }
+
+    pub fn finish_document_node_exists(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<bool> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(reply, "document node presence page command", "a bool reply", RendererPageReply::Bool(exists) => Ok(exists),)
+    }
+
     pub fn start_document_node_snapshot_for_backend_node_id(
         &self,
         backend_node_id: u32,
@@ -821,6 +902,25 @@ impl Page {
         })
     }
 
+    pub fn start_document_node_snapshot_for_node_in_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        reference: RendererDomNodeReference,
+        depth: i32,
+        pierce: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(
+            RendererPageCommand::DocumentNodeSnapshotForNodeInInspectorSession {
+                inspector_session_id,
+                include_whitespace,
+                reference,
+                depth,
+                pierce,
+            },
+        )
+    }
+
     pub fn start_document_node_snapshot_for_backend_node_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -829,14 +929,12 @@ impl Page {
         depth: i32,
         pierce: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentNodeSnapshotForBackendNodeIdInInspectorSession {
-                inspector_session_id,
-                include_whitespace,
-                backend_node_id,
-                depth,
-                pierce,
-            },
+        self.start_document_node_snapshot_for_node_in_inspector_session(
+            inspector_session_id,
+            include_whitespace,
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
+            depth,
+            pierce,
         )
     }
 
@@ -927,6 +1025,25 @@ impl Page {
         )
     }
 
+    pub fn start_document_child_node_snapshot_events_for_node(
+        &self,
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        reference: RendererDomNodeReference,
+        depth: i32,
+        pierce: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(
+            RendererPageCommand::DocumentChildNodeSnapshotEventsForNode {
+                inspector_session_id,
+                include_whitespace,
+                reference,
+                depth,
+                pierce,
+            },
+        )
+    }
+
     pub fn start_document_child_node_snapshot_events_for_backend_node_id(
         &self,
         inspector_session_id: Option<String>,
@@ -935,14 +1052,12 @@ impl Page {
         depth: i32,
         pierce: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentChildNodeSnapshotEventsForBackendNodeId {
-                inspector_session_id,
-                include_whitespace,
-                backend_node_id,
-                depth,
-                pierce,
-            },
+        self.start_document_child_node_snapshot_events_for_node(
+            inspector_session_id,
+            include_whitespace,
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
+            depth,
+            pierce,
         )
     }
 
@@ -999,6 +1114,23 @@ impl Page {
         )
     }
 
+    pub fn start_document_query_selector_for_node_in_inspector_session(
+        &self,
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        root: RendererDomNodeReference,
+        selector: String,
+        multiple: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentQuerySelectorForNode {
+            inspector_session_id,
+            include_whitespace,
+            root,
+            selector,
+            multiple,
+        })
+    }
+
     pub fn start_document_query_selector_for_backend_node_id_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -1007,13 +1139,34 @@ impl Page {
         selector: String,
         multiple: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentQuerySelectorForBackendNodeId {
+        self.start_document_query_selector_for_node_in_inspector_session(
             inspector_session_id,
             include_whitespace,
-            root_backend_node_id,
+            RendererDomNodeReference::BackendNodeId(root_backend_node_id),
             selector,
             multiple,
-        })
+        )
+    }
+
+    pub fn start_child_frame_document_query_selector_for_node(
+        &self,
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        frame_id: String,
+        root: RendererDomNodeReference,
+        selector: String,
+        multiple: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(
+            RendererPageCommand::DocumentQuerySelectorForChildFrameNode {
+                inspector_session_id,
+                include_whitespace,
+                frame_id,
+                root,
+                selector,
+                multiple,
+            },
+        )
     }
 
     pub fn start_child_frame_document_query_selector_for_backend_node_id(
@@ -1025,15 +1178,13 @@ impl Page {
         selector: String,
         multiple: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentQuerySelectorForChildFrameBackendNodeId {
-                inspector_session_id,
-                include_whitespace,
-                frame_id,
-                root_backend_node_id,
-                selector,
-                multiple,
-            },
+        self.start_child_frame_document_query_selector_for_node(
+            inspector_session_id,
+            include_whitespace,
+            frame_id,
+            RendererDomNodeReference::BackendNodeId(root_backend_node_id),
+            selector,
+            multiple,
         )
     }
 
@@ -1050,6 +1201,25 @@ impl Page {
         )
     }
 
+    pub fn start_document_query_selector_with_child_node_snapshot_events_for_node(
+        &self,
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        root: RendererDomNodeReference,
+        selector: String,
+        multiple: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(
+            RendererPageCommand::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
+                inspector_session_id,
+                include_whitespace,
+                root,
+                selector,
+                multiple,
+            },
+        )
+    }
+
     pub fn start_document_query_selector_with_child_node_snapshot_events_for_backend_node_id(
         &self,
         inspector_session_id: Option<String>,
@@ -1058,14 +1228,12 @@ impl Page {
         selector: String,
         multiple: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
-                inspector_session_id,
-                include_whitespace,
-                root_backend_node_id,
-                selector,
-                multiple,
-            },
+        self.start_document_query_selector_with_child_node_snapshot_events_for_node(
+            inspector_session_id,
+            include_whitespace,
+            RendererDomNodeReference::BackendNodeId(root_backend_node_id),
+            selector,
+            multiple,
         )
     }
 
@@ -1340,13 +1508,18 @@ impl Page {
         )
     }
 
+    pub fn start_document_node_text(
+        &self,
+        reference: RendererDomNodeReference,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentNodeText { reference })
+    }
+
     pub fn start_document_node_text_for_backend_node_id(
         &self,
         backend_node_id: u32,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodeTextForBackendNodeId {
-            backend_node_id,
-        })
+        self.start_document_node_text(RendererDomNodeReference::BackendNodeId(backend_node_id))
     }
 
     pub fn finish_document_node_text(
@@ -1362,15 +1535,26 @@ impl Page {
         )
     }
 
+    pub fn start_document_node_property(
+        &self,
+        reference: RendererDomNodeReference,
+        name: &str,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DocumentNodeProperty {
+            reference,
+            name: name.to_owned(),
+        })
+    }
+
     pub fn start_document_node_property_for_backend_node_id(
         &self,
         backend_node_id: u32,
         name: &str,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodePropertyForBackendNodeId {
-            backend_node_id,
-            name: name.to_owned(),
-        })
+        self.start_document_node_property(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
+            name,
+        )
     }
 
     pub fn finish_document_node_property(
@@ -1432,28 +1616,46 @@ impl Page {
         )
     }
 
+    pub fn start_outer_html_for_node(
+        &self,
+        reference: RendererDomNodeReference,
+        include_shadow_dom: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::OuterHtmlForNode {
+            reference,
+            include_shadow_dom,
+        })
+    }
+
     pub fn start_outer_html_for_backend_node_id(
         &self,
         backend_node_id: u32,
         include_shadow_dom: bool,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::OuterHtmlForBackendNodeId {
-            backend_node_id,
+        self.start_outer_html_for_node(
+            RendererDomNodeReference::BackendNodeId(backend_node_id),
             include_shadow_dom,
-        })
+        )
     }
 
-    pub fn finish_outer_html_for_backend_node_id(
+    pub fn finish_outer_html_for_node(
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<Option<String>> {
         let reply = self.finish_page_command(completion);
         expect_page_reply!(
             reply,
-            "outerHTML backend node id page command",
+            "outerHTML node page command",
             "an optional string reply",
             RendererPageReply::OptionalString(outer_html) => Ok(outer_html),
         )
+    }
+
+    pub fn finish_outer_html_for_backend_node_id(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<Option<String>> {
+        self.finish_outer_html_for_node(completion)
     }
 
     pub fn start_serialize_html(&self) -> Result<PendingPageCommand> {
@@ -1484,6 +1686,30 @@ impl Page {
             "layout metrics page command",
             "a layout metrics reply",
             RendererPageReply::LayoutMetrics(metrics) => Ok(metrics),
+        )
+    }
+
+    pub fn start_print_to_pdf(
+        &self,
+        request: super::RendererPrintToPdfRequest,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::PrintToPdf(request))
+    }
+
+    pub fn finish_print_to_pdf(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<super::RendererPrintToPdfReply> {
+        anyhow::ensure!(
+            completion.renderer_agent_attachment_id() == self.renderer_agent_attachment_id(),
+            "print to PDF completed for a stale renderer attachment"
+        );
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "print to PDF page command",
+            "a print to PDF reply",
+            RendererPageReply::PrintToPdf(result) => Ok(result),
         )
     }
 
@@ -1760,7 +1986,7 @@ impl Page {
             operation,
         );
         Ok((
-            self.start_page_command(RendererPageCommand::Native(Box::new(command)))?,
+            self.start_page_command(RendererPageCommand::Native(command))?,
             guard,
         ))
     }

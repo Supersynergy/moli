@@ -272,6 +272,7 @@ impl Page {
 
     pub(super) fn page_reply_kind(reply: &RendererPageReply) -> &'static str {
         match reply {
+            RendererPageReply::WebMcp(_) => "a WebMCP command result",
             RendererPageReply::RuntimeEvaluationResult(_) => "a runtime evaluation result reply",
             RendererPageReply::ElementClickPreparation(_) => "an element click preparation reply",
             RendererPageReply::ElementClickDispatch(_) => "an element click dispatch reply",
@@ -315,6 +316,7 @@ impl Page {
             RendererPageReply::DocumentNodePropertyResolution(_) => {
                 "a document node property resolution"
             }
+            RendererPageReply::OptionalAccessibilityNodes(_) => "optional accessibility nodes",
             RendererPageReply::OptionalAccessibilityPayloads(_) => {
                 "optional accessibility payloads"
             }
@@ -400,6 +402,7 @@ impl Page {
             RendererPageReply::PageDiagnosticsSnapshot(_) => "a page diagnostics snapshot reply",
             RendererPageReply::CookieFacadeSnapshot(_) => "a cookie facade snapshot reply",
             RendererPageReply::LayoutMetrics(_) => "a layout metrics reply",
+            RendererPageReply::PrintToPdf(_) => "a print to PDF reply",
             RendererPageReply::CaptureScreenshot(_) => "a capture screenshot reply",
             RendererPageReply::CaptureScreencastFrame(_) => "a capture screencast frame reply",
             RendererPageReply::Unit => "a unit reply",

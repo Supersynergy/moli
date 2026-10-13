@@ -4,6 +4,7 @@ use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state, set_event_private_value,
 };
+use crate::context_bootstrap::events::EventInit;
 use crate::{
     util::{new_null_prototype_object, throw_type_error, v8str},
     web_api_interfaces, webidl,
@@ -52,15 +53,11 @@ struct OfflineAudioCompletionEventPrototypeDeclaration {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AudioProcessingEventInit")]
 struct AudioProcessingEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
-    #[webidl(with = audio_buffer_member)]
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
     input_buffer: v8::Local<'s, v8::Object>,
-    #[webidl(with = audio_buffer_member)]
+    #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
     output_buffer: v8::Local<'s, v8::Object>,
     #[webidl(required, converter = "double")]
     playback_time: f64,
@@ -69,36 +66,10 @@ struct AudioProcessingEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "OfflineAudioCompletionEventInit")]
 struct OfflineAudioCompletionEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
-    #[webidl(with = audio_buffer_member)]
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::AudioBuffer)]
     rendered_buffer: v8::Local<'s, v8::Object>,
-}
-
-fn audio_buffer_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let prefix = if name == "renderedBuffer" {
-        "OfflineAudioCompletionEventInit"
-    } else {
-        "AudioProcessingEventInit"
-    };
-    let context = webidl::Context::member(prefix, name);
-    let value = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-        .ok_or_else(|| webidl::WebIdlError::missing_required(context))?;
-    let buffer = v8::Local::<v8::Object>::try_from(value)
-        .map_err(|_| webidl::WebIdlError::cannot_convert(context, "AudioBuffer"))?;
-    if !web_api_interfaces::AudioBuffer::is_instance(scope, buffer) {
-        return Err(webidl::WebIdlError::cannot_convert(context, "AudioBuffer"));
-    }
-    Ok(buffer)
 }
 
 fn payload_getter<'s>(
@@ -186,7 +157,11 @@ fn audio_event_constructor<'s>(
                     PLAYBACK_TIME_SLOT,
                     v8::Number::new(scope, parsed.playback_time).into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             AudioEventKind::Completion => {
                 let parsed = webidl::parse_dictionary_object::<OfflineAudioCompletionEventInit>(
@@ -198,7 +173,11 @@ fn audio_event_constructor<'s>(
                     RENDERED_BUFFER_SLOT,
                     parsed.rendered_buffer.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
         };
         initialize_event_object_with_type(scope, state, event_type, bubbles, cancelable);

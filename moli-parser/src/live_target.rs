@@ -1637,12 +1637,7 @@ fn append_text_to_text_node_in_host(
     node_id: NativeNodeId,
     text: String,
 ) -> DomMutationEffects {
-    let Some(previous) = host.node(node_id).and_then(Node::as_text) else {
-        return DomMutationEffects::default();
-    };
-    let mut merged = previous.data().to_owned();
-    merged.push_str(&text);
-    host.set_text_content_effects(node_id, &merged)
+    host.append_text_to_text_node_effects(node_id, &text)
 }
 
 #[cfg(test)]
@@ -3747,6 +3742,10 @@ impl StylesheetBlockingReadView for ParserStreamHtmlTreeSinkTarget {
 
     fn document_node_id(&self) -> NativeNodeId {
         self.parser_owner_document_node_id()
+    }
+
+    fn document_is_quirks_mode(&self) -> bool {
+        matches!(self.state.html_quirks_mode, QuirksMode::Quirks)
     }
 
     fn document_order_stylesheet_candidate_ids_before(

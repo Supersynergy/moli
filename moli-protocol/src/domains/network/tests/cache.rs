@@ -648,6 +648,10 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
         "INT-1".to_owned(),
         None,
         NavigationDispatchState {
+            web_mcp_invocation: None,
+            navigation_initiator: None,
+            initial_document_environment: None,
+            auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
             navigate_id: Some(1),
@@ -675,6 +679,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             request_headers: Vec::new().into(),
             response: RawResponse::from_head_and_body(
                 ResponseHead {
+                    status_text: None,
                     final_url: url,
                     status: 200,
                     headers: Vec::new(),

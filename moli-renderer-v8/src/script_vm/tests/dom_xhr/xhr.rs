@@ -917,7 +917,8 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
             .collect::<Vec<_>>();
         let headers = moli_fetch::headers_from_byte_strings(&headers).unwrap();
 
-        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+        let context_ptr: *const v8::Global<v8::Context> =
+            &vm.page_default_runtime.context as *const _;
         vm.renderer_document_isolate
             .with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -938,6 +939,7 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
                         final_url: Url::parse("https://xhr-override-mime.test/mime")
                             .expect("response URL should parse"),
                         status: 200,
+                        status_text: None,
                         headers,
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -1016,7 +1018,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
     )
     .expect("xhr responseXML setup should run");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1037,6 +1039,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     final_url: Url::parse("https://xhr-response-xml.test/xml-doc")
                         .expect("XML response URL should parse"),
                     status: 200,
+                    status_text: None,
                     headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -1063,6 +1066,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     final_url: Url::parse("https://xhr-response-xml.test/plain")
                         .expect("plain response URL should parse"),
                     status: 200,
+                    status_text: None,
                     headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -1101,7 +1105,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
 #[test]
 fn xml_http_request_send_body_applies_webidl_conversion() {
     let vm = new_storage_test_vm("https://xhr-send-body-webidl.test/");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
 
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -1851,7 +1855,7 @@ fn pending_network_body_stream_emits_small_chunks_before_close() {
     let mut vm = new_storage_test_vm("https://pending-stream-small-chunks.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1885,7 +1889,7 @@ fn pending_network_body_stream_emits_small_chunks_before_close() {
         .expect("pending stream read should be registered");
     assert_eq!(initial, "[]");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1915,7 +1919,7 @@ fn pending_network_body_stream_buffers_future_chunks_until_next_pull() {
     let mut vm = new_storage_test_vm("https://pending-stream-backpressure.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1946,7 +1950,7 @@ fn pending_network_body_stream_buffers_future_chunks_until_next_pull() {
     )
     .expect("first pending stream read should be registered");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let buffered_len = vm
         .renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -2041,6 +2045,7 @@ __streamingXhr.send();
     let response_head = moli_fetch::ResponseHead {
         final_url: request_url.clone(),
         status: 200,
+        status_text: None,
         headers: vec![
             (
                 "Content-Type".to_owned(),
@@ -2134,7 +2139,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
     let mut body_writer = crate::types::SubresourceResponseBodyWriter::default();
     body_writer.append(b"cached-body");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2185,9 +2190,10 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                             request_mode: moli_fetch::RequestMode::Cors,
                             network_partition_key: None,
                             policy_context: Default::default(),
-                            continuation: super::PendingSubresourceContinuation::Xhr(
-                                v8::Global::new(scope, xhr),
-                            ),
+                            continuation: super::PendingSubresourceContinuation::Xhr {
+                                xhr: v8::Global::new(scope, xhr),
+                                use_cors_preflight: false,
+                            },
                             load: crate::network::loads::resource_load_lease_for_test(
                                 load_client,
                                 None,
@@ -2202,6 +2208,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                         head: moli_fetch::ResponseHead {
                             final_url: final_url.clone(),
                             status: 200,
+                            status_text: None,
                             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
@@ -2289,7 +2296,7 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
         Url::parse("https://sw-non-stream-failure.test/data").expect("request URL should parse");
     let rejection_message = "FetchEvent.respondWith rejected an error Response";
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2427,7 +2434,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
     let final_url = Url::parse("https://streaming-fetch-body-error.test/final")
         .expect("final URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -2495,6 +2502,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                         head: moli_fetch::ResponseHead {
                             final_url: final_url.clone(),
                             status: 206,
+                            status_text: None,
                             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
@@ -2572,7 +2580,7 @@ fn install_streaming_fetch_response_fixture(
     global_name: &'static str,
     load_client: crate::network::ResourceRequestClient,
 ) {
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -2587,10 +2595,14 @@ fn install_streaming_fetch_response_fixture(
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
                         final_url: request_url.clone(),
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -2650,6 +2662,7 @@ fn install_streaming_fetch_response_fixture(
                     head: moli_fetch::ResponseHead {
                         final_url: request_url,
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -2681,7 +2694,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
     let request_url = Url::parse("https://streaming-fetch-body-cancel.test/data")
         .expect("request URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     let cancel_handle_for_state = cancel_handle.clone();
     vm.renderer_document_isolate
@@ -2759,6 +2772,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                         head: moli_fetch::ResponseHead {
                             final_url: request_url,
                             status: 200,
+                            status_text: None,
                             headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
@@ -3325,7 +3339,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
         .truncate_file_for_test(0)
         .expect("test should truncate the pooled body file");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     let context_host = vm._context_host.clone();
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -3375,9 +3389,10 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                         request_mode: moli_fetch::RequestMode::Cors,
                         network_partition_key: None,
                         policy_context: Default::default(),
-                        continuation: super::PendingSubresourceContinuation::Xhr(v8::Global::new(
-                            scope, xhr,
-                        )),
+                        continuation: super::PendingSubresourceContinuation::Xhr {
+                            xhr: v8::Global::new(scope, xhr),
+                            use_cors_preflight: false,
+                        },
                         load: crate::network::loads::resource_load_lease_for_test(
                             load_client,
                             None,
@@ -3392,6 +3407,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                     head: moli_fetch::ResponseHead {
                         final_url: request_url,
                         status: 200,
+                        status_text: None,
                         headers: Vec::new(),
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -3649,6 +3665,7 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                 let head = moli_fetch::ResponseHead {
                     final_url: request.url.clone(),
                     status: 200,
+                    status_text: None,
                     headers,
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -3753,4 +3770,124 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
             );
         }
     }
+}
+
+#[test]
+fn xml_http_request_loadstart_orders_upload_events_and_handles_abort() {
+    let mut vm = new_storage_test_vm("https://xhr-upload-start.test/");
+    let result = vm
+        .eval(
+            r#"
+JSON.stringify(["xhr", "upload", "empty"].map(abortAt => {
+  const xhr = new XMLHttpRequest();
+  const events = [];
+  xhr.onloadstart = event => {
+    events.push(`xhr-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+    if (abortAt === "xhr") xhr.abort();
+  };
+  xhr.upload.onloadstart = event => {
+    events.push(`upload-start:${event.loaded}:${event.total}:${event.lengthComputable}`);
+    if (abortAt !== "xhr") xhr.abort();
+  };
+  for (const type of ["progress", "load", "abort", "loadend"]) {
+    xhr.upload.addEventListener(type, event => events.push(
+      `upload-${type}:${xhr.readyState}:${event.loaded}:${event.total}:${event.lengthComputable}`));
+  }
+  xhr.onabort = () => events.push(`xhr-abort:${xhr.readyState}`);
+  xhr.onloadend = () => events.push(`xhr-loadend:${xhr.readyState}`);
+  xhr.open("POST", "/unused");
+  xhr.send(abortAt === "empty" ? "" : "é");
+  events.push(`after-send:${xhr.readyState}:${xhr.status}`);
+  return events;
+}))
+"#,
+        )
+        .expect("abort during either loadstart should end the pending upload");
+    assert_eq!(
+        result,
+        r#"[["xhr-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:2:true","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"],["xhr-start:0:0:false","upload-start:0:0:false","upload-abort:4:0:0:false","upload-loadend:4:0:0:false","xhr-abort:4","xhr-loadend:4","after-send:0:0"]]"#
+    );
+}
+
+#[test]
+fn xml_http_request_upload_listener_flag_is_captured_before_loadstart() {
+    let mut vm = new_storage_test_vm("https://xhr-upload-listeners.test/");
+    let result = vm
+        .eval(
+            r#"
+["none", "removed", "cleared", "signal", "custom", "handler", "getter"].map(mode => {
+  const xhr = new XMLHttpRequest();
+  const upload = xhr.upload;
+  const listener = () => {};
+  const events = [];
+  if (mode === "removed") {
+    upload.addEventListener("custom", listener);
+    upload.removeEventListener("custom", listener);
+  } else if (mode === "cleared") {
+    upload.onprogress = listener;
+    upload.onprogress = null;
+  } else if (mode === "signal") {
+    const controller = new AbortController();
+    upload.addEventListener("custom", listener, {signal: controller.signal});
+    controller.abort();
+  } else if (mode === "custom") {
+    upload.addEventListener("custom", {handleEvent() {}});
+  } else if (mode === "handler") {
+    upload.onprogress = listener;
+  } else if (mode === "getter") {
+    Object.defineProperty(upload, "onprogress", {get() {throw new Error("public handler read");}});
+  }
+  xhr.onloadstart = () => {
+    upload.onloadstart = event => {
+      events.push(`${event.loaded}:${event.total}`);
+      xhr.abort();
+    };
+  };
+  xhr.open("POST", "/unused");
+  xhr.send("é");
+  xhr.abort();
+  return `${mode}:${events.join()}`;
+}).join("|")
+"#,
+        )
+        .expect("only listeners registered before send should enable upload events");
+    assert_eq!(
+        result,
+        "none:|removed:|cleared:|signal:|custom:0:2|handler:0:2|getter:"
+    );
+}
+
+#[test]
+fn xml_http_request_upload_loadstart_preserves_reopened_request() {
+    let mut vm = new_storage_test_vm("https://xhr-upload-reopen.test/");
+    vm.eval(
+        r#"
+(() => {
+  const xhr = new XMLHttpRequest();
+  const events = globalThis.__xhrUploadReopenEvents = [];
+  xhr.onloadstart = () => events.push(`xhr-start:${xhr.readyState}`);
+  xhr.upload.onloadstart = event => {
+    events.push(`upload-start:${event.loaded}:${event.total}`);
+    xhr.open("GET", "data:text/plain,replacement");
+    xhr.send();
+    events.push(`after-reopen:${xhr.readyState}`);
+  };
+  for (const type of ["progress", "load", "abort", "loadend"]) {
+    xhr.upload.addEventListener(type, () => events.push(`unexpected-upload-${type}`));
+  }
+  xhr.onload = () => events.push(`load:${xhr.responseText}`);
+  xhr.onloadend = () => events.push(`loadend:${xhr.readyState}`);
+  xhr.open("POST", "/unused");
+  xhr.send("é");
+})()
+"#,
+    )
+    .expect("upload loadstart should be able to reopen and send another request");
+    vm.eval("0")
+        .expect("replacement request should complete at the following checkpoint");
+    assert_eq!(
+        vm.eval("__xhrUploadReopenEvents.join('|')")
+            .expect("replacement request event trace"),
+        "xhr-start:1|upload-start:0:2|xhr-start:1|after-reopen:1|load:replacement|loadend:4"
+    );
 }

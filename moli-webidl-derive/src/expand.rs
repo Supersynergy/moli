@@ -8,7 +8,8 @@ use crate::attrs::{
     parse_container_attrs, parse_enum_attrs, parse_field_attrs, parse_variant_attrs,
 };
 use crate::converter::{
-    converter_kind, converter_kind_for_type, inner_type_for_field, is_option_type, vec_inner_type,
+    converter_kind, converter_kind_for_field_type, inner_type_for_field, is_option_type,
+    vec_inner_type,
 };
 
 pub(crate) fn expand_webidl_args(input: DeriveInput) -> Result<proc_macro2::TokenStream, Error> {
@@ -87,9 +88,41 @@ pub(crate) fn expand_webidl_dictionary(
     let rename_all = attrs.rename_all.unwrap_or(RenameRule::CamelCase);
     let fields = named_fields(&input.data)?;
 
-    let bindings = fields
-        .iter()
-        .map(|field| expand_dictionary_field(field, &prefix, rename_all))
+    // Dictionary inheritance is converted before this dictionary's members,
+    // which WebIDL orders by their final JavaScript names, not Rust layout.
+    let mut inherited = None;
+    let mut members = std::collections::BTreeMap::new();
+    for field in &fields {
+        let attrs = parse_field_attrs(field)?;
+        if attrs.inherit {
+            if inherited.replace(field).is_some() {
+                return Err(Error::new(
+                    field.span(),
+                    "WebIdlDictionary supports only one inherited dictionary",
+                ));
+            }
+            if is_option_type(&field.ty) {
+                return Err(Error::new(
+                    field.ty.span(),
+                    "inherited dictionaries cannot use Option<T>",
+                ));
+            }
+        } else {
+            let name = field_member_name(field, &attrs, rename_all)?;
+            if let Some(previous) = members.insert(name.value(), field) {
+                let mut error = Error::new(
+                    name.span(),
+                    format!("duplicate WebIDL dictionary member `{}`", name.value()),
+                );
+                error.combine(Error::new(previous.span(), "previous member defined here"));
+                return Err(error);
+            }
+        }
+    }
+    let bindings = inherited
+        .into_iter()
+        .chain(members.into_values())
+        .map(|field| expand_dictionary_field(field, &prefix, rename_all, &scope_lifetime))
         .collect::<Result<Vec<_>, _>>()?;
     let idents = fields
         .iter()
@@ -268,6 +301,12 @@ fn expand_args_field(
 ) -> Result<proc_macro2::TokenStream, Error> {
     let ident = field_ident(field)?;
     let attrs = parse_field_attrs(field)?;
+    if attrs.inherit {
+        return Err(Error::new(
+            field.span(),
+            "inherit only applies to WebIdlDictionary fields",
+        ));
+    }
     if attrs.variadic {
         // Variadic arguments represent the rest parameter tail. They cannot be
         // required, nullable, defaulted, or custom-parsed because the generated
@@ -295,16 +334,7 @@ fn expand_args_field(
                 "variadic WebIdlArgs fields must use Vec<T>",
             ));
         };
-        let converter = if let Some(converter) = attrs.converter {
-            converter
-        } else {
-            converter_kind_for_type(item_type).ok_or_else(|| {
-                Error::new(
-                    field.span(),
-                    "could not infer variadic item converter; add #[webidl(converter = \"...\")]",
-                )
-            })?
-        };
+        let converter = converter_kind_for_field_type(field, &attrs, item_type)?;
         let arg_index = attrs.index.unwrap_or(index) as i32;
         let converter_ty = converter.wrapper_type(item_type);
         let unwrap_value = converter.unwrap_value(quote!(value));
@@ -407,7 +437,9 @@ fn expand_args_field(
                 ::std::option::Option::Some(#unwrap_value)
             };
         }
-    } else if attrs.required {
+    } else if attrs.required
+        || ((attrs.interface.is_some() || attrs.dictionary) && attrs.default.is_none())
+    {
         quote! {
             let #ident = {
                 let value = ::moli_webidl::argument_with_options::<#converter_ty>(
@@ -427,7 +459,7 @@ fn expand_args_field(
                 "optional WebIdlArgs fields require #[webidl(default = ...)]",
             )
         })?;
-        let wrapped_default = converter.wrap_default(default);
+        let wrapped_default = converter.wrap_default(default, field_type);
         let unwrap_default = converter.unwrap_value(wrapped_default);
         quote! {
             let #ident = {
@@ -454,9 +486,16 @@ fn expand_dictionary_field(
     field: &Field,
     prefix: &LitStr,
     rename_all: RenameRule,
+    scope_lifetime: &syn::Lifetime,
 ) -> Result<proc_macro2::TokenStream, Error> {
     let ident = field_ident(field)?;
     let attrs = parse_field_attrs(field)?;
+    if attrs.inherit {
+        let ty = &field.ty;
+        return Ok(quote! {
+            let #ident = <#ty as ::moli_webidl::WebIdlDictionary<#scope_lifetime>>::parse_dictionary(scope, object)?;
+        });
+    }
     if let Some(with) = attrs.with.as_ref() {
         // Custom dictionary parsers receive the resolved member name and own all
         // reads/conversion for the field. Use this for APIs whose WebIDL order
@@ -588,21 +627,35 @@ fn expand_dictionary_field(
         });
     }
 
+    if attrs.dictionary && attrs.default.is_none() {
+        return Ok(quote! {
+            let #ident = {
+                let raw = ::moli_webidl::property_result(scope, object, #name, #context)?
+                    .unwrap_or_else(|| v8::undefined(scope).into());
+                let value = ::moli_webidl::convert_with_options::<#converter_ty>(
+                    scope, raw, #context, &#options,
+                )?;
+                #unwrap_value
+            };
+        });
+    }
+
     let default = attrs.default.ok_or_else(|| {
         Error::new(
             field.span(),
             "WebIdlDictionary fields currently require #[webidl(required)] or #[webidl(default = ...)]",
         )
     })?;
-    let wrapped_default = converter.wrap_default(default);
+    let wrapped_default = converter.wrap_default(default, inner_type_for_field(field));
     Ok(quote! {
         let #ident = {
+            let default_value = #wrapped_default;
             let value = #optional_member_or_fn::<#converter_ty>(
                 scope,
                 object,
                 #name,
                 #context,
-                #wrapped_default,
+                default_value,
                 &#options,
             )?;
             #unwrap_value
@@ -612,8 +665,229 @@ fn expand_dictionary_field(
 
 #[cfg(test)]
 mod tests {
-    use super::impl_parts_for_scope;
+    use super::{expand_webidl_args, expand_webidl_dictionary, impl_parts_for_scope};
     use syn::parse_quote;
+
+    #[test]
+    fn dictionary_member_names_must_be_unique_after_renaming() {
+        for input in [
+            parse_quote! {struct Options { #[webidl(name = "same")] first: Option<String>, #[webidl(name = "same")] second: Option<String> }},
+            parse_quote! {struct Options { first_name: Option<String>, #[webidl(name = "firstName")] other: Option<String> }},
+            parse_quote! {struct Options { r#type: Option<String>, #[webidl(name = "type")] other: Option<String> }},
+        ] {
+            assert!(
+                expand_webidl_dictionary(input)
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("duplicate WebIDL dictionary member")
+            );
+        }
+    }
+
+    #[test]
+    fn inheritance_requires_one_unmodified_dictionary_field() {
+        let positional = parse_quote! {struct Args { #[webidl(inherit)] base: Base }};
+        assert_eq!(
+            expand_webidl_args(positional).unwrap_err().to_string(),
+            "inherit only applies to WebIdlDictionary fields"
+        );
+        for input in [
+            parse_quote! {struct Options { #[webidl(inherit)] base: Base, #[webidl(inherit)] other: Other }},
+            parse_quote! {struct Options { #[webidl(inherit)] base: Option<Base> }},
+            parse_quote! {struct Options { #[webidl(inherit, inherit)] base: Base }},
+        ] {
+            assert!(expand_webidl_dictionary(input).is_err());
+        }
+        for attrs in [
+            quote::quote!(required),
+            quote::quote!(name = "base"),
+            quote::quote!(default = Base::default()),
+            quote::quote!(converter = "raw"),
+            quote::quote!(dictionary),
+            quote::quote!(sequence),
+            quote::quote!(interface = Base),
+            quote::quote!(brand_check = check),
+            quote::quote!(missing_message = "base"),
+            quote::quote!(index = 1),
+            quote::quote!(legacy_nullish),
+            quote::quote!(treat_null_as_empty_string),
+            quote::quote!(nullable),
+            quote::quote!(with = parse),
+            quote::quote!(variadic),
+        ] {
+            let input = parse_quote! {struct Options { #[webidl(inherit, #attrs)] base: Base }};
+            assert_eq!(
+                expand_webidl_dictionary(input).unwrap_err().to_string(),
+                "inherit cannot be combined with member or conversion attributes"
+            );
+        }
+    }
+
+    #[test]
+    fn dictionary_attributes_reject_conflicting_conversion_paths() {
+        for (attrs, message) in [
+            (
+                quote::quote!(dictionary, converter = "raw"),
+                "dictionary cannot be combined",
+            ),
+            (
+                quote::quote!(dictionary, with = parse),
+                "dictionary cannot be combined",
+            ),
+            (
+                quote::quote!(dictionary, interface = Base),
+                "dictionary cannot be combined",
+            ),
+            (
+                quote::quote!(dictionary, variadic),
+                "dictionary cannot be combined with variadic",
+            ),
+            (
+                quote::quote!(dictionary, dictionary),
+                "duplicate dictionary attribute",
+            ),
+            (
+                quote::quote!(dictionary, treat_null_as_empty_string),
+                "treat_null_as_empty_string only applies",
+            ),
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Fields {
+                    #[webidl(#attrs)]
+                    value: Option<Options>,
+                }
+            };
+            for error in [
+                expand_webidl_args(input.clone()).unwrap_err(),
+                expand_webidl_dictionary(input).unwrap_err(),
+            ] {
+                assert!(error.to_string().starts_with(message), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn sequence_attributes_require_a_vec_and_one_conversion_path() {
+        for attrs in [
+            quote::quote!(sequence, variadic),
+            quote::quote!(sequence, with = parse),
+            quote::quote!(sequence, dictionary),
+            quote::quote!(sequence, sequence),
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Fields {
+                    #[webidl(#attrs)]
+                    values: Option<Vec<String>>,
+                }
+            };
+            assert!(expand_webidl_args(input.clone()).is_err());
+            assert!(expand_webidl_dictionary(input).is_err());
+        }
+        for ty in [quote::quote!(String), quote::quote!(Sequence<DomString>)] {
+            let input = parse_quote! {
+                struct Fields {
+                    #[webidl(sequence)]
+                    values: Option<#ty>,
+                }
+            };
+            let error = expand_webidl_args(input).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("sequence fields must use Vec")
+            );
+        }
+        let input: syn::DeriveInput = parse_quote! {
+            struct Fields<'s> {
+                #[webidl(sequence, interface = Base)]
+                values: Option<Vec<v8::Local<'s, v8::Value>>>,
+            }
+        };
+        assert!(
+            expand_webidl_dictionary(input)
+                .unwrap_err()
+                .to_string()
+                .starts_with("interface fields must use")
+        );
+    }
+
+    #[test]
+    fn interface_attributes_reject_conflicting_or_incomplete_metadata() {
+        let cases = [
+            (
+                quote::quote!(brand_check = check),
+                "brand_check requires #[webidl(interface = Type)]",
+            ),
+            (
+                quote::quote!(interface = Base, converter = "raw"),
+                "interface cannot be combined with converter or with",
+            ),
+            (
+                quote::quote!(interface = Base, with = parse),
+                "interface cannot be combined with converter or with",
+            ),
+            (
+                quote::quote!(interface = Base, treat_null_as_empty_string),
+                "treat_null_as_empty_string only applies to string converters",
+            ),
+            (
+                quote::quote!(interface = Base, interface = Other),
+                "duplicate interface attribute",
+            ),
+            (
+                quote::quote!(interface = Base, brand_check = check, brand_check = other),
+                "duplicate brand_check attribute",
+            ),
+        ];
+        for (attrs, message) in cases {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Arguments<'s> {
+                    #[webidl(#attrs)]
+                    value: Option<v8::Local<'s, v8::Object>>,
+                }
+            };
+            for error in [
+                expand_webidl_args(input.clone()).unwrap_err(),
+                expand_webidl_dictionary(input).unwrap_err(),
+            ] {
+                assert_eq!(error.to_string(), message);
+            }
+        }
+    }
+
+    #[test]
+    fn interface_attributes_require_object_fields_and_variadic_items() {
+        for ty in [
+            quote::quote!(String),
+            quote::quote!(v8::Local<'s, v8::Value>),
+            quote::quote!(v8::Local<'s, v8::Function>),
+        ] {
+            let input: syn::DeriveInput = parse_quote! {
+                struct Arguments<'s> {
+                    #[webidl(interface = Base)]
+                    value: Option<#ty>,
+                }
+            };
+            for error in [
+                expand_webidl_args(input.clone()).unwrap_err(),
+                expand_webidl_dictionary(input).unwrap_err(),
+            ] {
+                assert!(error.to_string().starts_with("interface fields must use"));
+            }
+            let input = parse_quote! {
+                struct Arguments<'s> {
+                    #[webidl(variadic, interface = Base)]
+                    value: Vec<#ty>,
+                }
+            };
+            assert!(
+                expand_webidl_args(input)
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("interface fields must use")
+            );
+        }
+    }
 
     #[test]
     fn scope_lifetime_is_inferred_for_single_lifetime_structs() {

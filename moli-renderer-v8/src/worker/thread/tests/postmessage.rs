@@ -786,6 +786,48 @@ async fn worker_postmessage_cryptokey_to_nonsecure_worker_fires_messageerror() {
 }
 
 #[tokio::test]
+async fn worker_postmessage_cryptokey_exposure_ignores_public_constructor_overrides() {
+    ensure_v8();
+    for (url, setup, expected) in [
+        (
+            "https://worker-crypto.test/receive-cryptokey-override.js",
+            "Object.defineProperty(globalThis, 'CryptoKey', {get() {throw new Error('public constructor read');}, configurable: true});",
+            r#"["message","[object CryptoKey]"]"#,
+        ),
+        (
+            "http://worker-crypto.test/receive-cryptokey-override.js",
+            "globalThis.CryptoKey = function FakeCryptoKey() {};",
+            r#"["messageerror",true]"#,
+        ),
+    ] {
+        let callbacks = r#"
+            onmessage = event => {
+                postMessage([event.type, Object.prototype.toString.call(event.data.key)]);
+            };
+            onmessageerror = event => {
+                postMessage([event.type, event.data === null]);
+            };
+        "#;
+        let mut handle = spawn_worker(format!("{setup}\n{callbacks}"), url.into());
+        let payload = serialize_test_crypto_value(
+            r#"
+            (async () => ({key: await crypto.subtle.importKey(
+                "raw", new Uint8Array([1, 2, 3, 4]),
+                {name: "HMAC", hash: "SHA-256"}, true, ["sign"]
+            )}))()
+            "#,
+        );
+        handle.post_message(payload);
+
+        let msg = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        assert_eq!(expect_post_json(msg), expected, "receiver {url}");
+    }
+}
+
+#[tokio::test]
 async fn worker_crypto_subtle_kdf_and_x25519_derivation_match_wpt_any_tests() {
     ensure_v8();
     // Chromium WPT marks WebCrypto derivation tests as `any.js`, so supported
@@ -3027,4 +3069,59 @@ async fn worker_does_not_expose_window_media_device_interfaces() {
         expect_post_json(message),
         r#"{"MediaDeviceInfo":false,"InputDeviceInfo":false}"#
     );
+}
+
+#[tokio::test]
+async fn worker_rectangle_clones_use_native_prototypes_and_message_channel_delivery() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (async () => {
+            const check = (ok, label) => { if (!ok) throw Error(label); };
+            for (const name of ['DOMRect', 'DOMRectReadOnly']) {
+                const C = self[name];
+                const prototype = C.prototype;
+                const rect = new C(-0, NaN, Infinity, -Infinity);
+                Object.defineProperty(rect, 'x', {get() { throw Error('must read native state'); }});
+                self[name] = () => { throw Error('must not call public constructor'); };
+                try {
+                    const clone = structuredClone({rect, again: rect});
+                    check(clone.rect === clone.again, name + ' graph alias');
+                    check(Object.getPrototypeOf(clone.rect) === prototype, name + ' intrinsic prototype');
+                    check(Object.is(clone.rect.x, -0) && Number.isNaN(clone.rect.y) &&
+                        clone.rect.width === Infinity && clone.rect.height === -Infinity, name + ' values');
+                    const channel = new MessageChannel();
+                    const received = new Promise(resolve => { channel.port2.onmessage = event => resolve(event.data); });
+                    channel.port1.postMessage({rect, again: rect});
+                    const message = await received;
+                    check(message.rect === message.again && message.rect !== rect, name + ' message graph');
+                    check(Object.getPrototypeOf(message.rect) === prototype, name + ' message receiver prototype');
+                    check(Object.is(message.rect.x, -0) && Number.isNaN(message.rect.y) &&
+                        message.rect.width === Infinity && message.rect.height === -Infinity, name + ' message values');
+                    channel.port1.close();
+                    channel.port2.close();
+                } finally { self[name] = C; }
+            }
+            postMessage('passed');
+            close();
+        })().catch(error => { postMessage(String(error)); close(); });
+        "#
+        .into(),
+        "https://worker-rectangle.test/clone.js".into(),
+    );
+    assert_eq!(recv_post_json(&mut handle).await, r#""passed""#);
+}
+
+#[tokio::test]
+async fn worker_does_not_expose_window_audio_node_interface() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        "postMessage({AudioNode:'AudioNode' in self});close();".to_owned(),
+        "https://audio-node-worker.test/worker.js".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(message), r#"{"AudioNode":false}"#);
 }

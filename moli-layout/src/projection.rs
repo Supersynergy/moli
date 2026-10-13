@@ -32,9 +32,9 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) numeric_feedback_overflow_recomputed_node_count: usize,
 }
 
-pub(crate) fn finish_layout_pass<N>(
+pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
     world: &LayoutWorld<N>,
-    source_root: N,
+    source: &S,
     viewport: LayoutViewport,
     reason: LayoutFlushReason,
     started: Instant,
@@ -69,7 +69,13 @@ where
             request
                 .resolve(viewport, projection.viewport_scroll, content_size)
                 .map(|capture| {
-                    crate::paint::project_paint_snapshot(&projection, capture, &mut embedded_paint)
+                    crate::paint::project_paint_snapshot(
+                        &projection,
+                        source,
+                        capture,
+                        reason == LayoutFlushReason::Print,
+                        &mut embedded_paint,
+                    )
                 })
         })
         .transpose()?
@@ -134,7 +140,7 @@ where
             tree: Box::new(snapshot.tree),
         })
         .collect();
-    let tree = projection.into_frozen_tree(source_root, content_size, embedded_frames);
+    let tree = projection.into_frozen_tree(source.root(), content_size, embedded_frames);
     Ok(LayoutPassResult::new(
         tree,
         diagnostics,
@@ -222,7 +228,7 @@ where
     box_sources: Vec<Option<N>>,
     principal_sources: Vec<Option<N>>,
     hit_sources: Vec<Option<N>>,
-    fragments: Vec<LayoutFragment>,
+    pub(crate) fragments: Vec<LayoutFragment>,
     scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub(crate) scroll_extents: Vec<LayoutScrollExtent>,
     pub(crate) coordinate_spaces: Vec<ProjectedCoordinateSpace>,
@@ -233,8 +239,8 @@ where
     resolved_transforms: Vec<ResolvedLayoutTransform>,
     scrollable_overflow: Vec<LayoutRect>,
     viewport_anchored: Vec<bool>,
-    direct_fragments: Vec<Option<LayoutFragmentId>>,
-    owner_paint_fragments: Vec<Vec<LayoutFragmentId>>,
+    pub(crate) direct_fragments: Vec<Option<LayoutFragmentId>>,
+    pub(crate) owner_paint_fragments: Vec<Vec<LayoutFragmentId>>,
     pub(crate) background_clips: Vec<Option<LayoutClipChainId>>,
     pub(crate) content_clips: Vec<Option<LayoutClipChainId>>,
     pub(crate) paint_events: Vec<PaintOrderEvent>,
@@ -291,6 +297,9 @@ where
     }
 
     fn scrollbar_control_thickness(&self, id: LayoutBoxId) -> f32 {
+        if self.world.environment.scrollbars_hidden {
+            return 0.0;
+        }
         if id == self.world.root {
             self.world
                 .viewport_scroll_policy
@@ -354,6 +363,9 @@ where
     }
 
     fn has_scrollbar(&self, id: LayoutBoxId, axis: LayoutScrollbarAxis, overflowing: bool) -> bool {
+        if self.world.environment.scrollbars_hidden {
+            return false;
+        }
         if id == self.world.root {
             self.world
                 .viewport_scroll_policy

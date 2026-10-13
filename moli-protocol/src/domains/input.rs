@@ -1415,7 +1415,10 @@ async fn complete_pending_input_command(
                             .await
                             .map(|()| AutomationResult::ElementClickDispatch(Ok(())))
                             .map_err(|error| {
-                                DevToolsError::new(DevToolsErrorKind::Internal, error)
+                                DevToolsError::new(
+                                    DevToolsErrorKind::Internal,
+                                    format!("{error:#}"),
+                                )
                             }),
                         }
                     }
@@ -1465,7 +1468,10 @@ async fn complete_pending_input_command(
                     {
                         let protocol_events = side_effects.into_events();
                         return CompletedInputCommandResult {
-                            result: Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
+                            result: Err(DevToolsError::new(
+                                DevToolsErrorKind::Internal,
+                                format!("{error:#}"),
+                            )),
                             protocol_events,
                         };
                     }
@@ -1506,7 +1512,10 @@ async fn complete_pending_input_command(
                     {
                         let protocol_events = side_effects.into_events();
                         return CompletedInputCommandResult {
-                            result: Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
+                            result: Err(DevToolsError::new(
+                                DevToolsErrorKind::Internal,
+                                format!("{error:#}"),
+                            )),
                             protocol_events,
                         };
                     }
@@ -1710,7 +1719,7 @@ async fn handle_input_dispatch_outcome_async(
     owner: &TargetPageResidenceIdentity,
     outcome: RendererInputDispatchOutcome,
     command_context: &mut CommandDispatchContext,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let action_owner = session_id
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| CommandOwnerScope::for_page_residence(owner));
@@ -1752,11 +1761,11 @@ pub(in crate::domains) async fn emit_download_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
     command_context: &mut CommandDispatchContext,
 ) {
     if let Some(activations) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::input_mut)
+        .input_mut()
         .and_then(InputPreparedOutputSlot::take_download_activations)
     {
         emit_download_activations(conn, out, owner, activations, command_context).await;
@@ -1781,7 +1790,7 @@ async fn emit_download_activations(
             .await
         {
             tracing::warn!(
-                error = error.as_str(),
+                error = ?error,
                 "pending download activation failed during protocol output projection"
             );
         }
@@ -1792,10 +1801,10 @@ pub(in crate::domains) async fn emit_file_chooser_activity_background_events_asy
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(activations) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::input_mut)
+        .input_mut()
         .and_then(InputPreparedOutputSlot::take_file_chooser_activations)
     {
         file_chooser::emit_prepared_activations_async(conn, out, owner, activations).await;
@@ -2510,7 +2519,7 @@ mod producer_tests {
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-download"),
-            Some(&mut prepared),
+            &mut prepared,
             &mut command_context,
         )
         .await;
@@ -2565,7 +2574,7 @@ mod producer_tests {
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-1"),
-            Some(&mut prepared),
+            &mut prepared,
         )
         .await;
 
@@ -2613,7 +2622,7 @@ mod producer_tests {
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-context"),
-            Some(&mut prepared),
+            &mut prepared,
         )
         .await;
 

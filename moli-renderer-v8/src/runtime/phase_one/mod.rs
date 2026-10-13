@@ -72,6 +72,7 @@ use self::parser_blocking_source::{
     MainParserBlockingSourceDisposition, parser_blocking_script_can_start_external_source_load,
     prepare_main_parser_blocking_source_load,
 };
+pub(in crate::runtime) use self::parser_turn::rebind_main_document_parser_before_parsing;
 use self::parser_turn::{PageTaskTurnResult, ParserDriver};
 #[cfg(test)]
 use self::parser_turn::{
@@ -108,8 +109,8 @@ fn script_preloads_require_owner_admission(env: &PageVmEnvConfig) -> bool {
                 })
 }
 
-fn main_document_parser_scripting_enabled(env: &PageVmEnvConfig) -> bool {
-    !env.script_execution_disabled
+pub(in crate::runtime) fn main_document_parser_scripting_enabled(env: &PageVmEnvConfig) -> bool {
+    !env.document_settings.script_execution_disabled
         && crate::content_security_policy::content_security_policy_sandbox_allows_scripts(
             &env.document_policy_container
                 .response_content_security_policies,
@@ -666,20 +667,17 @@ mod tests {
             document_policy_container: Default::default(),
             document_default_language: None,
             document_last_modified: None,
-            script_execution_disabled: false,
-            bypass_content_security_policy: false,
-            emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
-            idle_override: None,
-            navigator_overrides: Default::default(),
-            viewport_surface: None,
-            document_activity: Default::default(),
+            document_settings: Default::default(),
             network_offline: false,
             blocked_url_patterns: Vec::new(),
             indexed_db_manager: None,
             storage_bucket_store: None,
             fetch_subresource_interception_enabled: false,
             fetch_subresource_interception_resource_type: None,
-            layout_policy: moli_page_types::LayoutPolicy::default(),
+            layout_configuration: moli_page_types::LayoutConfiguration {
+                policy: moli_page_types::LayoutPolicy::default(),
+                scrollbars_hidden: false,
+            },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
             reserved_service_worker_client_id: None,

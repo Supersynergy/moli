@@ -12,6 +12,7 @@ pub(crate) const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 mod builder;
 mod capture;
 mod containment;
+mod environment;
 mod error;
 mod form;
 mod gradient;
@@ -44,6 +45,7 @@ pub use capture::{
     FULL_DOCUMENT_CAPTURE_CSS_DIMENSION_LIMIT, PaintCaptureRegion, PaintCaptureRequest,
     PaintCaptureSurface,
 };
+pub use environment::LayoutEnvironment;
 pub use error::LayoutError;
 pub use layout_tree::{
     FrozenCoordinateSpace, FrozenEmbeddedFrame, FrozenLayoutBox, FrozenLayoutTree,
@@ -78,19 +80,19 @@ pub use snapshot::{
     PaintFontId, PaintFontResource, PaintFragment, PaintGlyph, PaintGlyphRun,
     PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection,
     PaintGradientInterpolation, PaintGradientStop, PaintImage, PaintImageId, PaintImageResource,
-    PaintImageSampling, PaintLineCap, PaintLineJoin, PaintLinearGradient, PaintPath,
-    PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect, PaintShape, PaintSize,
-    PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId, PaintSvgImageResource,
-    PaintTextDecoration, PaintTextDecorationStyle, PaintTextShadow, PaintTransform2D,
-    PaintViewport, pixel_snap_paint_axis, pixel_snap_paint_axis_allowing_zero,
-    pixel_snap_paint_rect,
+    PaintImageSampling, PaintLineCap, PaintLineJoin, PaintLinearGradient, PaintLink,
+    PaintLinkTarget, PaintPath, PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect,
+    PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
+    PaintSvgImageResource, PaintTextDecoration, PaintTextDecorationStyle, PaintTextSemantics,
+    PaintTextShadow, PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
+    pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
 };
 pub use source::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection,
-    ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    LayoutFormControlKind, LayoutHyperlink, LayoutImageResource, LayoutInputControlKind,
+    LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind,
+    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole,
+    LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
@@ -99,6 +101,7 @@ pub use style::{
 pub use text::{
     DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
     WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
+    validate_web_font_bytes,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,

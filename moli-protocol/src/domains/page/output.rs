@@ -1,6 +1,65 @@
 use super::*;
 
 impl PagePreparedOutputs {
+    pub(crate) fn from_renderer_auxiliary_window_navigation(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        window: moli_core::page::RendererAuxiliaryWindow,
+        url: String,
+        kind: moli_core::page::RendererAuxiliaryNavigationKind,
+        document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    ) -> Self {
+        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+            return Self::default();
+        };
+        Self {
+            auxiliary_window_navigations: vec![
+                prepared_navigation::PagePreparedAuxiliaryWindowNavigation {
+                    browser_context_id: residence.browser_context_id().to_owned(),
+                    window,
+                    url,
+                    kind,
+                    document_response,
+                },
+            ],
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::domains) fn append_to_auxiliary_window_navigation_output_sink(
+        self,
+        sink: &mut (impl ProtocolOutputSink + ?Sized),
+    ) {
+        if !self.auxiliary_window_navigations.is_empty() {
+            sink.push_produced_slot(ProtocolOutputSlot::NavigateAuxiliaryWindow);
+            sink.push_prepared_payload(PagePreparedOutputSlot::from_outputs(self).into());
+        }
+    }
+
+    pub(crate) fn from_renderer_auxiliary_window_close(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        window: moli_core::page::RendererAuxiliaryWindow,
+    ) -> Self {
+        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+            return Self::default();
+        };
+        Self {
+            auxiliary_window_closes: vec![(residence.browser_context_id().to_owned(), window)],
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::domains) fn append_to_auxiliary_window_close_output_sink(
+        self,
+        sink: &mut (impl ProtocolOutputSink + ?Sized),
+    ) {
+        if !self.auxiliary_window_closes.is_empty() {
+            sink.push_produced_slot(ProtocolOutputSlot::CloseAuxiliaryWindow);
+            sink.push_prepared_payload(PagePreparedOutputSlot::from_outputs(self).into());
+        }
+    }
+
     pub(crate) fn from_renderer_javascript_dialog(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
@@ -310,6 +369,10 @@ impl PagePreparedOutputs {
         self.javascript_dialogs.extend(other.javascript_dialogs);
         self.window_open_events.extend(other.window_open_events);
         self.popup_activations.extend(other.popup_activations);
+        self.auxiliary_window_closes
+            .extend(other.auxiliary_window_closes);
+        self.auxiliary_window_navigations
+            .extend(other.auxiliary_window_navigations);
         self.document_title_changes
             .extend(other.document_title_changes);
         self.document_lifecycle_events
@@ -440,6 +503,8 @@ impl PagePreparedOutputs {
                 .collect(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -458,6 +523,8 @@ impl PagePreparedOutputs {
         Self {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             popup_activations: activations
                 .into_iter()
                 .map(|activation| {
@@ -516,6 +583,8 @@ impl PagePreparedOutputs {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: vec![activity],
@@ -535,6 +604,8 @@ impl PagePreparedOutputs {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -559,6 +630,8 @@ impl PagePreparedOutputs {
             javascript_dialogs: Vec::new(),
             window_open_events: Vec::new(),
             popup_activations: Vec::new(),
+            auxiliary_window_closes: Vec::new(),
+            auxiliary_window_navigations: Vec::new(),
             document_title_changes: Vec::new(),
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
@@ -667,195 +740,212 @@ impl PagePreparedOutputSlot {
     }
 }
 
-impl PageOutputProjectionStep {
-    pub(super) async fn project_async(
-        self,
-        conn: &mut CdpConnection,
-        context: &mut ProtocolOutputProjectionContext<'_>,
-        prepared_outputs: Option<&mut ProtocolOutputPayloads>,
-    ) {
-        let owner = context.owner().clone();
-        match self {
-            PageOutputProjectionStep::Download => {
-                let mut events = Vec::new();
-                input::emit_download_activity_background_events_async(
-                    conn,
-                    &mut events,
-                    &owner,
-                    prepared_outputs,
-                    context.command,
-                )
-                .await;
-                context.command.protocol_events_mut().extend(events);
-            }
-            PageOutputProjectionStep::DocumentLifecycle => {
-                if let Some(renderer_events) = prepared_outputs
-                    .and_then(ProtocolOutputPayloads::page_mut)
-                    .and_then(PagePreparedOutputSlot::take_document_lifecycle_events)
-                {
-                    let (binding, accepted) = conn
-                        .ingest_renderer_document_lifecycle_events_for_owner(
-                            &owner,
-                            renderer_events,
-                        );
-                    if let Some(binding) = binding {
-                        let mut events = Vec::new();
-                        emit_bound_renderer_document_lifecycle_background_events(
-                            conn,
-                            &mut events,
-                            &owner,
-                            &binding,
-                            &accepted,
-                        );
-                        context.command.protocol_events_mut().extend(events);
-                    }
-                }
-            }
-            PageOutputProjectionStep::DocumentTitleChanged => {
-                if let Some(changes) = prepared_outputs
-                    .and_then(ProtocolOutputPayloads::page_mut)
-                    .and_then(PagePreparedOutputSlot::take_document_title_changes)
-                {
-                    let mut events = Vec::new();
-                    for change in changes {
-                        if conn
-                            .apply_renderer_document_title_for_owner(&owner, &change)
-                            .unwrap_or(false)
-                        {
-                            crate::domains::target::emit_target_info_changed_for_owner_background_event(
-                                conn,
-                                &mut events,
-                                &owner,
-                            );
-                        }
-                    }
-                    context.command.protocol_events_mut().extend(events);
-                }
-            }
-            PageOutputProjectionStep::FileChooser => {
-                let mut events = Vec::new();
-                input::emit_file_chooser_activity_background_events_async(
-                    conn,
-                    &mut events,
-                    &owner,
-                    prepared_outputs,
-                )
-                .await;
-                context.command.protocol_events_mut().extend(events);
-            }
-            PageOutputProjectionStep::JavascriptDialog => {
-                let mut events = Vec::new();
-                emit_javascript_dialog_activity_background_events_async(
-                    conn,
-                    &mut events,
-                    prepared_outputs,
-                )
-                .await;
-                context.command.protocol_events_mut().extend(events);
-            }
-            PageOutputProjectionStep::WindowOpen => {
-                if let Some(events) = prepared_outputs
-                    .and_then(ProtocolOutputPayloads::page_mut)
-                    .and_then(PagePreparedOutputSlot::take_window_open_events)
-                {
-                    let mut protocol_events = Vec::new();
-                    popup::emit_window_open_events(&mut protocol_events, events);
-                    context
-                        .command
-                        .protocol_events_mut()
-                        .extend(protocol_events);
-                }
-            }
-            PageOutputProjectionStep::Popup => {
-                let mut events = Vec::new();
-                emit_popup_activity_background_events_async(conn, &mut events, prepared_outputs)
-                    .await;
-                context.command.protocol_events_mut().extend(events);
-            }
-            PageOutputProjectionStep::ChildFrameActivity => {
-                if let Some(activities) = prepared_outputs
-                    .and_then(ProtocolOutputPayloads::page_mut)
-                    .and_then(PagePreparedOutputSlot::take_child_frame_activity)
-                {
-                    let mut events = Vec::new();
-                    for activity in activities {
-                        emit_prepared_child_frame_activity(conn, &mut events, activity, None).await;
-                    }
-                    context.command.protocol_events_mut().extend(events);
-                }
-            }
-            PageOutputProjectionStep::SessionHistoryUpdate => {
-                if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::page_mut) {
-                    for (residence, _source_document, update) in
-                        std::mem::take(&mut slot.outputs.session_history_updates)
-                    {
-                        // document.open() does not undo committed history. Page
-                        // residence, not current Document identity, is authority.
-                        if conn.target_page_residence_identity_is_current(&residence) {
-                            conn.record_session_history_update_for_owner(&owner, &update);
-                        }
-                    }
-                }
-            }
-            PageOutputProjectionStep::SameDocumentNavigation => {
-                let mut events = Vec::new();
-                emit_same_document_navigation_activity_background_events_async(
-                    conn,
-                    &mut events,
-                    &owner,
-                    prepared_outputs,
-                )
-                .await;
-                context.command.protocol_events_mut().extend(events);
-            }
-            PageOutputProjectionStep::TopLevelLocationNavigation => {
-                publish_prepared_top_level_location_navigation_owner_action(
-                    conn,
-                    &owner,
-                    prepared_outputs,
-                );
-            }
-            PageOutputProjectionStep::TopLevelHistoryTraversal => {
-                let mut events = Vec::new();
-                emit_top_level_history_traversal_activity_background_events_async(
-                    conn,
-                    &mut events,
-                    &owner,
-                    prepared_outputs,
-                )
-                .await;
-                context.command.protocol_events_mut().extend(events);
-            }
-        }
-    }
-}
-
 pub(in crate::domains) async fn project_page_output_async(
     output: ProtocolOutputSlot,
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
-    let step = match output {
-        ProtocolOutputSlot::Download => PageOutputProjectionStep::Download,
-        ProtocolOutputSlot::FileChooser => PageOutputProjectionStep::FileChooser,
-        ProtocolOutputSlot::JavascriptDialog => PageOutputProjectionStep::JavascriptDialog,
-        ProtocolOutputSlot::WindowOpen => PageOutputProjectionStep::WindowOpen,
-        ProtocolOutputSlot::Popup => PageOutputProjectionStep::Popup,
-        ProtocolOutputSlot::DocumentTitleChanged => PageOutputProjectionStep::DocumentTitleChanged,
-        ProtocolOutputSlot::DocumentLifecycle => PageOutputProjectionStep::DocumentLifecycle,
-        ProtocolOutputSlot::ChildFrameActivity => PageOutputProjectionStep::ChildFrameActivity,
-        ProtocolOutputSlot::SessionHistoryUpdate => PageOutputProjectionStep::SessionHistoryUpdate,
+    let owner = context.owner().clone();
+    match output {
+        ProtocolOutputSlot::Download => {
+            let mut events = Vec::new();
+            input::emit_download_activity_background_events_async(
+                conn,
+                &mut events,
+                &owner,
+                prepared_outputs,
+                context.command,
+            )
+            .await;
+            context.command.protocol_events_mut().extend(events);
+        }
+        ProtocolOutputSlot::DocumentLifecycle => {
+            if let Some(renderer_events) = prepared_outputs
+                .page_mut()
+                .and_then(PagePreparedOutputSlot::take_document_lifecycle_events)
+            {
+                let (binding, accepted) = conn
+                    .ingest_renderer_document_lifecycle_events_for_owner(&owner, renderer_events);
+                if let Some(binding) = binding {
+                    let mut events = Vec::new();
+                    emit_bound_renderer_document_lifecycle_background_events(
+                        conn,
+                        &mut events,
+                        &owner,
+                        &binding,
+                        &accepted,
+                    );
+                    context.command.protocol_events_mut().extend(events);
+                }
+            }
+        }
+        ProtocolOutputSlot::DocumentTitleChanged => {
+            if let Some(changes) = prepared_outputs
+                .page_mut()
+                .and_then(PagePreparedOutputSlot::take_document_title_changes)
+            {
+                let mut events = Vec::new();
+                for change in changes {
+                    if conn
+                        .apply_renderer_document_title_for_owner(&owner, &change)
+                        .unwrap_or(false)
+                    {
+                        crate::domains::target::emit_target_info_changed_for_owner_background_event(
+                            conn,
+                            &mut events,
+                            &owner,
+                        );
+                    }
+                }
+                context.command.protocol_events_mut().extend(events);
+            }
+        }
+        ProtocolOutputSlot::FileChooser => {
+            let mut events = Vec::new();
+            input::emit_file_chooser_activity_background_events_async(
+                conn,
+                &mut events,
+                &owner,
+                prepared_outputs,
+            )
+            .await;
+            context.command.protocol_events_mut().extend(events);
+        }
+        ProtocolOutputSlot::JavascriptDialog => {
+            let mut events = Vec::new();
+            emit_javascript_dialog_activity_background_events_async(
+                conn,
+                &mut events,
+                prepared_outputs,
+            )
+            .await;
+            context.command.protocol_events_mut().extend(events);
+        }
+        ProtocolOutputSlot::WindowOpen => {
+            if let Some(events) = prepared_outputs
+                .page_mut()
+                .and_then(PagePreparedOutputSlot::take_window_open_events)
+            {
+                let mut protocol_events = Vec::new();
+                popup::emit_window_open_events(&mut protocol_events, events);
+                context
+                    .command
+                    .protocol_events_mut()
+                    .extend(protocol_events);
+            }
+        }
+        ProtocolOutputSlot::Popup => {
+            let mut events = Vec::new();
+            emit_popup_activity_background_events_async(conn, &mut events, prepared_outputs).await;
+            context.command.protocol_events_mut().extend(events);
+        }
+        ProtocolOutputSlot::ChildFrameActivity => {
+            if let Some(activities) = prepared_outputs
+                .page_mut()
+                .and_then(PagePreparedOutputSlot::take_child_frame_activity)
+            {
+                let mut events = Vec::new();
+                for activity in activities {
+                    emit_prepared_child_frame_activity(conn, &mut events, activity, None).await;
+                }
+                context.command.protocol_events_mut().extend(events);
+            }
+        }
+        ProtocolOutputSlot::NavigateAuxiliaryWindow => {
+            if let Some(slot) = prepared_outputs.page_mut() {
+                for navigation in std::mem::take(&mut slot.outputs.auxiliary_window_navigations) {
+                    let context = conn.browser_context_by_id(&navigation.browser_context_id);
+                    let target_id = context
+                        .and_then(|context| context.target_id_for_popup_id(navigation.window.id()));
+                    if !navigation.window.is_closed()
+                        && let Some(target_id) = target_id
+                        && let Some(action) = crate::conn::PopupTargetNavigationOwnerAction::capture(
+                            conn,
+                            &navigation.browser_context_id,
+                            target_id,
+                            navigation.url,
+                            crate::conn::PopupTargetNavigationKind::WindowReference(
+                                navigation.kind,
+                            ),
+                        )
+                    {
+                        conn.publish_popup_target_navigation_owner_action(
+                            action.with_document_response(navigation.document_response),
+                        );
+                    }
+                }
+            }
+        }
+        ProtocolOutputSlot::CloseAuxiliaryWindow => {
+            if let Some(slot) = prepared_outputs.page_mut() {
+                for (browser_context_id, window) in
+                    std::mem::take(&mut slot.outputs.auxiliary_window_closes)
+                {
+                    let target_id = conn
+                        .browser_context_by_id(&browser_context_id)
+                        .and_then(|context| context.target_id_for_popup_id(window.id()))
+                        .map(str::to_owned);
+                    let Some(target_id) = target_id else {
+                        continue;
+                    };
+                    let Some(route) = conn.target_session_route_for_target_id(&target_id) else {
+                        continue;
+                    };
+                    let owner = CommandOwnerScope::for_route(route);
+                    let events = termination::prepare_page_target_termination_async(
+                        conn,
+                        &owner,
+                        target_id,
+                        context.command,
+                    )
+                    .await;
+                    context.command.protocol_events_mut().extend(events);
+                }
+            }
+        }
+        ProtocolOutputSlot::SessionHistoryUpdate => {
+            if let Some(slot) = prepared_outputs.page_mut() {
+                for (residence, _source_document, update) in
+                    std::mem::take(&mut slot.outputs.session_history_updates)
+                {
+                    // document.open() does not undo committed history. Page
+                    // residence, not current Document identity, is authority.
+                    if conn.target_page_residence_identity_is_current(&residence) {
+                        conn.record_session_history_update_for_owner(&owner, &update);
+                    }
+                }
+            }
+        }
         ProtocolOutputSlot::SameDocumentNavigation => {
-            PageOutputProjectionStep::SameDocumentNavigation
+            let mut events = Vec::new();
+            emit_same_document_navigation_activity_background_events_async(
+                conn,
+                &mut events,
+                &owner,
+                prepared_outputs,
+            )
+            .await;
+            context.command.protocol_events_mut().extend(events);
         }
         ProtocolOutputSlot::TopLevelLocationNavigation => {
-            PageOutputProjectionStep::TopLevelLocationNavigation
+            publish_prepared_top_level_location_navigation_owner_action(
+                conn,
+                &owner,
+                prepared_outputs,
+            );
         }
         ProtocolOutputSlot::TopLevelHistoryTraversal => {
-            PageOutputProjectionStep::TopLevelHistoryTraversal
+            let mut events = Vec::new();
+            emit_top_level_history_traversal_activity_background_events_async(
+                conn,
+                &mut events,
+                &owner,
+                prepared_outputs,
+            )
+            .await;
+            context.command.protocol_events_mut().extend(events);
         }
         _ => panic!("non-Page output routed through the Page projector: {output:?}"),
-    };
-    step.project_async(conn, context, prepared_outputs).await;
+    }
 }

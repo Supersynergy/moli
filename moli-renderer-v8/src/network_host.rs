@@ -21,7 +21,6 @@ mod text_track;
 mod url_helpers;
 mod xhr;
 
-use http::StatusCode;
 use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 use moli_webapi_declare::WebApiObject;
 
@@ -37,7 +36,9 @@ pub(crate) use self::async_fetch::{
 };
 pub(crate) use self::beacon::{navigator_send_beacon_callback, send_link_audit_ping};
 pub(super) use self::bindings::install_window_network_bindings;
-pub(in crate::network_host) use self::body::{PreparedBodyInit, body_init};
+pub(in crate::network_host) use self::body::{
+    PreparedBodyInit, body_init, body_stream_object, readable_body_stream_unusable,
+};
 pub(crate) use self::body::{append_default_body_content_type, has_header};
 #[cfg(test)]
 pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
@@ -61,9 +62,8 @@ pub(crate) use self::body_source::{
     PendingNetworkBodySourceState, close_pending_network_body_stream,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream,
     error_pending_network_body_stream_with_reason, new_network_body_source_id,
-    pending_network_body_stream,
+    pending_network_body_stream, retain_pending_network_body_state_in_retired_realm,
 };
-pub(in crate::network_host) use self::browser_response::http_status_text;
 pub(crate) use self::browser_response::{
     LocalUrlError, local_url_response, local_url_response_result,
 };
@@ -147,8 +147,8 @@ pub(crate) use self::request_scope::{
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
 pub(crate) use self::response::{
-    FetchResponseSecurityViolation, MaterializedResponseBody, MaterializedResponseHead,
-    build_fetch_response_object_for_request_mode,
+    FetchResponseRequest, FetchResponseSecurityViolation, MaterializedResponseBody,
+    MaterializedResponseHead, build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,
     build_fetch_response_object_from_stream_for_request_mode,
@@ -179,6 +179,7 @@ pub(in crate::network_host) use self::url_helpers::merge_subresource_request_hea
 pub(crate) use self::url_helpers::{ResolveContextUrlError, resolve_context_url};
 #[cfg(test)]
 pub(crate) use self::xhr::prepare_xhr_send_body;
+pub(crate) use self::xhr::xhr_has_upload_listeners;
 pub(crate) use self::xhr::{
     PreparedXhrSendBody, XHR_ABORTED_SLOT, XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT,
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_READY_STATE_SLOT, XHR_SEND_FLAG_SLOT,
@@ -187,7 +188,7 @@ pub(crate) use self::xhr::{
     apply_xhr_response_body_source, apply_xhr_response_body_source_with_status_text,
     apply_xhr_streaming_response_body_source, apply_xhr_streaming_response_chunk,
     apply_xhr_streaming_response_head, apply_xhr_timeout, convert_xhr_send_body_from_args,
-    dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
+    dispatch_xhr_loadstart, dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
     finalize_xml_http_request_event_target_realm_bindings,
     install_progress_event_template_bindings, install_window_xml_http_request_template_bindings,
     install_xml_http_request_bindings, install_xml_http_request_event_target_bindings,

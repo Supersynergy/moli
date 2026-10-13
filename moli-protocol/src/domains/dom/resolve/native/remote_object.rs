@@ -15,7 +15,6 @@ pub(super) fn prepare(conn: &CdpConnection, cmd: &Cmd<'_>) -> Result<Operation, 
     Ok(with_backend(
         session.clone(),
         params.reference,
-        OwnerTurn,
         move |backend_node_id| {
             let prepare = move |cache| {
                 resolve(

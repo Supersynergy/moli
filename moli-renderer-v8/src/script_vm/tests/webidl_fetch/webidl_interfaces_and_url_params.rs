@@ -371,7 +371,7 @@ async fn headers_for_each_visits_live_entries_in_window_and_worker() {
             .filter(|check| check["pass"] != true)
             .collect();
         assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
-        assert_eq!(checks.len(), 34, "worker={worker}");
+        assert_eq!(checks.len(), 36, "worker={worker}");
     }
 }
 
@@ -665,7 +665,7 @@ fn request_and_response_headers_share_intrinsic_prototype_methods() {
 }
 
 #[tokio::test]
-async fn response_headers_keep_receiver_realm_across_borrowed_getters() {
+async fn response_headers_keep_receiver_realm_across_borrowed_getters_and_clones() {
     let mut vm = new_storage_test_vm("https://headers-owner-realm.test/");
     vm.eval(
         r#"
@@ -694,12 +694,12 @@ body.appendChild(headersFrame);
     configurable: true, get() { throw new Error('public Headers lookup'); }
   });
   try {
-    for (const [response, ctor, getter, value] of [
-      [parentResponse, parentHeaders, childGetter, 'parent'],
-      [childResponse, childHeaders, parentGetter, 'child']
+    for (const [response, clone, ctor, getter, value] of [
+      [parentResponse, child.Response.prototype.clone.call(parentResponse), parentHeaders, childGetter, 'parent'],
+      [childResponse, Response.prototype.clone.call(childResponse), childHeaders, parentGetter, 'child']
     ]) {
       check(getter.call(response) === response.headers, 'borrowed getter returns associated Headers');
-      for (const entry of [response]) {
+      for (const entry of [response, clone]) {
         const headers = entry.headers;
         check(Object.getPrototypeOf(headers) === ctor.prototype && headers instanceof ctor,
           'Headers must use the response realm');

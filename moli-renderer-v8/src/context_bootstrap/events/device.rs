@@ -5,6 +5,7 @@ use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state, set_event_private_value,
 };
+use crate::context_bootstrap::events::EventInit;
 use crate::{
     util::{get_private_value, new_null_prototype_object, throw_type_error, v8str},
     web_api_interfaces, webidl,
@@ -102,12 +103,8 @@ struct RotationRatePrototype {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "DeviceOrientationEventInit")]
 struct OrientationInit {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(default = false)]
     absolute: bool,
     #[webidl(nullable, converter = "double")]
@@ -121,19 +118,15 @@ struct OrientationInit {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "DeviceMotionEventInit")]
 struct MotionInit {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
-    #[webidl(with = acceleration_member)]
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(dictionary)]
     acceleration: Option<AccelerationInit>,
-    #[webidl(name = "accelerationIncludingGravity", with = acceleration_member)]
+    #[webidl(name = "accelerationIncludingGravity", dictionary)]
     acceleration_including_gravity: Option<AccelerationInit>,
     #[webidl(converter = "double", default = 0.0)]
     interval: f64,
-    #[webidl(name = "rotationRate", with = rotation_rate_member)]
+    #[webidl(name = "rotationRate", dictionary)]
     rotation_rate: Option<RotationRateInit>,
 }
 
@@ -157,40 +150,6 @@ struct RotationRateInit {
     beta: Option<f64>,
     #[webidl(nullable, converter = "double")]
     gamma: Option<f64>,
-}
-
-fn nested_dictionary_member<'s, T: webidl::WebIdlDictionary<'s> + Default>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<T>, webidl::WebIdlError> {
-    let context = webidl::Context::member("DeviceMotionEventInit", name);
-    let Some(value) = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-    else {
-        return Ok(None);
-    };
-    // An absent member leaves the event attribute null. A present null member
-    // converts to an empty dictionary and creates a vector with null components.
-    Ok(Some(
-        webidl::parse_dictionary::<T>(scope, value, context)?.unwrap_or_default(),
-    ))
-}
-
-fn acceleration_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<AccelerationInit>, webidl::WebIdlError> {
-    nested_dictionary_member(scope, object, name)
-}
-
-fn rotation_rate_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<RotationRateInit>, webidl::WebIdlError> {
-    nested_dictionary_member(scope, object, name)
 }
 
 pub(in crate::context_bootstrap) fn install_device_event_template_bindings<'s>(
@@ -330,7 +289,11 @@ fn initialize_payload<'s>(
                 ABSOLUTE,
                 v8::Boolean::new(scope, parsed.absolute).into(),
             );
-            Ok((parsed.bubbles, parsed.cancelable, parsed.composed))
+            Ok((
+                parsed.base.bubbles,
+                parsed.base.cancelable,
+                parsed.base.composed,
+            ))
         }
         DeviceEventKind::Motion => {
             let parsed = webidl::parse_dictionary_object::<MotionInit>(scope, dictionary)?;
@@ -352,7 +315,11 @@ fn initialize_payload<'s>(
                 INTERVAL,
                 v8::Number::new(scope, parsed.interval).into(),
             );
-            Ok((parsed.bubbles, parsed.cancelable, parsed.composed))
+            Ok((
+                parsed.base.bubbles,
+                parsed.base.cancelable,
+                parsed.base.composed,
+            ))
         }
     }
 }

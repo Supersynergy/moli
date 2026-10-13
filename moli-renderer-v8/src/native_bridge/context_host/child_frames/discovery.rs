@@ -96,10 +96,18 @@ impl JsContextHost {
             .is_some_and(|kind| attribute_name.eq_ignore_ascii_case(kind.navigation_attribute()))
     }
 
-    pub(in crate::native_bridge::context_host) fn child_browsing_context_host_is_active(
-        &self,
-        handle: DomHandle,
-    ) -> bool {
+    pub(crate) fn child_browsing_context_host_is_active(&self, handle: DomHandle) -> bool {
+        if self
+            .dom_host()
+            .owner_document_handle(handle)
+            .is_some_and(|document| {
+                self.subframe_loading_disabled_documents
+                    .borrow()
+                    .contains_key(&document)
+            })
+        {
+            return false;
+        }
         self.dom_host().is_connected(handle)
             || self
                 .lightweight_popup_id_for_node_owner_document(handle)

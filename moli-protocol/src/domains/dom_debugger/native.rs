@@ -106,7 +106,7 @@ fn prepare(
                     breakpoint,
                     enabled,
                 },
-                unit,
+                native::unit_response,
             ))
         }
         DomDebuggerAction::SetXHRBreakpoint | DomDebuggerAction::RemoveXHRBreakpoint => {
@@ -130,16 +130,8 @@ fn prepare(
                     breakpoint,
                     enabled,
                 },
-                unit,
+                native::unit_response,
             ))
         }
-    }
-}
-
-fn unit(reply: anyhow::Result<Reply>) -> Response {
-    match reply {
-        Ok(Reply::Unit) => Response::success(json!({})),
-        Err(error) => Response::error(-32000, error.to_string()),
-        _ => unreachable!("DOMDebugger configuration reply"),
     }
 }

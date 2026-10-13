@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use super::{
     JsContextHost,
+    layout::LayoutInputChange,
     permissions::{permission_names_match, permission_override_name},
 };
 use crate::{
@@ -524,6 +525,32 @@ impl JsContextHost {
         self.document_resource_loader_for_window_owner(target.owner())
     }
 
+    pub(crate) fn document_referrer_source_url_for_dispatch_scope(
+        &self,
+        dispatch_scope: crate::native_bridge::OwnerDispatchScope,
+    ) -> Option<url::Url> {
+        use crate::native_bridge::OwnerDispatchScope;
+        let mut document = match dispatch_scope {
+            OwnerDispatchScope::Top => self.document_handle(),
+            OwnerDispatchScope::Child(handle) => {
+                self.child_browsing_context_document_handle(handle)?
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                self.lightweight_popup_document_handle(popup_id)?
+            }
+        };
+        loop {
+            let url = self.document_url_for_handle(document);
+            if url.scheme() != "about" || url.path() != "srcdoc" {
+                return Some(url);
+            }
+            // Srcdoc uses its containing Document's URL, repeating for nested
+            // srcdoc. Its own base URL still belongs to URL resolution only.
+            let frame = self.child_browsing_context_handle_for_stored_document(document)?;
+            document = self.dom_host().node(frame).and_then(Node::owner_document)?;
+        }
+    }
+
     pub(crate) fn subresource_request_environment(
         &self,
         loader: &DocumentResourceLoader,
@@ -793,8 +820,7 @@ impl JsContextHost {
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) {
         if self.emulated_media != *overrides {
-            self.style_engine
-                .bump_target_context_epoch_for_document(self.document_handle());
+            self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         self.emulated_media = overrides.clone();
     }
@@ -809,8 +835,7 @@ impl JsContextHost {
     ) -> bool {
         let changed = self.viewport_surface != viewport_surface;
         if changed {
-            self.style_engine
-                .bump_target_context_epoch_for_document(self.document_handle());
+            self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
         self.viewport_surface = viewport_surface;
         changed
@@ -1810,7 +1835,21 @@ impl JsContextHost {
     }
 
     pub(crate) fn set_document_url(&mut self, url: url::Url) -> bool {
+        let document = self.document_handle();
+        let inherited_base = (self.main_document_is_initial_empty()
+            && moli_url::is_about_blank(&url))
+        .then(|| {
+            self.dom_host()
+                .node(document)
+                .and_then(|node| node.as_document())
+                .map(|document| document.fallback_base_url().clone())
+        })
+        .flatten();
         let target_change = DocumentRuntime::set_document_url(self, url);
+        if let Some(base) = inherited_base {
+            self.dom_host_mut()
+                .set_document_fallback_base_url_for_handle(document, Some(base));
+        }
         if let Some((previous_target, next_target)) = target_change {
             self.note_target_style_activity(previous_target, next_target);
         }
@@ -2109,6 +2148,19 @@ impl JsContextHost {
             );
         }
         changed
+    }
+
+    pub(crate) fn set_web_mcp_activity(&mut self, handle: DomHandle, form: bool, submit: bool) {
+        let old_state = self.retained_current_element_state(handle);
+        if unsafe {
+            DocumentRuntime::set_web_mcp_activity(&mut *self.runtime, handle, form, submit)
+        } {
+            self.note_element_state_style_activity_with_old_state(
+                handle,
+                StyloElementState::TOOL_FORM_ACTIVE | StyloElementState::TOOL_SUBMIT_ACTIVE,
+                old_state,
+            );
+        }
     }
 
     fn note_input_value_state_style_activity(

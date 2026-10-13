@@ -4,6 +4,11 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
+import { runPuppeteerAriaQuerySmoke } from './puppeteer_aria_queries.mjs';
+import { runPuppeteerShadowAccessibilitySmoke } from './puppeteer_shadow_accessibility.mjs';
+import { runPuppeteerAccessibilityVisibilitySmoke } from './puppeteer_accessibility_visibility.mjs';
+import { runPuppeteerAccessibilityNamesSmoke } from './puppeteer_accessibility_names.mjs';
+import { runPuppeteerAccessibilityWhitespaceSmoke } from './puppeteer_accessibility_whitespace.mjs';
 import {
   activateXPathElement,
   runPuppeteerDomInteractionSmoke,
@@ -436,6 +441,36 @@ async function main() {
       throw new Error(`unexpected Puppeteer fetch body: ${fetchBody}`);
     }
     record('puppeteer_evaluate_fetch');
+
+    const ariaQueryResult = await withTimeout(
+      'Puppeteer ARIA selectors',
+      runPuppeteerAriaQuerySmoke(page),
+    );
+    record('puppeteer_aria_selector_workflow', ariaQueryResult);
+
+    const shadowAccessibilityResult = await withTimeout(
+      'Puppeteer Shadow DOM accessibility workflow',
+      runPuppeteerShadowAccessibilitySmoke(page),
+    );
+    record('puppeteer_shadow_accessibility_workflow', shadowAccessibilityResult);
+
+    const accessibilityVisibilityResult = await withTimeout(
+      'Puppeteer accessibility visibility',
+      runPuppeteerAccessibilityVisibilitySmoke(page),
+    );
+    record('puppeteer_accessibility_visibility_workflow', accessibilityVisibilityResult);
+
+    const accessibilityNamesResult = await withTimeout(
+      'Puppeteer accessibility descendant names',
+      runPuppeteerAccessibilityNamesSmoke(page),
+    );
+    record('puppeteer_accessibility_names_workflow', accessibilityNamesResult);
+
+    const accessibilityWhitespaceResult = await withTimeout(
+      'Puppeteer accessibility name whitespace',
+      runPuppeteerAccessibilityWhitespaceSmoke(page),
+    );
+    record('puppeteer_accessibility_whitespace_workflow', accessibilityWhitespaceResult);
 
     const domInteractionResult = await withTimeout(
       'Puppeteer DOM interaction matrix',

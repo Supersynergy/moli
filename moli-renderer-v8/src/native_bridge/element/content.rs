@@ -17,7 +17,7 @@ use super::{
     html_element_getter_receiver, html_element_setter_receiver, observable_sources_with_fragments,
     property_string_value,
     rendered_state::{
-        ElementBoxState, ElementContentVisibility, ElementRenderedState, ElementRenderedStyle,
+        ElementBoxState, ElementRenderedState, ElementRenderedStyle,
         rendered_child_participates_in_flat_tree,
     },
     styles::StyleObservation,
@@ -636,10 +636,7 @@ fn append_inner_text(
         let style = task
             .prepared_style
             .unwrap_or_else(|| ElementRenderedStyle::read_in_scope(style_scope, task.handle));
-        if style.display == ComputedDisplayKind::None
-            || (style.content_visibility == ElementContentVisibility::Hidden
-                && style.content_visibility_applicable)
-        {
+        if style.display == ComputedDisplayKind::None || style.hides_contents {
             continue;
         }
 
@@ -899,16 +896,24 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
         rv.set_undefined();
         return;
     }
-    let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
-    let value = runtime
+    let value = if runtime
         .dom_host()
-        .outer_html_with_shadow_roots(
-            handle,
-            &scripting_enabled_for_node,
-            crate::dom::native::ShadowRootInclusion::None,
-            None,
-        )
-        .unwrap_or_default();
+        .node_document_is_html_document(handle)
+        .unwrap_or(true)
+    {
+        let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
+        runtime
+            .dom_host()
+            .outer_html_with_shadow_roots(
+                handle,
+                &scripting_enabled_for_node,
+                crate::dom::native::ShadowRootInclusion::None,
+                None,
+            )
+            .unwrap_or_default()
+    } else {
+        crate::xml_serializer::serialize_native_handle(runtime.dom_host(), handle)
+    };
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();
         return;

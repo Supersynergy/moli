@@ -5,6 +5,7 @@ use crate::worker::handle::WorkerParentErrorEventKind;
 use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
 
+mod response_mime;
 mod source_phase;
 
 const WORKER_WASM_IMPORT_PM: &[u8] = &[
@@ -204,6 +205,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
     let mut handle = spawn_test_worker_with_options(
         WorkerSpawnOptions::new(
             r#"
+            const getBlockedURI = Object.getOwnPropertyDescriptor(SecurityPolicyViolationEvent.prototype, "blockedURI").get;
             self.Event = null;
             Object.defineProperty(SecurityPolicyViolationEvent.prototype, "blockedURI", {
                 value: "prototype-blocked-uri",
@@ -214,7 +216,11 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
             addEventListener("securitypolicyviolation", event => {
                 events.push({
                     type: event.type,
-                    blockedURI: event.blockedURI,
+                    blockedURI: getBlockedURI.call(event),
+                    publicBlockedURI: event.blockedURI,
+                    bubbles: event.bubbles,
+                    cancelable: event.cancelable,
+                    composed: event.composed,
                     effectiveDirective: event.effectiveDirective,
                     disposition: event.disposition,
                     instance: event instanceof SecurityPolicyViolationEvent
@@ -244,7 +250,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","effectiveDirective":"script-src","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","publicBlockedURI":"prototype-blocked-uri","bubbles":true,"cancelable":false,"composed":true,"effectiveDirective":"script-src","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
     );
 }
 
@@ -801,6 +807,174 @@ async fn worker_trusted_types_policy_callbacks_follow_webidl_contract() {
     assert_eq!(
         expect_post_json(msg),
         r#"{"facts":{"proxyApply":1,"thisIsUndefined":true,"arguments":["input",7,true,3]},"methods":["function","function","function"],"html":"","scriptURLCodePoint":65533,"missingError":"TypeError","revokedError":"TypeError"}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_csp_string_compilation_keywords_preserve_source_token_boundaries() {
+    ensure_v8();
+    for keyword in ["unsafe-eval", "wasm-unsafe-eval", "none"] {
+        for (prefix, suffix, valid) in [
+            ("", "", true),
+            ("\t\n", " \r\u{000c}", true),
+            ("\u{000b}", "", false),
+            ("", "\u{000b}", false),
+        ] {
+            let policy = format!("script-src {prefix}'{keyword}'{suffix}");
+            let source = format!(
+                "postMessage(({}).slice(0, 2)); close();",
+                include_str!("../../../../tests/fixtures/csp-eval-source-tokens.js"),
+            );
+            let options =
+                WorkerSpawnOptions::new(source, "https://app.test/worker/main.js".to_owned())
+                    .with_content_security_policies(vec![policy.clone()]);
+            let mut handle = spawn_test_worker_with_options(options);
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            let expected = serde_json::json!([
+                if valid && keyword == "unsafe-eval" {
+                    "allowed"
+                } else {
+                    "EvalError"
+                },
+                if valid && keyword == "unsafe-eval" {
+                    "allowed"
+                } else {
+                    "EvalError"
+                },
+            ]);
+            assert_eq!(
+                expect_post_json(message),
+                expected.to_string(),
+                "{policy:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn worker_string_timer_csp_blocks_and_reports_without_blocking_functions() {
+    ensure_v8();
+    for (policy, report_only, blocked, reports) in [
+        ("script-src 'self' 'report-sample'", false, true, true),
+        ("default-src 'self' 'report-sample'", false, true, true),
+        ("script-src 'self' 'report-sample'", true, false, true),
+        ("script-src 'unsafe-eval'", false, false, false),
+    ] {
+        let source = r#"
+            globalThis.ran = [];
+            const events = [];
+            const first = setTimeout("globalThis.ran.push('timeout')", 10);
+            globalThis.interval = setInterval("globalThis.ran.push('interval'); clearInterval(globalThis.interval)", 10);
+            addEventListener('securitypolicyviolation', e => events.push({
+                directive: e.effectiveDirective, blocked: e.blockedURI,
+                disposition: e.disposition, policy: e.originalPolicy,
+                source: e.sourceFile, line: e.lineNumber, sample: e.sample,
+            }));
+            const synchronousEvents = events.length;
+            setTimeout((value) => ran.push(value), 10, 'function');
+            setTimeout(() => {
+                postMessage({zeroIds: [first === 0, interval === 0], ran: ran.sort(), synchronousEvents, events});
+                close();
+            }, 80);
+        "#;
+        let options = WorkerSpawnOptions::new(
+            source.to_owned(),
+            "https://app.test/worker/main.js".to_owned(),
+        );
+        let options = if report_only {
+            options.with_content_security_report_only_policies(vec![policy.to_owned()])
+        } else {
+            options.with_content_security_policies(vec![policy.to_owned()])
+        };
+        let mut handle = spawn_test_worker_with_options(options);
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+        assert_eq!(value["zeroIds"], serde_json::json!([blocked, blocked]));
+        assert_eq!(
+            value["ran"],
+            if blocked {
+                serde_json::json!(["function"])
+            } else {
+                serde_json::json!(["function", "interval", "timeout"])
+            }
+        );
+        assert_eq!(value["synchronousEvents"], 0);
+        let events = value["events"].as_array().unwrap();
+        assert_eq!(events.len(), if reports { 2 } else { 0 });
+        for (event, (line, sample)) in events.iter().zip([
+            (4, "globalThis.ran.push('timeout')"),
+            (5, "globalThis.ran.push('interval'); clearIn"),
+        ]) {
+            assert_eq!(
+                event,
+                &serde_json::json!({
+                    "directive": "script-src", "blocked": "eval",
+                    "disposition": if report_only { "report" } else { "enforce" },
+                    "policy": policy, "source": "https://app.test/worker/main.js", "line": line, "sample": sample,
+                })
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn worker_string_timer_csp_converts_arguments_before_policy_and_preserves_exceptions() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(r#"
+            const order = [];
+            const events = [];
+            const marker = {};
+            const errors = [];
+            for (const method of ['setTimeout', 'setInterval']) {
+                try {
+                    self[method]({toString() { order.push('handler'); throw marker; }}, {valueOf() { order.push('unexpected'); return 0; }});
+                } catch (e) { errors.push(e === marker); }
+                try {
+                    self[method]({toString() { order.push('handler'); return "postMessage('unexpected')"; }}, {valueOf() { order.push('delay'); throw marker; }});
+                } catch (e) { errors.push(e === marker); }
+            }
+            addEventListener('securitypolicyviolation', e => events.push(e.blockedURI));
+            setTimeout(() => { postMessage({order, errors, events}); close(); }, 50);
+        "#.to_owned(), "https://app.test/worker/main.js".to_owned())
+            .with_content_security_policies(vec!["script-src 'none'; require-trusted-types-for 'script'".to_owned()]),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "order": ["handler", "handler", "delay", "handler", "handler", "delay"],
+            "errors": [true, true, true, true], "events": [],
+        })
+    );
+}
+
+#[tokio::test]
+async fn worker_string_timer_csp_preserves_trusted_types_relaxation_and_default_policy_order() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(r#"
+            globalThis.ran = [];
+            const order = [];
+            trustedTypes.createPolicy('default', {createScript(value, type, sink) { order.push(sink); return value; }});
+            const explicit = trustedTypes.createPolicy('explicit', {createScript: value => value});
+            const first = setTimeout({toString() { order.push('handler'); return "ran.push('default')"; }}, {valueOf() { order.push('delay'); return 10; }});
+            const trusted = explicit.createScript("ran.push('trusted')");
+            trusted.toString = () => { throw new Error('must not coerce TrustedScript'); };
+            const second = setTimeout(trusted, 10);
+            setTimeout(() => { postMessage({positiveIds: [first > 0, second > 0], ran, order}); close(); }, 50);
+        "#.to_owned(), "https://app.test/worker/main.js".to_owned())
+            .with_content_security_policies(vec!["script-src 'trusted-types-eval'; require-trusted-types-for 'script'".to_owned()]),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "positiveIds": [true, true], "ran": ["default", "trusted"],
+            "order": ["handler", "delay", "WorkerGlobalScope setTimeout"],
+        })
     );
 }
 

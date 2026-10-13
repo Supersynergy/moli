@@ -1227,6 +1227,25 @@ impl DomHost {
         true
     }
 
+    pub fn set_document_quirks_mode_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        quirks_mode: selectors::matching::QuirksMode,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.quirks_mode() == quirks_mode {
+            return false;
+        }
+        document.set_quirks_mode(quirks_mode);
+        self.record_mutation(MutationScope::QueryState);
+        true
+    }
+
     pub fn set_document_default_language_for_handle(
         &mut self,
         document_handle: DomHandle,
@@ -1356,7 +1375,12 @@ impl DomHost {
         self.find_document_anchor(document_handle, &decoded)
     }
 
-    fn find_document_anchor(&self, document_handle: DomHandle, name: &str) -> Option<DomHandle> {
+    /// Finds an ID or legacy named anchor without changing the document target.
+    pub fn find_document_anchor(
+        &self,
+        document_handle: DomHandle,
+        name: &str,
+    ) -> Option<DomHandle> {
         if name.is_empty() || !self.node(document_handle).is_some_and(Node::is_document) {
             return None;
         }
@@ -1689,6 +1713,16 @@ impl DomHost {
 
     pub fn create_document(&mut self, url: url::Url) -> DomHandle {
         self.dom.create_document(url)
+    }
+
+    /// Keep the retired Document and its nodes addressable while admitting a
+    /// fresh main Document into the same LocalWindow's DOM arena.
+    pub fn replace_main_document(&mut self, document: &Document) -> DomHandle {
+        self.active_element.set(None);
+        self.hovered_elements.borrow_mut().clear();
+        let handle = self.dom.replace_main_document(document);
+        self.record_mutation(MutationScope::QueryState);
+        handle
     }
 
     pub fn create_document_fragment(&mut self) -> DomHandle {

@@ -30,16 +30,16 @@ impl CdpConnection {
 
     pub(crate) fn ensure_resource_request_client(
         &mut self,
-    ) -> Result<ResourceRequestClient, String> {
+    ) -> anyhow::Result<ResourceRequestClient> {
         self.apply_active_engine_fetch_overrides();
         let storage = self.resource_storage_handles();
         let engine = self.active_navigation_engine_mut();
         engine
             .ensure_resource_runtime_ready_for_navigation_storage(storage.into_navigation_storage())
-            .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
+            .context("failed to initialize resource runtime")?;
         engine
             .resource_request_client()
-            .ok_or_else(|| "resource request client unavailable".to_owned())
+            .context("resource request client unavailable")
     }
 
     pub(crate) fn ensure_resource_request_client_for_navigation_load_inputs(
@@ -117,6 +117,7 @@ impl CdpConnection {
         };
         if let Some(engine) = engine.as_mut() {
             engine.set_document_activity(load_inputs.document_activity);
+            engine.set_emulated_scrollbars_hidden(load_inputs.scrollbars_hidden);
         }
         engine
     }

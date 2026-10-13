@@ -221,9 +221,69 @@ fn html_element_interface_name_covers_replay_tags() {
 fn svg_element_interface_name_specializes_standard_elements() {
     assert_eq!(svg_element_interface_name("a"), "SVGAElement");
     assert_eq!(svg_element_interface_name("circle"), "SVGCircleElement");
+    assert_eq!(svg_element_interface_name("clipPath"), "SVGClipPathElement");
     assert_eq!(svg_element_interface_name("defs"), "SVGDefsElement");
     assert_eq!(svg_element_interface_name("desc"), "SVGDescElement");
     assert_eq!(svg_element_interface_name("ellipse"), "SVGEllipseElement");
+    assert_eq!(svg_element_interface_name("feBlend"), "SVGFEBlendElement");
+    assert_eq!(
+        svg_element_interface_name("feColorMatrix"),
+        "SVGFEColorMatrixElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feComposite"),
+        "SVGFECompositeElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feConvolveMatrix"),
+        "SVGFEConvolveMatrixElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDiffuseLighting"),
+        "SVGFEDiffuseLightingElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDisplacementMap"),
+        "SVGFEDisplacementMapElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDistantLight"),
+        "SVGFEDistantLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDropShadow"),
+        "SVGFEDropShadowElement"
+    );
+    assert_eq!(svg_element_interface_name("feFuncA"), "SVGFEFuncAElement");
+    assert_eq!(svg_element_interface_name("feFuncB"), "SVGFEFuncBElement");
+    assert_eq!(svg_element_interface_name("feFuncG"), "SVGFEFuncGElement");
+    assert_eq!(svg_element_interface_name("feFuncR"), "SVGFEFuncRElement");
+    assert_eq!(
+        svg_element_interface_name("feGaussianBlur"),
+        "SVGFEGaussianBlurElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feMorphology"),
+        "SVGFEMorphologyElement"
+    );
+    assert_eq!(svg_element_interface_name("feOffset"), "SVGFEOffsetElement");
+    assert_eq!(
+        svg_element_interface_name("fePointLight"),
+        "SVGFEPointLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feSpecularLighting"),
+        "SVGFESpecularLightingElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feSpotLight"),
+        "SVGFESpotLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feTurbulence"),
+        "SVGFETurbulenceElement"
+    );
+    assert_eq!(svg_element_interface_name("filter"), "SVGFilterElement");
     assert_eq!(
         svg_element_interface_name("foreignObject"),
         "SVGForeignObjectElement"
@@ -236,6 +296,8 @@ fn svg_element_interface_name_specializes_standard_elements() {
         "SVGLinearGradientElement"
     );
     assert_eq!(svg_element_interface_name("metadata"), "SVGMetadataElement");
+    assert_eq!(svg_element_interface_name("marker"), "SVGMarkerElement");
+    assert_eq!(svg_element_interface_name("mask"), "SVGMaskElement");
     assert_eq!(svg_element_interface_name("path"), "SVGPathElement");
     assert_eq!(svg_element_interface_name("pattern"), "SVGPatternElement");
     assert_eq!(svg_element_interface_name("polygon"), "SVGPolygonElement");
@@ -246,12 +308,15 @@ fn svg_element_interface_name_specializes_standard_elements() {
     );
     assert_eq!(svg_element_interface_name("rect"), "SVGRectElement");
     assert_eq!(svg_element_interface_name("script"), "SVGScriptElement");
+    assert_eq!(svg_element_interface_name("stop"), "SVGStopElement");
     assert_eq!(svg_element_interface_name("svg"), "SVGSVGElement");
     assert_eq!(svg_element_interface_name("symbol"), "SVGSymbolElement");
     assert_eq!(svg_element_interface_name("text"), "SVGTextElement");
+    assert_eq!(svg_element_interface_name("textPath"), "SVGTextPathElement");
     assert_eq!(svg_element_interface_name("title"), "SVGTitleElement");
     assert_eq!(svg_element_interface_name("tspan"), "SVGTSpanElement");
     assert_eq!(svg_element_interface_name("use"), "SVGUseElement");
+    assert_eq!(svg_element_interface_name("view"), "SVGViewElement");
     assert_eq!(svg_element_interface_name("style"), "SVGStyleElement");
     assert_eq!(svg_element_interface_name("custom"), "SVGElement");
 }
@@ -474,4 +539,44 @@ fn range_input_value_uses_live_min_max_and_step_attributes() {
     );
     assert_eq!(defaulted.input_value(), "4");
     assert!(!defaulted.input_value_dirty());
+}
+
+#[test]
+fn range_value_setters_use_element_bounds_and_step_authority() {
+    let mut input = Element::new_html("input");
+    for (name, value) in [
+        ("type", "range"),
+        ("min", "100"),
+        ("max", "200"),
+        ("step", "10"),
+    ] {
+        input.set_attribute(name.into(), String::new(), None, value.into());
+    }
+    for (value, expected) in [
+        ("180", "180"),
+        ("185", "190"),
+        ("250", "200"),
+        ("90", "100"),
+        ("invalid", "150"),
+    ] {
+        input.set_input_value(value);
+        assert_eq!(input.input_value(), expected);
+    }
+    input.set_attribute("step".into(), String::new(), None, "any".into());
+    input.set_input_value("180.25");
+    assert_eq!(input.input_value(), "180.25");
+}
+
+#[test]
+fn parser_input_finalization_preserves_dirty_values_and_skips_other_elements() {
+    let mut input = Element::new_html("input");
+    input.set_attribute("type".into(), String::new(), None, "hidden".into());
+    input.set_attribute("value".into(), String::new(), None, "default".into());
+    input.set_input_value(" edited\nvalue ");
+    assert!(!input.resanitize_input_value_after_parser_attributes());
+    assert_eq!(input.input_value(), " edited\nvalue ");
+    assert!(input.input_value_dirty());
+    let mut div = Element::new_html("div");
+    assert!(!div.resanitize_input_value_after_parser_attributes());
+    assert!(!div.rare_data.is_materialized());
 }

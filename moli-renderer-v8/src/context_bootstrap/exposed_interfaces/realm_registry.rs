@@ -1,37 +1,47 @@
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 
 use anyhow::{Result, anyhow};
 
 use super::metadata::{InterfaceId, RealmKind};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RealmInterfaceState {
+/// Publication state contains no V8 roots. The Context owns intrinsic identities
+/// through a traced embedder-data array, including after Window detachment.
+pub(super) enum RealmInterfaceEntry {
     Uninitialized,
     Materializing,
-    Finalizing,
     Ready,
     Failed,
 }
 
 pub(super) struct IntrinsicInterfaceRegistry {
     realm_kind: RealmKind,
-    states: RefCell<Vec<RealmInterfaceState>>,
-    objects: RefCell<Vec<Option<RealmInterfaceObjects>>>,
+    entries: RefCell<Vec<RealmInterfaceEntry>>,
 }
 
-struct RealmInterfaceObjects {
-    constructor: v8::Global<v8::Object>,
-    prototype: v8::Global<v8::Object>,
-    public_interface: v8::Global<v8::Object>,
+// Renderer-owned tagged Context slot, reserved exclusively for Web API identities.
+// rusty_v8 offsets this index past its debugger and Rust context-slot bookkeeping.
+// Storing a JS value here gives V8 the ownership edge without a native Global root.
+const INTRINSIC_OBJECTS_CONTEXT_SLOT: i32 = 0;
+const OBJECTS_PER_INTERFACE: usize = 3;
+
+fn intrinsic_objects<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Array>> {
+    // Registry initialization always sets this slot before any identity lookup.
+    scope
+        .get_current_context()
+        .get_embedder_data(scope, INTRINSIC_OBJECTS_CONTEXT_SLOT)
+        .and_then(|value| v8::Local::try_from(value).ok())
 }
 
 impl IntrinsicInterfaceRegistry {
     fn new(interface_count: usize, realm_kind: RealmKind) -> Self {
         Self {
             realm_kind,
-            states: RefCell::new(vec![RealmInterfaceState::Uninitialized; interface_count]),
-            objects: RefCell::new((0..interface_count).map(|_| None).collect()),
+            entries: RefCell::new(
+                (0..interface_count)
+                    .map(|_| RealmInterfaceEntry::Uninitialized)
+                    .collect(),
+            ),
         }
     }
 
@@ -42,12 +52,7 @@ impl IntrinsicInterfaceRegistry {
     ) -> Result<Rc<Self>> {
         let context = scope.get_current_context();
         if let Some(registry) = context.get_slot::<Self>() {
-            if registry.states.borrow().len() != interface_count {
-                return Err(anyhow!(
-                    "realm interface registry size changed from {} to {interface_count}",
-                    registry.states.borrow().len()
-                ));
-            }
+            registry.validate_size(interface_count)?;
             if registry.realm_kind != realm_kind {
                 return Err(anyhow!(
                     "realm interface registry kind changed from {:?} to {realm_kind:?}",
@@ -56,19 +61,18 @@ impl IntrinsicInterfaceRegistry {
             }
             return Ok(registry);
         }
-        let registry = Rc::new(Self::new(interface_count, realm_kind));
-        if let Some(previous) = context.set_slot(registry.clone()) {
-            if previous.states.borrow().len() != interface_count
-                || previous.realm_kind != realm_kind
-            {
-                return Err(anyhow!(
-                    "realm interface registry was concurrently initialized with incompatible metadata"
-                ));
-            }
-            Ok(previous)
-        } else {
-            Ok(registry)
+        let count = interface_count
+            .checked_mul(OBJECTS_PER_INTERFACE)
+            .and_then(|count| i32::try_from(count).ok())
+            .ok_or_else(|| anyhow!("too many realm interface objects"))?;
+        let objects = v8::Array::new(scope, count);
+        if objects.set_prototype(scope, v8::null(scope).into()) != Some(true) {
+            return Err(anyhow!("failed to initialize realm interface storage"));
         }
+        context.set_embedder_data(INTRINSIC_OBJECTS_CONTEXT_SLOT, objects.into());
+        let registry = Rc::new(Self::new(interface_count, realm_kind));
+        context.set_slot(registry.clone());
+        Ok(registry)
     }
 
     pub(super) fn for_current_context(
@@ -79,33 +83,68 @@ impl IntrinsicInterfaceRegistry {
             .get_current_context()
             .get_slot::<Self>()
             .ok_or_else(|| anyhow!("realm interface registry is not initialized"))?;
-        if registry.states.borrow().len() != interface_count {
-            return Err(anyhow!(
-                "realm interface registry size changed from {} to {interface_count}",
-                registry.states.borrow().len()
-            ));
-        }
+        registry.validate_size(interface_count)?;
         Ok(registry)
     }
 
-    pub(super) fn state(&self, id: InterfaceId) -> Option<RealmInterfaceState> {
-        self.states.borrow().get(id.index()).copied()
-    }
-
-    pub(super) fn set_state(&self, id: InterfaceId, state: RealmInterfaceState) -> Result<()> {
-        let interface_count = self.states.borrow().len();
-        let mut states = self.states.borrow_mut();
-        let slot = states.get_mut(id.index()).ok_or_else(|| {
-            anyhow!(
-                "interface state id {} is out of range for {interface_count} entries",
-                id.index()
-            )
-        })?;
-        *slot = state;
+    fn validate_size(&self, interface_count: usize) -> Result<()> {
+        let current_count = self.entries.borrow().len();
+        if current_count != interface_count {
+            return Err(anyhow!(
+                "realm interface registry size changed from {current_count} to {interface_count}"
+            ));
+        }
         Ok(())
     }
 
-    pub(super) fn register_objects<'s>(
+    pub(super) const fn realm_kind(&self) -> RealmKind {
+        self.realm_kind
+    }
+
+    pub(super) fn entry(&self, id: InterfaceId) -> Option<Ref<'_, RealmInterfaceEntry>> {
+        Ref::filter_map(self.entries.borrow(), |entries| entries.get(id.index())).ok()
+    }
+
+    pub(super) fn begin_materialization(&self, id: InterfaceId) -> Result<()> {
+        self.set_pending_entry(id, RealmInterfaceEntry::Materializing)
+    }
+
+    pub(super) fn fail(&self, id: InterfaceId) -> Result<()> {
+        self.set_pending_entry(id, RealmInterfaceEntry::Failed)
+    }
+
+    fn set_pending_entry(&self, id: InterfaceId, entry: RealmInterfaceEntry) -> Result<()> {
+        let mut entries = self.entries.borrow_mut();
+        let interface_count = entries.len();
+        let slot = entries.get_mut(id.index()).ok_or_else(|| {
+            anyhow!(
+                "interface id {} is out of range for {interface_count} entries",
+                id.index()
+            )
+        })?;
+        if !matches!(
+            (&*slot, &entry),
+            (
+                RealmInterfaceEntry::Uninitialized,
+                RealmInterfaceEntry::Materializing
+            ) | (
+                RealmInterfaceEntry::Materializing,
+                RealmInterfaceEntry::Failed
+            )
+        ) {
+            return Err(anyhow!(
+                "invalid materialization transition for interface id {}",
+                id.index()
+            ));
+        }
+        *slot = entry;
+        Ok(())
+    }
+
+    /// The only publication point, shared by completed lazy materialization
+    /// and eager capture after bootstrap. Keep the prototype handle because
+    /// legacy factories share prototypes and author code can mutate properties.
+    pub(super) fn publish_ready<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
@@ -113,39 +152,61 @@ impl IntrinsicInterfaceRegistry {
         prototype: v8::Local<'s, v8::Object>,
         public_interface: v8::Local<'s, v8::Object>,
     ) -> Result<()> {
-        let interface_count = self.objects.borrow().len();
         {
-            let objects = self.objects.borrow();
-            if let Some(existing) = objects.get(id.index()).and_then(Option::as_ref) {
-                let same_constructor =
-                    v8::Local::new(scope, &existing.constructor).strict_equals(constructor.into());
-                let same_prototype =
-                    v8::Local::new(scope, &existing.prototype).strict_equals(prototype.into());
-                let same_public_interface = v8::Local::new(scope, &existing.public_interface)
-                    .strict_equals(public_interface.into());
-                if same_constructor && same_prototype && same_public_interface {
-                    return Ok(());
+            let entries = self.entries.borrow();
+            let slot = entries.get(id.index()).ok_or_else(|| {
+                anyhow!(
+                    "interface id {} is out of range for {} entries",
+                    id.index(),
+                    entries.len()
+                )
+            })?;
+            match slot {
+                RealmInterfaceEntry::Ready => {
+                    return Err(anyhow!("interface id {} is already published", id.index()));
                 }
-                return Err(anyhow!(
-                    "interface objects for id {} were replaced after registration",
-                    id.index()
-                ));
+                RealmInterfaceEntry::Failed => {
+                    return Err(anyhow!(
+                        "a previous materialization of interface id {} failed",
+                        id.index()
+                    ));
+                }
+                RealmInterfaceEntry::Uninitialized | RealmInterfaceEntry::Materializing => {}
             }
         }
-        let mut objects = self.objects.borrow_mut();
-        let slot = objects.get_mut(id.index()).ok_or_else(|| {
-            anyhow!(
-                "interface object id {} is out of range for {interface_count} entries",
-                id.index()
-            )
-        })?;
-        debug_assert!(slot.is_none());
-        *slot = Some(RealmInterfaceObjects {
-            constructor: v8::Global::new(scope, constructor),
-            prototype: v8::Global::new(scope, prototype),
-            public_interface: v8::Global::new(scope, public_interface),
-        });
+        let objects = intrinsic_objects(scope)
+            .ok_or_else(|| anyhow!("realm interface storage is not initialized"))?;
+        let first = u32::try_from(id.index() * OBJECTS_PER_INTERFACE)
+            .map_err(|_| anyhow!("realm interface object index is out of range"))?;
+        for (offset, value) in [constructor, prototype, public_interface]
+            .into_iter()
+            .enumerate()
+        {
+            if objects.set_index(scope, first + offset as u32, value.into()) != Some(true) {
+                return Err(anyhow!("failed to publish realm interface object"));
+            }
+        }
+        self.entries.borrow_mut()[id.index()] = RealmInterfaceEntry::Ready;
         Ok(())
+    }
+
+    fn object<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        id: InterfaceId,
+        offset: usize,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        if !matches!(
+            self.entries.borrow().get(id.index())?,
+            RealmInterfaceEntry::Ready
+        ) {
+            return None;
+        }
+        let objects = intrinsic_objects(scope)?;
+        let index = u32::try_from(id.index() * OBJECTS_PER_INTERFACE + offset).ok()?;
+        objects
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::try_from(value).ok())
     }
 
     pub(super) fn constructor<'s>(
@@ -153,9 +214,7 @@ impl IntrinsicInterfaceRegistry {
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let objects = self.objects.borrow();
-        let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.constructor))
+        self.object(scope, id, 0)
     }
 
     pub(super) fn prototype<'s>(
@@ -163,9 +222,7 @@ impl IntrinsicInterfaceRegistry {
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let objects = self.objects.borrow();
-        let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.prototype))
+        self.object(scope, id, 1)
     }
 
     pub(super) fn public_interface<'s>(
@@ -173,9 +230,7 @@ impl IntrinsicInterfaceRegistry {
         scope: &mut v8::PinScope<'s, '_>,
         id: InterfaceId,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        let objects = self.objects.borrow();
-        let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.public_interface))
+        self.object(scope, id, 2)
     }
 }
 
@@ -186,30 +241,91 @@ mod tests {
     use super::*;
 
     #[test]
-    fn set_state_updates_a_registered_interface() {
-        let registry = IntrinsicInterfaceRegistry::new(1, RealmKind::Window);
+    fn intrinsic_identities_live_with_the_context_not_the_rust_registry() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
         let id = InterfaceId::from_callback_data(0);
+        let (registry, context_root, context_weak, identities) = {
+            let scope = pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let registry = IntrinsicInterfaceRegistry::initialize_for_current_context(
+                scope,
+                1,
+                RealmKind::Window,
+            )
+            .unwrap();
+            let constructor = v8::Object::new(scope);
+            let prototype = v8::Object::new(scope);
+            let public_interface = v8::Object::new(scope);
+            registry
+                .publish_ready(scope, id, constructor, prototype, public_interface)
+                .unwrap();
+            let identities = [constructor, prototype, public_interface]
+                .map(|object| v8::Weak::new(scope, object));
+            context.detach_global();
+            (
+                registry,
+                v8::Global::new(scope, context),
+                v8::Weak::new(scope, context),
+                identities,
+            )
+        };
 
-        registry
-            .set_state(id, RealmInterfaceState::Ready)
-            .expect("registered interface state should update");
+        for _ in 0..2 {
+            isolate.low_memory_notification();
+        }
+        {
+            let scope = pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Local::new(scope, &context_root);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let values = [
+                registry.constructor(scope, id),
+                registry.prototype(scope, id),
+                registry.public_interface(scope, id),
+            ];
+            for (value, identity) in values.into_iter().zip(&identities) {
+                let identity = identity
+                    .to_local(scope)
+                    .expect("Context must retain each intrinsic");
+                assert!(value.unwrap().strict_equals(identity.into()));
+            }
+        }
 
-        assert_eq!(registry.state(id), Some(RealmInterfaceState::Ready));
+        drop(context_root);
+        for _ in 0..2 {
+            isolate.low_memory_notification();
+        }
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        assert!(
+            context_weak.to_local(scope).is_none(),
+            "Rust metadata must not root the Context"
+        );
+        for identity in identities {
+            assert!(
+                identity.to_local(scope).is_none(),
+                "unreachable intrinsic must be collected"
+            );
+        }
+        assert!(matches!(
+            &*registry.entry(id).unwrap(),
+            RealmInterfaceEntry::Ready
+        ));
     }
 
     #[test]
-    fn set_state_rejects_an_out_of_range_interface() {
+    fn materialization_rejects_an_out_of_range_interface() {
         let registry = IntrinsicInterfaceRegistry::new(1, RealmKind::Window);
         let error = registry
-            .set_state(
-                InterfaceId::from_callback_data(1),
-                RealmInterfaceState::Ready,
-            )
-            .expect_err("out-of-range interface state must fail");
+            .begin_materialization(InterfaceId::from_callback_data(1))
+            .expect_err("out-of-range interface must fail");
 
         assert_eq!(
             error.to_string(),
-            "interface state id 1 is out of range for 1 entries"
+            "interface id 1 is out of range for 1 entries"
         );
     }
 
@@ -222,14 +338,16 @@ mod tests {
         let context = v8::Context::new(scope, Default::default());
         let scope = &mut v8::ContextScope::new(scope, context);
         let id = InterfaceId::from_callback_data(0);
-        let registry = IntrinsicInterfaceRegistry::new(1, RealmKind::Window);
+        let registry =
+            IntrinsicInterfaceRegistry::initialize_for_current_context(scope, 1, RealmKind::Window)
+                .unwrap();
         let constructor = v8::Object::new(scope);
         let prototype = v8::Object::new(scope);
         let public_interface = v8::Object::new(scope);
 
         registry
-            .register_objects(scope, id, constructor, prototype, public_interface)
-            .expect("realm interface objects should register");
+            .publish_ready(scope, id, constructor, prototype, public_interface)
+            .expect("completed realm interface should publish");
         context.detach_global();
 
         assert!(

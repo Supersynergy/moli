@@ -5,7 +5,7 @@
 //! Internal queries deliberately keep their ordinary typed result channel.
 
 mod node;
-pub(crate) use node::{NodeLookupExecution, NodeReferenceParams, with_backend_node};
+pub(crate) use node::{NodeReferenceParams, with_backend_node};
 
 use serde_json::json;
 
@@ -18,6 +18,16 @@ use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
     TargetPageResidenceIdentity,
 };
+
+pub(crate) fn unit_response(
+    reply: anyhow::Result<RendererPageReply>,
+) -> RendererNativeProtocolResponse {
+    match reply {
+        Ok(RendererPageReply::Unit) => RendererNativeProtocolResponse::success(json!({})),
+        Err(error) => RendererNativeProtocolResponse::error(-32000, error.to_string()),
+        _ => unreachable!("native Unit command reply"),
+    }
+}
 
 pub(crate) enum NativeCommandStep {
     Pending(PendingNativeCommand),
@@ -178,11 +188,13 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
         match cmd.method.split_once('.')?.0 {
             "DOMDebugger" => super::dom_debugger::native::try_start,
             "Autofill" => super::autofill::try_start_native_command,
+            "WebMCP" => super::web_mcp::try_start_native_command,
             "Page" => super::page::native::try_start,
             "DOM" => super::dom::try_start_native_command,
             "DOMSnapshot" => super::dom_snapshot::try_start_native_command,
             "CSS" => super::css::native::try_start,
             "Accessibility" => super::accessibility::native::try_start,
+            "Runtime" => super::runtime::try_start_native_command,
             _ => return None,
         };
     frontend_attachment(conn, cmd)?;
@@ -190,8 +202,10 @@ pub(crate) fn try_start(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Option<Nativ
 }
 
 /// Apply Browser mirrors at the same ordered boundary as the response. The
-/// immutable result survives retirement, while document caches and node events
-/// are valid only for the exact attachment that produced them.
+/// Snapshot results survive retirement; document caches and node events are
+/// valid only for the exact attachment that produced them. Runtime.enable also
+/// commits session state and projects its frozen replay here, or fails the
+/// terminal if its original owner has retired.
 pub(crate) fn project_terminal_for_owner(
     conn: &mut CdpConnection,
     publication_owner: Option<&CommandOwnerScope>,
@@ -211,15 +225,60 @@ pub(crate) fn project_terminal_for_owner(
             })
     });
     let response = &mut terminal.reply;
+    let mut events = Vec::new();
     if owner.is_none() {
         response.notifications.clear();
     }
     for update in std::mem::take(&mut response.state_updates) {
-        let Some(owner) = owner.as_ref() else {
-            continue;
-        };
-        match update {
-            moli_core::RendererNativeProtocolStateUpdate::RemoteObjects { object_group } => {
+        match (owner.as_ref(), update) {
+            (
+                owner,
+                moli_core::RendererNativeProtocolStateUpdate::RuntimeBinding {
+                    binding,
+                    remove,
+                    output,
+                },
+            ) => {
+                match super::runtime::project_binding_terminal(
+                    conn, owner, binding, remove, *output,
+                ) {
+                    Ok(replay) => events.extend(replay),
+                    Err(message) => {
+                        response.notifications.clear();
+                        response.result = Err(moli_core::RendererNativeProtocolError {
+                            code: -32000,
+                            message,
+                        });
+                    }
+                }
+            }
+            (
+                owner,
+                moli_core::RendererNativeProtocolStateUpdate::RuntimeSubscription {
+                    enabled,
+                    output,
+                },
+            ) => {
+                match super::runtime::project_subscription_terminal(conn, owner, enabled, *output) {
+                    Ok(replay) => events.extend(replay),
+                    Err(message) => {
+                        response.notifications.clear();
+                        response.result = Err(moli_core::RendererNativeProtocolError {
+                            code: -32000,
+                            message,
+                        });
+                    }
+                }
+            }
+            (Some(owner), moli_core::RendererNativeProtocolStateUpdate::WebMcpEnabled(enabled)) => {
+                conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                    state.web_mcp_enabled = enabled
+                });
+            }
+            (
+                Some(owner),
+                moli_core::RendererNativeProtocolStateUpdate::RemoteObjects { object_group },
+            ) => {
                 let Ok(result) = &response.result else {
                     continue;
                 };
@@ -231,15 +290,20 @@ pub(crate) fn project_terminal_for_owner(
                     conn.register_runtime_remote_object_ids_from_value_for_owner(owner, result);
                 }
             }
-            moli_core::RendererNativeProtocolStateUpdate::DomRemoteObjectNode {
-                object_id,
-                node,
-            } => {
+            (
+                Some(owner),
+                moli_core::RendererNativeProtocolStateUpdate::DomRemoteObjectNode {
+                    object_id,
+                    node,
+                },
+            ) => {
                 super::dom::cache_dom_remote_object_node_for_owner(conn, owner, object_id, node);
             }
+            (None, _) => {}
         }
     }
-    project_terminal(terminal)
+    events.extend(project_terminal(terminal));
+    events
 }
 
 /// Bounded projection of a terminal already committed by its renderer owner.

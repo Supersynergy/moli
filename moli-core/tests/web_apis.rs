@@ -1,3 +1,12 @@
+#[path = "web_apis/locked_body.rs"]
+mod locked_body;
+
+#[path = "web_apis/body_utf8.rs"]
+mod body_utf8;
+
+#[path = "web_apis/fetched_null_body.rs"]
+mod fetched_null_body;
+
 #[path = "web_apis/font_queries.rs"]
 mod font_queries;
 
@@ -4110,7 +4119,7 @@ async fn chrome_cssstylesheet_rule_mutation_keeps_cssrules_list_operable_subset(
     let browser = Browser::new(AppConfig::default())?;
 
     let page = browser
-        .fetch(&server.url("/compat/chrome-cssstylesheet-rule-mutation"))
+        .fetch(&server.url("/compat/chrome-cssstylesheet-rule-mutation-v2"))
         .await?;
 
     assert!(
@@ -4229,6 +4238,12 @@ async fn chrome_cssstylesheet_rule_mutation_keeps_cssrules_list_operable_subset(
             .await
             .unwrap()
             .contains("data-keyframe-type-after-csstext=\"8\"")
+    );
+    assert!(
+        page.serialize_html_async()
+            .await
+            .unwrap()
+            .contains("data-keyframe-invalid-error=\"SyntaxError\"")
     );
     assert!(
         page.serialize_html_async()
@@ -4868,8 +4883,11 @@ async fn servo_fontfaceset_load_replaces_ready_and_rejects_css_wide_keywords() -
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-load-ready"))
+        .await?;
+
+    page.evaluate_runtime_expression_with_await_async("fontFixtureDone", true)
         .await?;
 
     assert!(

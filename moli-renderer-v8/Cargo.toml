@@ -89,6 +89,7 @@ moli-webcrypto = { path = "../moli-webcrypto" }
 moli-webapi-declare = { path = "../moli-webapi-declare" }
 moli-webidl = { path = "../moli-webidl" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
+moli-webmcp = { path = "../moli-webmcp" }
 moli-window-features = { path = "../moli-window-features" }
 moli-websocket = { path = "../moli-websocket" }
 moli-xpath = { path = "../moli-xpath" }
@@ -97,14 +98,15 @@ http = "1"
 httpdate = "1.0.3"
 html-escape = "0.2.13"
 html5ever = "0.39.0"
-hashlink = "0.10"
-indexmap = "2.6"
+hashlink = "0.12.2"
+indexmap = "2.14.2"
 parking_lot = "0.12"
 markup5ever = "0.39.0"
 xml5ever = "0.39.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 serde_v8 = "=0.320.0"
+smallvec = "1.15.1"
 strum = { version = "0.28.0", features = ["derive"] }
 # Tokio >=1.53 releases a dropped mpsc receiver's waker even while context-wide
 # senders remain (tokio-rs/tokio#8095). Older versions retain stopped renderer
@@ -130,6 +132,7 @@ v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"] }
 v8 = "152.2.0"
 
 [dev-dependencies]
+lopdf = { version = "0.45.0", default-features = false }
 fastrand = "2.3.0"
 moli-fetch = { path = "../moli-fetch", features = ["test-support"] }
 moli-parser = { path = "../moli-parser", features = ["test-support"] }

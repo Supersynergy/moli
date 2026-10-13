@@ -83,10 +83,14 @@ struct XmlHttpRequestStateDeclaration {
     send_flag: (),
     #[webapi(slot = XHR_UPLOAD_IN_PROGRESS_SLOT, init = false)]
     upload_in_progress: (),
+    #[webapi(slot = XHR_UPLOAD_LISTENER_SLOT, init = false)]
+    upload_listener: (),
     #[webapi(slot = XHR_ACTIVE_INTERNAL_ID_SLOT, init = 0)]
     active_internal_id: (),
     #[webapi(slot = XHR_PENDING_STATUS_SLOT, init = 0)]
     pending_status: (),
+    #[webapi(slot = XHR_PENDING_STATUS_TEXT_SLOT, init = "")]
+    pending_status_text: (),
     #[webapi(slot = XHR_TIMEOUT_SLOT, init = 0)]
     timeout: (),
     #[webapi(slot = XHR_TIMEOUT_START_MS_SLOT, init = 0)]
@@ -275,7 +279,6 @@ pub(crate) fn xhr_execution_context_binding(
     if !host.window_execution_context_owner_is_current(owner, dispatch_scope) {
         return None;
     }
-
     let xhr = local_object_in_scope(scope, xhr);
     let context = xhr.get_creation_context(scope)?;
     let context_global = v8::Global::new(scope, context);
@@ -286,12 +289,13 @@ pub(crate) fn xhr_execution_context_binding(
     if realm_token.as_u64() != snapshot.realm_token {
         return None;
     }
-    Some(crate::native_bridge::WindowExecutionContextBinding::new(
+    let binding = crate::native_bridge::WindowExecutionContextBinding::new(
         owner,
         dispatch_scope,
         realm_token,
         context_global,
-    ))
+    );
+    binding.is_current(host).then_some(binding)
 }
 
 pub(crate) fn xhr_state_value<'s>(
@@ -385,6 +389,19 @@ pub(crate) fn set_xhr_state_value(
         return;
     };
     set_private_value(scope, state, key, value);
+}
+
+pub(crate) fn xhr_has_upload_listeners(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) -> bool {
+    xhr_upload_object(scope, xhr).is_some_and(|upload| {
+        crate::context_bootstrap::simple_object_has_event_listeners(
+            scope,
+            upload,
+            super::XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
+        )
+    })
 }
 
 pub(crate) fn xhr_upload_object<'s>(

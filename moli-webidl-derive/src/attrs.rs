@@ -1,3 +1,4 @@
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Error, Expr, Field, Ident, LitInt, LitStr, Path};
 
@@ -52,10 +53,15 @@ pub(crate) fn parse_rename_rule(value: &LitStr) -> Result<RenameRule, Error> {
 
 #[derive(Default)]
 pub(crate) struct FieldAttrs {
+    pub(crate) inherit: bool,
     pub(crate) required: bool,
     pub(crate) name: Option<LitStr>,
     pub(crate) default: Option<Expr>,
     pub(crate) converter: Option<crate::converter::ConverterKind>,
+    pub(crate) dictionary: bool,
+    pub(crate) sequence: bool,
+    pub(crate) interface: Option<Path>,
+    pub(crate) brand_check: Option<Path>,
     pub(crate) missing_message: Option<LitStr>,
     pub(crate) index: Option<usize>,
     pub(crate) legacy_nullish: bool,
@@ -73,6 +79,13 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         .filter(|attr| attr.path().is_ident("webidl"))
     {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("inherit") {
+                if parsed.inherit {
+                    return Err(meta.error("duplicate inherit attribute"));
+                }
+                parsed.inherit = true;
+                return Ok(());
+            }
             if meta.path.is_ident("required") {
                 parsed.required = true;
                 return Ok(());
@@ -119,8 +132,112 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
                 parsed.converter = Some(crate::converter::ConverterKind::from_lit(&converter)?);
                 return Ok(());
             }
+            if meta.path.is_ident("interface") {
+                if parsed.interface.is_some() {
+                    return Err(meta.error("duplicate interface attribute"));
+                }
+                parsed.interface = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
+            if meta.path.is_ident("dictionary") {
+                if parsed.dictionary {
+                    return Err(meta.error("duplicate dictionary attribute"));
+                }
+                parsed.dictionary = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("sequence") {
+                if parsed.sequence {
+                    return Err(meta.error("duplicate sequence attribute"));
+                }
+                parsed.sequence = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("brand_check") {
+                if parsed.brand_check.is_some() {
+                    return Err(meta.error("duplicate brand_check attribute"));
+                }
+                parsed.brand_check = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
             Err(meta.error("unsupported #[webidl(...)] field attribute"))
         })?;
+    }
+    if parsed.inherit
+        && (parsed.required
+            || parsed.name.is_some()
+            || parsed.default.is_some()
+            || parsed.converter.is_some()
+            || parsed.dictionary
+            || parsed.sequence
+            || parsed.interface.is_some()
+            || parsed.brand_check.is_some()
+            || parsed.missing_message.is_some()
+            || parsed.index.is_some()
+            || parsed.legacy_nullish
+            || parsed.treat_null_as_empty_string
+            || parsed.nullable
+            || parsed.with.is_some()
+            || parsed.variadic)
+    {
+        return Err(Error::new(
+            field.span(),
+            "inherit cannot be combined with member or conversion attributes",
+        ));
+    }
+    if let Some(brand_check) = &parsed.brand_check
+        && parsed.interface.is_none()
+    {
+        return Err(Error::new(
+            brand_check.span(),
+            "brand_check requires #[webidl(interface = Type)]",
+        ));
+    }
+    if let Some(interface) = &parsed.interface {
+        if parsed.converter.is_some() || parsed.with.is_some() {
+            return Err(Error::new(
+                interface.span(),
+                "interface cannot be combined with converter or with",
+            ));
+        }
+        if parsed.treat_null_as_empty_string {
+            return Err(Error::new(
+                interface.span(),
+                "treat_null_as_empty_string only applies to string converters",
+            ));
+        }
+    }
+    if parsed.dictionary {
+        if parsed.sequence {
+            return Err(Error::new(
+                field.span(),
+                "dictionary cannot be combined with sequence",
+            ));
+        }
+        if parsed.interface.is_some() || parsed.converter.is_some() || parsed.with.is_some() {
+            return Err(Error::new(
+                field.span(),
+                "dictionary cannot be combined with interface, converter or with",
+            ));
+        }
+        if parsed.variadic {
+            return Err(Error::new(
+                field.span(),
+                "dictionary cannot be combined with variadic",
+            ));
+        }
+        if parsed.treat_null_as_empty_string {
+            return Err(Error::new(
+                field.span(),
+                "treat_null_as_empty_string only applies to string converters",
+            ));
+        }
+    }
+    if parsed.sequence && (parsed.variadic || parsed.with.is_some()) {
+        return Err(Error::new(
+            field.span(),
+            "sequence cannot be combined with variadic or with",
+        ));
     }
     Ok(parsed)
 }
@@ -285,7 +402,7 @@ pub(crate) fn field_member_name(
         return Ok(name);
     }
     let ident = field_ident(field)?;
-    let raw_name = ident.to_string();
+    let raw_name = ident.unraw().to_string();
     let renamed = apply_rename_rule(&raw_name, rename_all);
     Ok(LitStr::new(&renamed, ident.span()))
 }

@@ -37,6 +37,29 @@ pub(super) fn dynamic_script_execute_is_runnable_before_dom_content_loaded(
 }
 
 impl ScriptVmContextBootstrap {
+    pub(super) fn new_main_default_in_scope<'s>(
+        scope: &mut v8::PinScope<'s, '_, ()>,
+        global_template: v8::Local<'s, v8::ObjectTemplate>,
+        context_host: Rc<RefCell<JsContextHost>>,
+        resource_owner_id: ResourceOwnerId,
+        promise_reject_dispatch: &PromiseRejectDispatchSlot,
+        storage_bucket_store: SharedStorageBucketStore,
+        environment: crate::script_vm::RendererPageScriptEnvironment,
+    ) -> Result<Self> {
+        Self::new_in_scope(
+            scope,
+            global_template,
+            context_host,
+            resource_owner_id,
+            promise_reject_dispatch,
+            None,
+            Some(storage_bucket_store),
+            WindowContextBootstrapMode::MainDefault,
+            Some(environment),
+            false,
+        )
+    }
+
     pub(super) fn new_main_default(
         isolate: &mut v8::OwnedIsolate,
         isolate_bootstrap: &IsolateBootstrapCache,
@@ -188,6 +211,20 @@ impl ScriptVmContextBootstrap {
                 ..Default::default()
             },
         );
+        let runtime_observable_context_token =
+            unsafe { &mut *host_ptr }.allocate_runtime_observable_context_token();
+        install_runtime_observable_context_token_for_context(
+            local_context,
+            runtime_observable_context_token,
+        );
+        let mut runtime = super::WindowRealmRuntime::new(
+            scope,
+            local_context,
+            Rc::downgrade(&context_host),
+            runtime_observable_context_token,
+            unsafe { &*host_ptr }.deferred_context_host_release_queue(),
+            matches!(mode, WindowContextBootstrapMode::Isolated { .. }),
+        );
         local_context.set_allow_generation_from_strings(false);
         if let Some(reusable_window_proxy) = reusable_window_proxy
             && !local_context
@@ -273,12 +310,7 @@ impl ScriptVmContextBootstrap {
         install_host_bindings(scope, unsafe { &mut *host_ptr })?;
         let global = scope.get_current_context().global(scope);
         let bridge_ref = JsContextHost::install_into_bridge(&context_host, scope, global)?;
-        let runtime_observable_context_token =
-            unsafe { &mut *host_ptr }.allocate_runtime_observable_context_token();
-        install_runtime_observable_context_token_for_context(
-            local_context,
-            runtime_observable_context_token,
-        );
+        runtime.install_bridge_ref(bridge_ref);
         let mut realm_registration = PendingWindowRealmBootstrapRegistration::register(
             host_ptr,
             mode,
@@ -301,7 +333,10 @@ impl ScriptVmContextBootstrap {
             WindowContextBootstrapMode::MainDefault
             | WindowContextBootstrapMode::Isolated {
                 child_handle: None, ..
-            } => unsafe { &*host_ptr }.document_url().clone(),
+            } => unsafe { &*host_ptr }
+                .current_main_document_resource_loader()
+                .and_then(|loader| url::Url::parse(loader.fetch_context().origin()).ok())
+                .unwrap_or_else(|| unsafe { &*host_ptr }.document_url().clone()),
         };
         if let WindowContextBootstrapMode::Isolated { child_handle, .. } = mode {
             let owner_context = match child_handle {
@@ -363,20 +398,18 @@ impl ScriptVmContextBootstrap {
         if let Some(registration) = realm_registration.as_mut() {
             registration.commit();
         }
-        Ok(Self {
-            context: v8::Global::new(scope, local_context),
-            runtime_observable_context_token,
-            bridge_ref,
-        })
+        // Child Window exposure can reach bootstrap while the caller holds
+        // the host's RefCell borrow. Follow the bootstrap's raw host access
+        // discipline and end each native read before touching V8 again.
+        if unsafe { &*host_ptr }.document_host_is_published() {
+            let queue = unsafe { &*host_ptr }.deferred_context_host_release_queue();
+            crate::util::retain_context_host_for_document_realm(local_context, context_host, queue);
+        }
+        Ok(Self { runtime })
     }
 
-    pub(super) fn into_context_and_bridge_ref(
-        self,
-    ) -> (
-        v8::Global<v8::Context>,
-        crate::native_bridge::JsContextHostBridgeRef,
-    ) {
-        (self.context, self.bridge_ref)
+    pub(super) fn into_runtime(self) -> super::WindowRealmRuntime {
+        self.runtime
     }
 }
 
@@ -390,11 +423,7 @@ pub(crate) fn bootstrap_child_default_context_in_scope<'s>(
     storage_bucket_store: Option<SharedStorageBucketStore>,
     child_handle: DomHandle,
     expected_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-) -> Result<(
-    v8::Global<v8::Context>,
-    crate::native_bridge::RuntimeObservableContextToken,
-    crate::native_bridge::JsContextHostBridgeRef,
-)> {
+) -> Result<super::WindowRealmRuntime> {
     let context_bootstrap = ScriptVmContextBootstrap::new_in_scope(
         scope,
         global_template,
@@ -410,9 +439,7 @@ pub(crate) fn bootstrap_child_default_context_in_scope<'s>(
         None,
         false,
     )?;
-    let runtime_observable_context_token = context_bootstrap.runtime_observable_context_token;
-    let (context, bridge_ref) = context_bootstrap.into_context_and_bridge_ref();
-    Ok((context, runtime_observable_context_token, bridge_ref))
+    Ok(context_bootstrap.into_runtime())
 }
 
 #[derive(Clone, Copy, Debug)]

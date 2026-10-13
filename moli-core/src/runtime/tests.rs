@@ -81,6 +81,7 @@ async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completio
     let (mut fetch_completion_tx, fetch_completion_rx) = oneshot::channel();
     let response = StreamingRawResponse::new_with_head(
         ResponseHead {
+            status_text: None,
             final_url: Url::parse("https://bridge.test/document")?,
             status: 200,
             headers: vec![("content-type".to_owned(), b"text/html".to_vec())],
@@ -1644,6 +1645,8 @@ async fn navigation_engine_bypasses_service_worker_for_main_resource() -> Result
             None,
             BrowserNavigationRequestKind::Navigate,
             false,
+            None,
+            None,
             "GET",
             &format!("{base_url}/app/controlled.html"),
             None,
@@ -1718,6 +1721,8 @@ async fn navigation_engine_service_worker_main_resource_has_no_network_transport
             None,
             BrowserNavigationRequestKind::Navigate,
             false,
+            None,
+            None,
             "GET",
             &format!("{base_url}/app/controlled.html"),
             None,
@@ -4496,6 +4501,7 @@ async fn renderer_owner_remove_unknown_page_keeps_never_tracked_state() -> Resul
             vm_creation_id: 0,
             view_generation: 0,
             page_state: std::sync::Arc::new(crate::renderer::RendererPageState {
+                snapshot_revision: Default::default(),
                 requested_url: Url::parse("https://example.com/requested")?,
                 navigation_initiator_url: None,
                 navigation_redirected: false,
@@ -4503,10 +4509,12 @@ async fn renderer_owner_remove_unknown_page_keeps_never_tracked_state() -> Resul
                 navigation_redirect_chain: Vec::new(),
                 final_url: Url::parse("https://example.com/final")?,
                 document_title: String::new(),
+                document_activity: Default::default(),
                 status: 200,
                 headers: Vec::new(),
                 idle_override: None,
                 service_worker_client_id: 0,
+                document_isolate_identity: 0,
                 dedicated_worker_running_worker_isolate_count: 0,
                 performance_metric_snapshot: Default::default(),
                 script_execution: Arc::new(crate::page::ScriptExecutionReport::default()),

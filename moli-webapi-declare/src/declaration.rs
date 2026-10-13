@@ -12,6 +12,14 @@ use crate::{__private, BindError, WebApiObject, v8};
 pub trait WebApiFunctionTemplateDeclaration {
     const NAME: &'static str;
 
+    /// Statically named attributes installed on this declaration's prototype.
+    ///
+    /// Derived implementations include accessor and native data properties,
+    /// excluding symbol keys and names computed at template installation time.
+    /// Native wrappers can use this metadata without consulting author-visible
+    /// prototype objects. Inherited declarations are listed separately.
+    const PROTOTYPE_ATTRIBUTE_NAMES: &'static [&'static str] = &[];
+
     fn build<'s>(scope: &mut v8::PinScope<'s, '_, ()>) -> v8::Local<'s, v8::FunctionTemplate>;
 
     fn initialize_template<'s>(
@@ -56,6 +64,10 @@ pub trait WebApiObjectDeclaration<'s> {
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable, no_dynamic_constructor)]
 pub struct DataPropertyDescriptorDeclaration<'scope> {
+    // V8 converts this internal record with ToPropertyDescriptor, which also
+    // reads inherited get/set fields. Author Object.prototype must not enter it.
+    #[webapi(prototype, value = v8::null(scope))]
+    prototype: (),
     value: v8::Local<'scope, v8::Value>,
     enumerable: bool,
     configurable: bool,
@@ -65,6 +77,7 @@ pub struct DataPropertyDescriptorDeclaration<'scope> {
 impl<'scope> DataPropertyDescriptorDeclaration<'scope> {
     pub fn new(value: v8::Local<'scope, v8::Value>, writable: bool, enumerable: bool) -> Self {
         Self {
+            prototype: (),
             value,
             enumerable,
             configurable: true,

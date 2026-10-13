@@ -1,10 +1,7 @@
 use super::fragment::validate_document_sequence;
 use super::*;
 use crate::custom_elements;
-use crate::native_bridge::document::{
-    detached_native_handle_for_runtime, is_attr_node_value,
-    paired_detached_native_object_for_handle,
-};
+use crate::native_bridge::document::{detached_native_handle_for_runtime, is_attr_node_value};
 
 fn required_tree_insertion_node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
@@ -43,43 +40,6 @@ fn set_original_node_arg_or_wrapped_handle<'s>(
     set_wrapped_node_or_null(scope, rv, runtime_ptr, Some(handle));
 }
 
-fn inserted_handles_for_post_insert_events(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> Vec<DomHandle> {
-    if runtime
-        .dom_host()
-        .node(handle)
-        .is_some_and(Node::is_document_fragment)
-    {
-        runtime.dom_host().child_handles(handle).collect()
-    } else {
-        vec![handle]
-    }
-}
-
-fn dispatch_detached_post_insert_events(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handles: &[DomHandle],
-) {
-    for handle in handles {
-        if !unsafe { &*runtime_ptr }
-            .dom_host()
-            .is_html_element_named(*handle, "iframe")
-        {
-            continue;
-        }
-        let Some(target) = paired_detached_native_object_for_handle(scope, runtime_ptr, *handle)
-        else {
-            continue;
-        };
-        let _ = crate::detached_event_target::dispatch_detached_simple_event(
-            scope, target, "load", false, false, false,
-        );
-    }
-}
-
 pub(in crate::native_bridge) fn node_append_child_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -104,25 +64,19 @@ pub(in crate::native_bridge) fn node_append_child_callback<'s>(
         return;
     }
     let child_value = args.get(0);
-    let post_insert_event_handles =
-        inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, child);
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.append_child_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    dispatch_detached_post_insert_events(scope, runtime_ptr, &post_insert_event_handles);
     set_original_node_arg_or_wrapped_handle(scope, &mut rv, runtime_ptr, child_value, child);
 }
 
@@ -208,26 +162,20 @@ pub(in crate::native_bridge) fn node_insert_before_callback<'s>(
         return;
     }
     let child_value = args.get(0);
-    let post_insert_event_handles =
-        inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, child);
     let inserted =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.insert_before_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.insert_before_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 child,
                 reference_child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !inserted {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    dispatch_detached_post_insert_events(scope, runtime_ptr, &post_insert_event_handles);
     set_original_node_arg_or_wrapped_handle(scope, &mut rv, runtime_ptr, child_value, child);
 }
 
@@ -453,7 +401,7 @@ fn node_move_before_after_argument_validation(
     }
 
     let moved = custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        if !unsafe { &mut *runtime_ptr }
+        unsafe { &mut *runtime_ptr }
             .move_before_preserving_state_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
@@ -461,10 +409,6 @@ fn node_move_before_after_argument_validation(
                 child,
                 reference_child,
             )
-        {
-            return false;
-        }
-        true
     });
     if !moved {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
@@ -525,7 +469,10 @@ pub(in crate::native_bridge) fn node_remove_child_callback<'s>(
         rv.set_null();
         return;
     };
-    let child = match existing_node_arg(scope, runtime_ptr, args.get(0)) {
+    let Some(parsed) = webidl::parse_args::<RequiredNodeArgs>(scope, &args) else {
+        return;
+    };
+    let child = match existing_node_arg(scope, runtime_ptr, parsed.node.into()) {
         ExistingNodeArgument::Handle(child) => child,
         ExistingNodeArgument::ForeignNode => {
             throw_dom_exception(
@@ -560,15 +507,12 @@ pub(in crate::native_bridge) fn node_remove_child_callback<'s>(
     }
     let removed =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.remove_child_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.remove_child_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !removed {
         throw_dom_exception(
@@ -663,25 +607,19 @@ pub(in crate::native_bridge) fn node_replace_child_callback<'s>(
     ) {
         return;
     }
-    let post_insert_event_handles =
-        inserted_handles_for_post_insert_events(unsafe { &*runtime_ptr }, new_child);
     let replaced =
         custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-            if !unsafe { &mut *runtime_ptr }.replace_child_appending_to_current_reaction_queue(
+            unsafe { &mut *runtime_ptr }.replace_child_appending_to_current_reaction_queue(
                 scope,
                 runtime_ptr,
                 parent,
                 new_child,
                 old_child,
-            ) {
-                return false;
-            }
-            true
+            )
         });
     if !replaced {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    dispatch_detached_post_insert_events(scope, runtime_ptr, &post_insert_event_handles);
     set_original_node_arg_or_wrapped_handle(scope, &mut rv, runtime_ptr, args.get(1), old_child);
 }

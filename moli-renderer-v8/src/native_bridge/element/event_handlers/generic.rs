@@ -77,11 +77,18 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "ontransitionrun",
     "ontransitioncancel",
     "onwheel",
+    "onbeforeinput",
+    "onbeforematch",
     "onbeforetoggle",
     "ontoggle",
+    "oncommand",
+    "oncontextlost",
     "oncontextmenu",
+    "oncontextrestored",
+    "oncuechange",
     "onselect",
     "onselectionchange",
+    "onselectstart",
     "onabort",
     "oncancel",
     "onclose",
@@ -105,9 +112,19 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onloadeddata",
     "onloadedmetadata",
     "onratechange",
+    "onformdata",
+    "onsecuritypolicyviolation",
+    "onwebkitanimationend",
+    "onwebkitanimationiteration",
+    "onwebkitanimationstart",
+    "onwebkittransitionend",
 ];
 
-const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &["onpointerlockchange", "onpointerlockerror"];
+const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onpointerlockchange",
+    "onpointerlockerror",
+    "onreadystatechange",
+];
 
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
@@ -504,10 +521,16 @@ fn event_handler_slot_name(name: &str) -> String {
 fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
+        .map(|event_type| match event_type {
+            "begin" => "beginEvent",
+            "end" => "endEvent",
+            "repeat" => "repeatEvent",
+            event_type => event_type,
+        })
 }
 
 fn legacy_lenient_this_event_handler(name: &str) -> bool {
-    matches!(name, "onmouseenter" | "onmouseleave")
+    matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
 }
 
 fn handle_invalid_event_handler_receiver<'s>(
@@ -532,4 +555,15 @@ pub(super) fn invalidate_node_event_attribute_handler(
         return;
     };
     runtime.clear_event_handler_property(EventTargetHandle::Node(handle), event_type);
+}
+
+pub(crate) fn event_handler_content_attribute_name(event_type: &str) -> Option<String> {
+    let event_type = match event_type {
+        "begin" | "end" | "repeat" => return None,
+        "beginEvent" => "begin",
+        "endEvent" => "end",
+        "repeatEvent" => "repeat",
+        event_type => event_type,
+    };
+    Some(format!("on{event_type}"))
 }

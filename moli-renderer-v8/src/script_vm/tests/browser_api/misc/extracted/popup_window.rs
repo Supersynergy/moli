@@ -1,5 +1,137 @@
 use super::*;
 
+#[test]
+fn window_open_empty_url_reuses_lightweight_document_without_navigation() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const popup = open("about:blank#report", "report");
+              popup.marker = 73;
+              popup.document.body.textContent = "keep this document";
+              const document = popup.document;
+              const historyLength = popup.history.length;
+              const reused = open("", "report");
+              return reused === popup && reused.document === document &&
+                reused.marker === 73 && reused.document.body.textContent === "keep this document" &&
+                reused.location.href === "about:blank#report" && reused.history.length === historyLength;
+            })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+    let actions = vm.take_pending_popup_activations();
+    assert_eq!(actions.len(), 2);
+    assert!(actions[0].navigation_requested());
+    assert!(!actions[1].navigation_requested());
+    assert_eq!(actions[0].popup_id(), actions[1].popup_id());
+}
+
+#[test]
+fn window_open_empty_url_preserves_special_target_document() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    assert_eq!(
+        vm.eval(
+            r#"["_self", "_parent", "_top"].every(target => {
+              const before = document;
+              return open("", target) === window && document === before && location.href === "https://example.com/";
+            })"#,
+        )
+        .unwrap(),
+        "true"
+    );
+    assert!(vm.take_pending_popup_activations().is_empty());
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn window_open_parent_target_uses_the_receiver_browsing_context() {
+    for depth in [2, 3] {
+        for target in ["_parent", "_PaReNt"] {
+            for borrowed in [false, true] {
+                for url in ["", "https://window-open-parent.test/destination"] {
+                    let mut vm = new_parsed_test_vm(
+                        "https://window-open-parent.test/source",
+                        "<!doctype html><body></body>",
+                    );
+                    let description =
+                        format!("depth={depth} target={target} borrowed={borrowed} url={url:?}");
+                    let result = vm
+                        .eval(&format!(
+                            r#"(() => {{
+                              let receiver = window;
+                              for (let i = 0; i < {depth}; ++i) {{
+                                const frame = receiver.document.createElement('iframe');
+                                receiver.document.body.appendChild(frame);
+                                frame.srcdoc = '<body></body>';
+                                receiver = frame.contentWindow;
+                              }}
+                              const expected = receiver.parent;
+                              const parentHref = expected.location.href;
+                              const receiverHref = receiver.location.href;
+                              const seen = [];
+                              navigation.onnavigate = event => {{
+                                seen.push('top');
+                                event.preventDefault();
+                              }};
+                              const open = {borrowed} ? window.open : receiver.open;
+                              const opened = open.call(receiver, {url:?}, {target:?});
+                              return JSON.stringify([
+                                expected !== window,
+                                opened === expected,
+                                opened === window,
+                                expected.location.href === ({url:?} || parentHref),
+                                receiver.location.href === receiverHref,
+                                location.href === 'https://window-open-parent.test/source',
+                                seen
+                              ]);
+                            }})()"#
+                        ))
+                        .expect(&description);
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                        serde_json::json!([true, true, false, true, true, true, []]),
+                        "{description}"
+                    );
+                    assert!(
+                        vm.take_pending_popup_activations().is_empty(),
+                        "{description}"
+                    );
+                    assert!(
+                        vm.take_pending_location_navigation_with_seed().is_none(),
+                        "{description}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn window_open_lightweight_named_reuse_updates_dom_opener_synchronously() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
+    vm.eval(
+        r#"window.child=open('about:blank','child');
+           const html='<script>opener.__siblingImmediate=open("", "child").opener===window;<\/script>';
+           window.sibling=open(URL.createObjectURL(new Blob([html], {type:'text/html'})), 'sibling');"#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(window.__siblingImmediate)",
+        "true",
+        "sibling script should observe its updated DOM opener immediately",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("child.opener === sibling && child.opener !== window")
+            .unwrap(),
+        "true"
+    );
+}
+
 #[tokio::test]
 async fn retained_popup_storage_managers_use_bound_popup_owner() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -1102,6 +1234,88 @@ async fn window_open_non_about_returns_lightweight_popup_and_dispatches_load() {
         vm.eval("globalThis.__popupLoadEvents.join(',')")
             .expect("popup load event log should evaluate"),
         "true|true|function"
+    );
+}
+#[tokio::test]
+async fn lightweight_popup_load_keeps_live_callback_realms_and_rejects_retired_ones() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://popup-callback-realm.test/page.html",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+globalThis.__popupCallbackRealmEvents = [];
+const makeFrame = () => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  return frame;
+};
+globalThis.__popupSourceWindow = makeFrame().contentWindow;
+globalThis.__popupLiveCallbackWindow = makeFrame().contentWindow;
+globalThis.__popupRetiredCallbackFrame = makeFrame();
+globalThis.__popupRetiredCallbackWindow = __popupRetiredCallbackFrame.contentWindow;
+globalThis.__popupRetiredCallback = __popupRetiredCallbackWindow.Function(
+  "parent.__popupCallbackRealmEvents.push('retired');"
+);
+__popupRetiredCallbackFrame.remove();
+"removed"
+"#,
+    )
+    .expect("popup callback realms should be created before retirement");
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("removed callback Window should retire through Page tasks");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(document.body || document.documentElement || document).appendChild(__popupRetiredCallbackFrame);
+String(__popupRetiredCallbackWindow !== __popupRetiredCallbackFrame.contentWindow)
+"#,
+        )
+        .expect("reinserted iframe should expose a new Window"),
+        "true"
+    );
+
+    vm.eval(
+        r#"
+const popupURL = URL.createObjectURL(new Blob([
+  "<!doctype html><title>cross-realm callback</title>"
+], { type: "text/html" }));
+globalThis.__popupCallbackRealmWindow = __popupSourceWindow.open(popupURL);
+__popupCallbackRealmWindow.onload = function(event) {
+  __popupCallbackRealmEvents.push([
+    "parent", window === top, this === __popupCallbackRealmWindow, event.target === this
+  ].join(":"));
+};
+__popupCallbackRealmWindow.addEventListener("load", __popupRetiredCallback);
+__popupCallbackRealmWindow.addEventListener("load", __popupLiveCallbackWindow.Function(
+  "event",
+  `parent.__popupCallbackRealmEvents.push([
+    "child", window === parent.__popupLiveCallbackWindow,
+    this === parent.__popupCallbackRealmWindow, event.target === this
+  ].join(":"));`
+));
+"queued"
+"#,
+    )
+    .expect("popup load callbacks should register across Window realms");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__popupCallbackRealmEvents.includes('child:true:true:true'))",
+        "true",
+        "popup load callback from another live Window realm",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__popupCallbackRealmEvents.join('|')")
+            .expect("popup callback realm events should evaluate"),
+        "parent:true:true:true|child:true:true:true",
+        "live callback realms must run and reinsertion must not revive a retired callback"
     );
 }
 #[tokio::test]

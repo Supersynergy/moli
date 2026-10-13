@@ -114,17 +114,17 @@ impl RendererInspectorMainCommand {
             .into_main_protocol_parts()
     }
 
-    pub(crate) fn into_nested_page_parts(
+    pub(crate) fn into_nested_agent_parts(
         mut self,
     ) -> (
         RendererPageCommand,
         tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
     ) {
-        let command = self.envelope.into_nested_page_command();
+        let command = self.envelope.into_nested_agent_command();
         let reply_tx = self
             .owner_reply_tx
             .take()
-            .expect("a nested Page command must retain its completion sender");
+            .expect("a nested agent command must retain its completion sender");
         (command, reply_tx)
     }
 
@@ -563,7 +563,8 @@ impl RendererInspectorMainIngress {
             }
             RendererInspectorMainCommandConsumer::Pause => match command.nested_dispatch() {
                 RendererDevToolsMainNestedDispatch::InspectorSession => None,
-                RendererDevToolsMainNestedDispatch::PageAgent => {
+                RendererDevToolsMainNestedDispatch::PageAgent
+                | RendererDevToolsMainNestedDispatch::NativeInspectorSession => {
                     Some(RendererInspectorMainCommandClaim::Page)
                 }
                 RendererDevToolsMainNestedDispatch::OwnerOnly => {
@@ -774,6 +775,7 @@ mod tests {
     fn page_state() -> Arc<RendererPageState> {
         let url = url::Url::parse("about:blank").expect("test URL");
         Arc::new(RendererPageState {
+            snapshot_revision: Default::default(),
             requested_url: url.clone(),
             navigation_initiator_url: None,
             navigation_redirected: false,
@@ -781,11 +783,13 @@ mod tests {
             navigation_redirect_chain: Vec::new(),
             final_url: url,
             document_title: String::new(),
+            document_activity: Default::default(),
             status: 200,
             headers: Vec::new(),
             script_execution: Arc::new(ScriptExecutionReport::default()),
             idle_override: None,
             service_worker_client_id: 0,
+            document_isolate_identity: 0,
             dedicated_worker_running_worker_isolate_count: 0,
             performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
         })

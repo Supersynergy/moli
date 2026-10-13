@@ -100,14 +100,15 @@ mod trusted_types;
 pub(crate) use script_execution::{
     inline_script_source_for_execution, prepare_inline_classic_frame_script_job_for_execution,
 };
+pub(crate) use trusted_types::set_svg_animated_string_base_value;
 use trusted_types::{
     TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
 };
 
 pub(crate) use forms::{
-    autocomplete_field_name, autofill_related_form_control_elements, form_associated_form_owner,
-    form_control_elements, form_data_control_elements, is_valid_submit_button,
-    submit_form_with_submit_event,
+    autocomplete_field_name, autofill_related_form_control_elements, control_has_datalist_ancestor,
+    form_associated_form_owner, form_control_elements, form_data_control_elements,
+    is_valid_submit_button, submit_form_with_submit_event,
 };
 pub(in crate::native_bridge) use forms::{form_named_control_matches, form_named_image_matches};
 #[cfg(test)]
@@ -165,7 +166,7 @@ pub(crate) use shadow_dom::{
     ensure_shadow_root_adopted_style_sheets_initialized,
 };
 pub(crate) use styles::{
-    StyleMode, active_css_animation_transform_value,
+    ComputedStyleRead, StyleMode, active_css_animation_transform_value,
     computed_style_properties_for_inspector_handle,
     computed_style_property_values_for_document_snapshot, css_animation_start_applies,
     cssom_style_entry_requires_structured_parser,
@@ -259,7 +260,8 @@ pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
 pub(crate) use event_handlers::{
     EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
-    initialize_parser_inserted_body_window_event_handlers,
+    event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
+    node_event_handler_getter_function, node_event_handler_setter_function,
 };
 use event_handlers::{
     body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
@@ -304,24 +306,23 @@ pub(super) use forms::{
     button_popover_target_action_getter_function, button_popover_target_action_setter_function,
     button_popover_target_element_getter_function, button_popover_target_element_setter_function,
     button_type_getter_function, button_type_setter_function, button_value_getter_function,
-    button_value_setter_function, control_check_validity_callback, control_label_handles,
-    control_labels_getter_function, control_report_validity_callback,
-    control_set_custom_validity_callback, control_validation_message_getter_function,
-    control_validity_getter_function, control_will_validate_getter_function,
-    datalist_options_getter_function, fieldset_disabled_getter_function,
-    fieldset_disabled_setter_function, fieldset_elements_getter_function,
-    fieldset_type_getter_function, form_accept_charset_getter_function,
-    form_accept_charset_setter_function, form_action_getter_function, form_action_setter_function,
-    form_associated_form_getter_function, form_autocomplete_getter_function,
-    form_autocomplete_setter_function, form_check_validity_callback, form_elements_getter_function,
-    form_encoding_getter_function, form_encoding_setter_function, form_enctype_getter_function,
-    form_enctype_setter_function, form_length_getter_function, form_method_getter_function,
-    form_method_setter_function, form_name_getter_function, form_name_setter_function,
-    form_no_validate_getter_function, form_no_validate_setter_function,
-    form_report_validity_callback, form_request_submit_callback, form_reset_callback,
-    form_submit_callback, form_target_getter_function, form_target_setter_function,
-    input_accept_getter_function, input_accept_setter_function, input_alt_getter_function,
-    input_alt_setter_function, input_autocomplete_getter_function,
+    button_value_setter_function, control_check_validity_callback, control_labels_getter_function,
+    control_report_validity_callback, control_set_custom_validity_callback,
+    control_validation_message_getter_function, control_validity_getter_function,
+    control_will_validate_getter_function, datalist_options_getter_function,
+    fieldset_disabled_getter_function, fieldset_disabled_setter_function,
+    fieldset_elements_getter_function, fieldset_type_getter_function,
+    form_accept_charset_getter_function, form_accept_charset_setter_function,
+    form_action_getter_function, form_action_setter_function, form_associated_form_getter_function,
+    form_autocomplete_getter_function, form_autocomplete_setter_function,
+    form_check_validity_callback, form_elements_getter_function, form_encoding_getter_function,
+    form_encoding_setter_function, form_enctype_getter_function, form_enctype_setter_function,
+    form_length_getter_function, form_method_getter_function, form_method_setter_function,
+    form_name_getter_function, form_name_setter_function, form_no_validate_getter_function,
+    form_no_validate_setter_function, form_report_validity_callback, form_request_submit_callback,
+    form_reset_callback, form_submit_callback, form_target_getter_function,
+    form_target_setter_function, input_accept_getter_function, input_accept_setter_function,
+    input_alt_getter_function, input_alt_setter_function, input_autocomplete_getter_function,
     input_autocomplete_setter_function, input_checked_getter_function,
     input_checked_setter_function, input_default_checked_getter_function,
     input_default_checked_setter_function, input_default_value_getter_function,
@@ -396,6 +397,7 @@ pub(crate) use forms::{
     cache_input_files_from_selected_files, form_control_is_effectively_disabled,
     input_files_for_object,
 };
+pub(crate) use forms::{control_label_handles, v8_pattern_is_usable};
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control, perform_implicit_submission_from_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
@@ -547,8 +549,8 @@ pub(crate) use media::{
 };
 pub(super) use media::{
     apply_default_text_track_modes_for_media, media_add_text_track_callback,
-    media_autoplay_getter_function, media_autoplay_setter_function, media_can_play_type_callback,
-    media_controls_getter_function, media_controls_setter_function,
+    media_autoplay_getter_function, media_autoplay_setter_function, media_buffered_getter_function,
+    media_can_play_type_callback, media_controls_getter_function, media_controls_setter_function,
     media_cross_origin_getter_function, media_cross_origin_setter_function,
     media_current_time_getter_function, media_current_time_setter_function,
     media_default_muted_getter_function, media_default_muted_setter_function,
@@ -558,9 +560,10 @@ pub(super) use media::{
     media_loop_setter_function, media_muted_getter_function, media_muted_setter_function,
     media_network_state_getter_function, media_pause_callback, media_paused_getter_function,
     media_play_callback, media_playback_rate_getter_function, media_playback_rate_setter_function,
-    media_plays_inline_getter_function, media_plays_inline_setter_function,
-    media_poster_getter_function, media_poster_setter_function, media_preload_getter_function,
-    media_preload_setter_function, media_ready_state_getter_function,
+    media_played_getter_function, media_plays_inline_getter_function,
+    media_plays_inline_setter_function, media_poster_getter_function, media_poster_setter_function,
+    media_preload_getter_function, media_preload_setter_function,
+    media_ready_state_getter_function, media_seekable_getter_function,
     media_seeking_getter_function, media_src_getter_function, media_src_setter_function,
     media_text_tracks_getter_function, media_video_height_getter_function,
     media_video_width_getter_function, media_volume_getter_function, media_volume_setter_function,
@@ -634,13 +637,13 @@ pub(super) use styles::{
     build_style_wrapper_template, node_style_getter_function, node_style_setter_function,
 };
 pub(crate) use styles::{
-    computed_style_property_is_shorthand, computed_style_property_names_from_object,
-    computed_style_property_value_from_object, cssom_style_entry_is_pdb_supplemental_side_entry,
-    cssom_style_property_affected_names_with_pdb, is_live_style_declaration_object,
-    live_style_named_property_value, set_live_style_named_property_value,
-    style_css_text_getter_callback, style_css_text_setter_callback,
-    style_get_property_priority_callback, style_get_property_value_callback, style_item_callback,
-    style_length_getter_callback, style_remove_property_callback, style_set_property_callback,
+    computed_style_property_names_from_object, computed_style_property_value_from_object,
+    cssom_style_entry_is_pdb_supplemental_side_entry, cssom_style_property_affected_names_with_pdb,
+    is_live_style_declaration_object, live_style_named_property_value,
+    set_live_style_named_property_value, style_css_text_getter_callback,
+    style_css_text_setter_callback, style_get_property_priority_callback,
+    style_get_property_value_callback, style_item_callback, style_length_getter_callback,
+    style_remove_property_callback, style_set_property_callback,
 };
 pub(crate) use stylesheets::{
     detach_cached_style_sheet_for_element, detach_cached_style_sheet_if_live_stylesheet_changed,
@@ -1326,12 +1329,12 @@ fn element_attributes_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((_runtime_ptr, _handle)) = element_getter_receiver(scope, args.this(), "attributes")
+    let Some((runtime_ptr, _handle)) = element_getter_receiver(scope, args.this(), "attributes")
     else {
         rv.set_undefined();
         return;
     };
-    let wrapper = super::document::live_named_node_map_wrapper(scope, args.this());
+    let wrapper = super::document::live_named_node_map_wrapper(scope, runtime_ptr, args.this());
     rv.set(wrapper.into());
 }
 

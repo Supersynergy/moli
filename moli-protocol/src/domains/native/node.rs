@@ -19,27 +19,14 @@ pub(crate) struct NodeReferenceParams {
     pub(crate) object_id: Option<String>,
 }
 
-/// The requirement covers the complete lookup and continuation, not merely
-/// the native binding query. Each domain retains its own selector precedence.
-pub(crate) enum NodeLookupExecution {
-    OwnerTurn,
-    NestedMain,
-}
-
+/// Remaining lookup continuations may enter user code and require their owner turn.
 pub(crate) fn with_backend_node(
     session: Option<String>,
     reference: DevToolsDomNodeReference,
-    execution: NodeLookupExecution,
     next: impl FnOnce(u32) -> Operation + Send + 'static,
 ) -> Operation {
     match reference {
-        DevToolsDomNodeReference::BackendNodeId(id) => {
-            let operation = next(id);
-            match execution {
-                NodeLookupExecution::OwnerTurn => operation.require_owner_turn(),
-                NodeLookupExecution::NestedMain => operation,
-            }
-        }
+        DevToolsDomNodeReference::BackendNodeId(id) => next(id).require_owner_turn(),
         DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) => {
             let command = Command::DocumentFrontendNodeBinding {
                 inspector_session_id: session,
@@ -58,12 +45,7 @@ pub(crate) fn with_backend_node(
                 )),
                 _ => unreachable!("native frontend-node lookup reply"),
             };
-            match execution {
-                NodeLookupExecution::OwnerTurn => Operation::then(command, continue_binding),
-                NodeLookupExecution::NestedMain => {
-                    Operation::then_on_nested_main(command, continue_binding)
-                }
-            }
+            Operation::then(command, continue_binding)
         }
     }
 }

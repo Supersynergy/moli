@@ -703,6 +703,23 @@ pub(super) async fn location_nav_chain_mid_page() -> Html<&'static str> {
     Html(LOCATION_NAV_CHAIN_MID_HTML)
 }
 
+pub(super) async fn location_nav_load_chain_page(
+    Query(params): Query<HashMap<String, String>>,
+) -> Html<String> {
+    let remaining = params
+        .get("remaining")
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(1);
+    let destination = if remaining > 1 {
+        format!("/location-nav/load-chain?remaining={}", remaining - 1)
+    } else {
+        "/location-nav/target?from=load-chain".to_owned()
+    };
+    Html(format!(
+        "<!doctype html><body>Intermediate page<script>addEventListener('load',()=>{{document.body.setAttribute('data-load','yes');location.href='{destination}'}})</script>"
+    ))
+}
+
 pub(super) async fn location_nav_chain_timeout_source_page() -> Html<&'static str> {
     Html(LOCATION_NAV_CHAIN_TIMEOUT_SOURCE_HTML)
 }
@@ -1403,6 +1420,10 @@ pub(super) async fn chrome_overflow_property_page() -> Html<&'static str> {
 
 pub(super) async fn chrome_cssstylesheet_rule_mutation_page() -> Html<&'static str> {
     Html(CHROME_CSSSTYLESHEET_RULE_MUTATION_HTML)
+}
+
+pub(super) async fn chrome_cssstylesheet_rule_mutation_v2_page() -> Html<&'static str> {
+    Html(CHROME_CSSSTYLESHEET_RULE_MUTATION_V2_HTML)
 }
 
 pub(super) async fn chrome_delete_rule_no_crash_page() -> Html<&'static str> {
@@ -4513,6 +4534,20 @@ pub(super) async fn asset_blocking_stylesheet_alternate_probe_script() -> Respon
     javascript_response(BLOCKING_STYLESHEET_ALTERNATE_PROBE_JS)
 }
 
+pub(super) async fn asset_runtime_inline_module_executed(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.runtime_inline_module_executed.signal();
+    StatusCode::NO_CONTENT
+}
+
+pub(super) async fn asset_blocking_stylesheet_alternate_probe_executed(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> StatusCode {
+    state.alternate_stylesheet_probe_executed.signal();
+    StatusCode::NO_CONTENT
+}
+
 pub(super) async fn asset_dynamic_blocking_stylesheet_runtime_script(
     Extension(state): Extension<FixtureRuntimeState>,
 ) -> Response {
@@ -5518,6 +5553,34 @@ pub(super) async fn asset_module_pkg_scoped_entry() -> Response {
 pub(super) async fn asset_blocking_stylesheet_slow_css() -> Response {
     sleep(Duration::from_millis(75)).await;
     css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+async fn script_gated_stylesheet(event: &FixtureEvent) -> Response {
+    // The script releases this response after the observation being tested.
+    // A timeout is a fixture failure, never permission to serve the stylesheet.
+    if tokio::time::timeout(Duration::from_secs(5), event.wait())
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::GATEWAY_TIMEOUT,
+            "script did not release stylesheet",
+        )
+            .into_response();
+    }
+    css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+pub(super) async fn asset_runtime_inline_module_gated_css(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    script_gated_stylesheet(&state.runtime_inline_module_executed).await
+}
+
+pub(super) async fn asset_blocking_stylesheet_alternate_gated_css(
+    Extension(state): Extension<FixtureRuntimeState>,
+) -> Response {
+    script_gated_stylesheet(&state.alternate_stylesheet_probe_executed).await
 }
 
 pub(super) async fn asset_dynamic_blocking_stylesheet_gated_css(

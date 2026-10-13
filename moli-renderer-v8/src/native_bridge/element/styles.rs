@@ -20,8 +20,8 @@ pub(crate) use accessors::{
 pub(in crate::native_bridge::element) use declaration::style_base_url;
 pub(crate) use declaration::{ComputedStyleRead, StyleObservation};
 use declaration::{
-    StyleComputationContext, shorthand_longhands, style_property_count_with_context,
-    style_property_value_with_context, style_runtime_and_handle_from_object,
+    StyleComputationContext, style_property_count_with_context, style_property_value_with_context,
+    style_runtime_and_handle_from_object,
 };
 pub(crate) use declaration::{
     StyleMode, active_css_animation_transform_value, css_animation_start_applies,
@@ -81,10 +81,6 @@ pub(crate) fn is_live_style_declaration_object(
     style_runtime_and_handle_from_object(scope, style).is_ok()
 }
 
-pub(crate) fn computed_style_property_is_shorthand(property: &str) -> bool {
-    shorthand_longhands(property).is_some()
-}
-
 fn style_object_forces_empty_computed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     style: v8::Local<'s, v8::Object>,
@@ -100,6 +96,16 @@ fn style_object_forces_empty_computed<'s>(
     if get_private_value(scope, style, STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT)
         .is_some_and(|value| value.boolean_value(scope))
     {
+        return true;
+    }
+    // A target can retain its child or popup document while detached. Check
+    // connection before consulting the cached browsing-context state.
+    if let BridgeHandle::ComputedStyle(handle, _) = &bridge_handle
+        && !unsafe { &*runtime_ptr }
+            .dom_host()
+            .is_connected_to_document(*handle)
+    {
+        unsafe { &*runtime_ptr }.retire_computed_style_for_inactive_handle(*handle);
         return true;
     }
     if let Some(value) =

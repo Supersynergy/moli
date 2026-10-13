@@ -4,7 +4,9 @@ mod animation_runtime;
 mod assets;
 pub(crate) mod bridge_descriptor;
 mod external;
-pub(crate) use runtime_state::install_lightweight_popup_legacy_objects;
+pub(crate) use runtime_state::{
+    install_lightweight_popup_legacy_objects, window_realm_secure_context_available,
+};
 mod broadcast_channel;
 mod canvas;
 mod chrome_runtime;
@@ -14,6 +16,7 @@ mod css_fontface_runtime;
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
 mod dom_rect;
+mod dom_rect_list;
 mod event_document;
 mod event_legacy;
 pub(crate) mod event_target_dispatch;
@@ -25,6 +28,11 @@ mod form_data_runtime;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
+mod picture_in_picture;
+#[cfg(test)]
+pub(crate) use picture_in_picture::closed_window_for_test as closed_picture_in_picture_window_for_test;
+mod time_ranges;
+pub(crate) mod web_mcp;
 pub(crate) use history_runtime::state::bind_isolated_window_history_owner;
 mod idle_detection;
 mod image_data;
@@ -69,6 +77,7 @@ mod navigation_restore;
 mod navigation_result;
 mod navigation_seed;
 mod navigation_serialize;
+pub(crate) use navigation_serialize::current_document_referrer_policy;
 mod navigation_surface;
 mod navigation_transition_worlds;
 mod navigation_traversal;
@@ -76,6 +85,7 @@ mod navigation_traversal_coordinator;
 mod navigation_traversal_execution;
 mod navigation_traversal_plan;
 mod navigation_window;
+pub(crate) use navigation_window::runtime_window_dispatch_scope;
 mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;
@@ -121,7 +131,7 @@ mod storage_buckets;
 pub(crate) use self::storage_access::request_storage_access_with_types;
 pub(crate) use self::window_runtime::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
-    LegacyStorageQuotaCallbackTaskEffect,
+    LegacyStorageQuotaCallbackTaskEffect, window_close_callback, window_noop_callback,
 };
 
 pub use moli_storage_service::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES;
@@ -139,13 +149,17 @@ pub(crate) use crypto::{
     CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, WebCryptoRejection, WebCryptoTaskResult,
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
 };
-pub(crate) use css_fontface_runtime::{new_font_face_set, rebuild_font_face_set_faces};
+pub(crate) use css_fontface_runtime::{
+    new_font_face_set, rebuild_font_face_set_faces, settle_document_font_face_set_ready,
+};
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
-    dispatch_top_level_navigation_event_with_source_element, meta_refresh_navigation_kind,
+    dispatch_top_level_navigation_event_with_source_element, is_native_location,
+    meta_refresh_navigation_kind, navigate_borrowed_location,
     navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
-    navigate_top_level_same_document_from_browser,
+    navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
+    sandbox_blocks_ancestor_or_top_navigation_from_source,
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
@@ -183,6 +197,7 @@ mod touch_runtime;
 mod trusted_types;
 mod url_form;
 mod url_search_params_runtime;
+mod video_codecs;
 mod view_transition_runtime;
 mod web_audio_runtime;
 mod web_storage;
@@ -190,6 +205,10 @@ mod webassembly_runtime;
 mod webrtc;
 mod websocket;
 mod window_accessors;
+pub(crate) use window_accessors::{
+    cached_cross_origin_window_surface, window_closed_getter, window_length_getter,
+    window_opener_getter, window_parent_getter, window_top_getter,
+};
 mod window_events;
 mod window_lazy_surface;
 mod window_receiver;
@@ -198,7 +217,7 @@ mod window_runtime;
 
 pub(crate) use form_data_runtime::{
     construct_form_data_entries_for_form, form_data_entries_multipart_body_with_prefix,
-    form_data_entries_to_string_pairs, form_data_object_from_entries,
+    form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
     form_data_object_from_multipart_bytes, form_data_object_from_urlencoded_bytes,
     snapshot_form_data_value,
 };
@@ -247,13 +266,17 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_media_list_from_owner,
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
-pub(crate) use self::dom_rect::build_dom_rect_object;
+pub(crate) use self::dom_rect::{
+    build_dom_rect_clone_object, build_dom_rect_object, dom_rect_clone_data,
+};
+pub(crate) use self::dom_rect_list::build_dom_rect_list_object;
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
-    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, event_attribute, event_backing,
-    event_bool_attribute, event_initialized, event_internal_bool_flag, event_is_dispatching,
-    event_is_error_event, event_is_mouse_event, event_private_value, initialize_event_object,
-    initialize_event_wrapper, mark_event_trusted, new_event_state, new_event_wrapper,
+    EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, construct_original_error_event,
+    construct_original_message_event, event_attribute, event_backing, event_bool_attribute,
+    event_initialized, event_internal_bool_flag, event_is_dispatching, event_is_error_event,
+    event_is_mouse_event, event_private_value, initialize_event_object, initialize_event_wrapper,
+    mark_agent_submit_event, mark_event_trusted, new_event_state, new_event_wrapper,
     set_event_composed_path, set_event_internal_flag, set_event_private_value, set_event_trusted,
     submit_event_submitter_value,
 };
@@ -276,8 +299,8 @@ pub(crate) use self::image_data::{
 pub(crate) use self::indexed_db::{
     IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
     flush_indexed_db_task_by_id, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
-    install_worker_indexed_db_runtime_state, set_indexed_db_manager_for_context,
-    set_worker_indexed_db_task_wake_for_context,
+    install_worker_indexed_db_runtime_state, retain_indexed_db_state_in_retired_realm,
+    set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
     Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions,
@@ -320,6 +343,7 @@ pub(crate) use self::media_queries::{
     simple_event_target_remove_event_listener_callback, simple_event_target_slot_name,
     simple_object_event_listeners_snapshot, simple_object_event_set_ordered_handler,
     simple_object_event_target_add_listener, simple_object_event_target_remove_listener,
+    simple_object_has_event_listeners,
 };
 use self::message_ports::schedule_host_callback;
 pub(crate) use self::message_ports::{
@@ -339,8 +363,9 @@ pub(crate) use self::navigation_events::dispatch_cross_document_navigation_navig
 pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_event_for_window;
 pub(crate) use self::navigation_mutation::apply_local_window_location_navigation;
 pub(crate) use self::navigation_restore::{
-    commit_navigation_history_for_document, install_navigation_bootstrap_entry,
-    install_navigation_bootstrap_entry_for_holder, install_navigation_entry_view_for_holder,
+    capture_inherited_history_for_browser_commit, commit_navigation_history_for_document,
+    install_navigation_bootstrap_entry, install_navigation_bootstrap_entry_for_holder,
+    install_navigation_entry_view_for_holder,
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;
@@ -424,7 +449,8 @@ pub use self::storage_buckets::{
 };
 pub(crate) use self::stream_adapter::{
     cancel_readable_stream, close_stream, enqueue_byte_chunk, error_stream,
-    readable_stream_disturbed, readable_stream_has_pipe_owner, require_internal_stream_value,
+    readable_stream_disturbed, readable_stream_error, readable_stream_has_pipe_owner,
+    readable_stream_locked, require_internal_stream_value,
 };
 pub(crate) use self::streams::{
     ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
@@ -435,6 +461,7 @@ pub(crate) use self::streams::{
     prepare_readable_stream_transfer, prepare_transform_stream_transfer,
     prepare_writable_stream_transfer,
 };
+pub(crate) use self::time_ranges::new_time_ranges_value;
 #[cfg(test)]
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
 pub(crate) use self::trusted_types::{
@@ -443,7 +470,6 @@ pub(crate) use self::trusted_types::{
     trusted_html_string_or_throw, trusted_html_value_string,
     trusted_script_string_for_script_element_execution, trusted_script_string_or_type_error,
     trusted_script_url_string_or_throw, trusted_types_code_generation_check,
-    trusted_types_code_generation_check_callback,
 };
 pub(crate) use self::url_search_params_runtime::url_search_params_request_body;
 pub(crate) use self::web_storage::install_storage_aliases_for_window;
@@ -460,8 +486,8 @@ pub(crate) use self::websocket::{WebSocketDispatchResult, dispatch_websocket_eve
 pub(crate) use self::window_events::{
     WINDOW_EVENT_HANDLER_PROPERTIES, dispatch_window_error_event_with_details,
     dispatch_window_promise_rejection_event, dispatch_window_report_error_message,
-    set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
-    window_body_onerror_handler_is_compiled,
+    event_handler_property_is_exposed, set_window_body_onerror_handler_compiled,
+    set_window_onerror_handler_value, window_body_onerror_handler_is_compiled,
 };
 #[cfg(test)]
 pub(crate) use self::window_lazy_surface::window_lazy_surface_diagnostics;
@@ -1004,7 +1030,10 @@ pub(crate) fn live_ranges_detached_text_split<'s>(
     update_live_ranges_for_detached_text_split(scope, original, new_text, offset);
 }
 
-pub(crate) use self::window_accessors::current_window_style_viewport;
+pub(crate) use self::window_accessors::{
+    bind_current_child_window_document, current_window_style_viewport,
+    retain_window_document_in_retired_realm,
+};
 
 pub(crate) use session_history::{
     initialize_main_session_history, install_session_history_position,

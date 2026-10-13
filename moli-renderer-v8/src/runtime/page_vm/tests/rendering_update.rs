@@ -1,5 +1,6 @@
 use super::*;
 
+mod planar_transforms;
 mod print;
 mod transform_precision;
 
@@ -50,8 +51,10 @@ async fn dispatch_main_document_domcontentloaded_for_rendering_test(
     Ok(owner)
 }
 
+mod form_controls;
 mod layout_geometry;
 mod painting_tables;
+mod scrollbars;
 mod text_styles;
 mod update_lifecycle;
 mod visual_output;

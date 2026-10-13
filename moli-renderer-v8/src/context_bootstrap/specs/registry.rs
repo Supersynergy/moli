@@ -5,6 +5,50 @@ use std::collections::HashSet;
 
 const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
+        interface: web_api_interfaces::PictureInPictureEvent::DESCRIPTOR,
+        kind: ConstructorKind::PictureInPictureEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PictureInPictureWindow::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AuthenticatorAssertionResponse::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AuthenticatorAttestationResponse::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AuthenticatorResponse::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PublicKeyCredential::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::Credential::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CredentialsContainer::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ModelContext::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ToolActivatedEvent::DESCRIPTOR,
+        kind: ConstructorKind::ToolActivatedEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ToolCancelEvent::DESCRIPTOR,
+        kind: ConstructorKind::ToolCancelEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::External::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -42,6 +86,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMStringList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::DOMRectList::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -89,6 +137,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAngle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGNumber::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -97,7 +149,27 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedString::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedLength::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedAngle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedRect::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGPreserveAspectRatio::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedPreserveAspectRatio::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -113,11 +185,27 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedInteger::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGNumberList::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGPointList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGStringList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedNumberList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedBoolean::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -277,6 +365,22 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::TouchEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::GamepadEvent::DESCRIPTOR,
+        kind: ConstructorKind::GamepadEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::Gamepad::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::GamepadButton::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::GamepadHapticActuator::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MessageEvent::DESCRIPTOR,
         kind: ConstructorKind::MessageEvent,
     },
@@ -326,7 +430,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::HashChangeEvent::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::HashChangeEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaQueryListEvent::DESCRIPTOR,
@@ -355,6 +459,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::DOMException::DESCRIPTOR,
         kind: ConstructorKind::DomException,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCError::DESCRIPTOR,
+        kind: ConstructorKind::RtcError,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::RtcErrorEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMError::DESCRIPTOR,
@@ -393,6 +505,30 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::MessageChannel,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MIDIPort::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIAccess::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIInput::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIOutput::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIInputMap::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MIDIOutputMap::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MessagePort::DESCRIPTOR,
         kind: ConstructorKind::MessagePort,
     },
@@ -411,6 +547,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::WorkerLocation::DESCRIPTOR,
         kind: ConstructorKind::WorkerLocation,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WebTransportBidirectionalStream::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::WebTransportDatagramDuplexStream::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::WebSocket::DESCRIPTOR,
@@ -501,6 +645,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::NavigatorUAData,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::LockManager::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::Lock::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::StorageManager::DESCRIPTOR,
         kind: ConstructorKind::StorageManager,
     },
@@ -549,6 +701,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaStreamTrack::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CanvasCaptureMediaStreamTrack::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MediaDevices::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -561,8 +721,20 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ClipboardItem,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaSession::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MediaCapabilities::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoDecoder::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoEncoder::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
     },
     ConstructorSpec {
         interface: web_api_interfaces::Touch::DESCRIPTOR,
@@ -587,6 +759,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::SpeechSynthesisUtterance::DESCRIPTOR,
         kind: ConstructorKind::SpeechSynthesisUtterance,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SpeechSynthesisEvent::DESCRIPTOR,
+        kind: ConstructorKind::SpeechSynthesisEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SpeechSynthesisErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::SpeechSynthesisErrorEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::SpeechSynthesisVoice::DESCRIPTOR,
@@ -884,8 +1064,16 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ImageData,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ImageBitmapRenderingContext::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::ImageBitmap::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::EncodedVideoChunk::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCPeerConnection::DESCRIPTOR,
@@ -906,6 +1094,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::RTCDataChannelEvent::DESCRIPTOR,
         kind: ConstructorKind::RtcDataChannelEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCPeerConnectionIceErrorEvent::DESCRIPTOR,
+        kind: ConstructorKind::RtcPeerConnectionIceErrorEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::RTCRtpReceiver::DESCRIPTOR,
@@ -1108,8 +1300,20 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::XmlSerializer,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ReportBody::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::ResizeObserver::DESCRIPTOR,
         kind: ConstructorKind::ResizeObserver,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ResizeObserverEntry::DESCRIPTOR,
+        kind: ConstructorKind::ResizeObserverEntry,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::ResizeObserverSize::DESCRIPTOR,
+        kind: ConstructorKind::ResizeObserverSize,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PerformanceObserver::DESCRIPTOR,
@@ -1126,6 +1330,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::PerformanceNavigationTiming::DESCRIPTOR,
         kind: ConstructorKind::PerformanceNavigationTiming,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::PaymentResponse::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::PerformanceMark::DESCRIPTOR,
@@ -1152,12 +1360,44 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::MediaSource,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::MediaRecorder::DESCRIPTOR,
+        kind: ConstructorKind::Shell { length: 1 },
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaKeys::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaKeySystemAccess::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaKeyStatusMap::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::MediaKeySession::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::MediaError::DESCRIPTOR,
         kind: ConstructorKind::MediaError,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::TimeRanges::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::VideoPlaybackQuality::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::TextTrack::DESCRIPTOR,
         kind: ConstructorKind::TextTrack,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RemotePlayback::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::TextTrackList::DESCRIPTOR,
@@ -1204,6 +1444,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::OfflineAudioContext,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::AudioNode::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::AudioDestinationNode::DESCRIPTOR,
         kind: ConstructorKind::AudioDestinationNode,
     },
@@ -1218,6 +1462,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::AnalyserNode::DESCRIPTOR,
         kind: ConstructorKind::AnalyserNode,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioParamMap::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::AudioListener::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::AudioParam::DESCRIPTOR,

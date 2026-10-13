@@ -19,7 +19,7 @@ use moli_page_types::{
     apply_child_browsing_context_navigation_to_entry_seed as apply_child_navigation_to_seed,
     replace_child_browsing_context_navigation_in_entry_seed as replace_child_navigation_in_seed,
 };
-use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 use url::Url;
 
 mod classic_scripts;
@@ -58,7 +58,7 @@ pub(super) struct ChildBrowsingContextEntry {
     performance_time_origin: ChildPerformanceTimeOrigin,
     pending_document_load_id: Option<u64>,
     classic_script_document_state: classic_scripts::ChildClassicScriptDocumentState,
-    document_domain_override: Option<String>,
+    document_domain_override: Rc<RefCell<Option<String>>>,
     credentialless: bool,
     service_worker_client_id: Option<ServiceWorkerClientId>,
     pending_service_worker_client_id: Option<ServiceWorkerClientId>,
@@ -117,15 +117,19 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn document_domain_override(&self) -> Option<String> {
+        self.document_domain_override.borrow().clone()
+    }
+
+    pub(super) fn shared_document_domain_override(&self) -> Rc<RefCell<Option<String>>> {
         self.document_domain_override.clone()
     }
 
     pub(super) fn set_document_domain_override(&mut self, domain: String) {
-        self.document_domain_override = Some(domain);
+        *self.document_domain_override.borrow_mut() = Some(domain);
     }
 
     pub(super) fn clear_document_domain_override(&mut self) {
-        self.document_domain_override = None;
+        self.document_domain_override = Rc::new(RefCell::new(None));
     }
 
     pub(super) fn window_name(&self) -> &str {
@@ -349,7 +353,7 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.permissions_policy = self
             .document_policy_container
             .permissions_policy
-            .intersect(policy_container.permissions_policy);
+            .intersect(&policy_container.permissions_policy);
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
     }
@@ -391,7 +395,7 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.permissions_policy = self
             .document_policy_container
             .permissions_policy
-            .intersect(snapshot.policy_container.permissions_policy);
+            .intersect(&snapshot.policy_container.permissions_policy);
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
     }
@@ -795,6 +799,7 @@ impl ChildBrowsingContextEntry {
             .entries
             .push(NavigationHistorySerializedEntry {
                 url: url.as_str().to_owned(),
+                inherited_origin: None,
                 history_state: None,
                 navigation_state: None,
                 scroll_restoration: Default::default(),
@@ -1220,6 +1225,7 @@ impl JsContextHost {
         form: DomHandle,
         target: DomHandle,
     ) {
+        crate::context_bootstrap::web_mcp::bind_child_navigation(self, form, target);
         let targets = self
             .pending_form_submission_child_targets
             .entry(form)

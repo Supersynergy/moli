@@ -548,6 +548,13 @@ impl JsContextHost {
                     loaded.final_url.clone(),
                     &pending.target_url,
                 );
+                let permissions_policy = self
+                    .child_browsing_context_permissions_policy_for_document(
+                        handle,
+                        &super::super::ChildBrowsingContextBootstrap::Url(final_url.clone()),
+                        sandbox,
+                        &loaded.policy_container.permissions_policy,
+                    );
                 self.clear_child_browsing_context_pending_navigation(handle);
                 let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
                     self.clear_pending_service_worker_child_client_if_matches(
@@ -567,6 +574,7 @@ impl JsContextHost {
                         body_activity,
                     };
                 };
+                entry.set_document_permissions_policy(permissions_policy);
                 entry.commit_pending_child_document_load(
                     &final_url,
                     &loaded.policy_container,
@@ -865,6 +873,7 @@ mod tests {
             "GET".to_owned(),
             Vec::new(),
             moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: url::Url::parse("https://example.test/child").unwrap(),
                 status: 200,
                 headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],

@@ -37,7 +37,7 @@ impl std::ops::Deref for NavigationHistoryEntryId {
 
 fn allocate_navigation_history_entry_id(counter: &AtomicU64) -> NavigationHistoryEntryId {
     let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .expect("Navigation History entry id allocator exhausted");
@@ -47,6 +47,8 @@ fn allocate_navigation_history_entry_id(counter: &AtomicU64) -> NavigationHistor
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationHistorySerializedEntry {
     pub url: String,
+    /// Preserves an inherited Document origin across renderer replacement.
+    pub inherited_origin: Option<String>,
     /// Authoritative structured state, preserved across renderer replacement.
     pub history_state: Option<moli_history::SerializedScriptValue>,
     pub navigation_state: Option<moli_history::SerializedScriptValue>,
@@ -491,6 +493,7 @@ fn navigation_history_entry(
 ) -> NavigationHistorySerializedEntry {
     NavigationHistorySerializedEntry {
         url: url.to_owned(),
+        inherited_origin: None,
         history_state: None,
         navigation_state: None,
         scroll_restoration: Default::default(),

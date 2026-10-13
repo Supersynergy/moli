@@ -4,6 +4,7 @@ use super::{
     define_event_property, event_private_value, initialize_event_object_with_type,
     initialize_event_wrapper, new_event_state, set_event_private_value,
 };
+use crate::context_bootstrap::events::EventInit;
 use crate::{
     util::{new_null_prototype_object, throw_type_error, v8str},
     web_api_interfaces, webidl,
@@ -16,6 +17,9 @@ const PSEUDO_ELEMENT_SLOT: &str = "__moliValueEventPseudoElement";
 const BLOB_SLOT: &str = "__moliValueEventBlob";
 const STATUS_MESSAGE_SLOT: &str = "__moliWebGlContextEventStatusMessage";
 const TIMECODE_SLOT: &str = "__moliValueEventTimecode";
+const TOOL_NAME_SLOT: &str = "__moliToolEventName";
+const GAMEPAD_SLOT: &str = "__moliValueEventGamepad";
+const PICTURE_IN_PICTURE_WINDOW_SLOT: &str = "__moliPictureInPictureEventWindow";
 
 #[derive(Clone, Copy)]
 pub(in crate::context_bootstrap) enum ValueEventKind {
@@ -23,6 +27,10 @@ pub(in crate::context_bootstrap) enum ValueEventKind {
     Transition,
     Blob,
     WebGlContext,
+    ToolActivated,
+    ToolCancel,
+    Gamepad,
+    PictureInPicture,
 }
 
 impl ValueEventKind {
@@ -32,12 +40,16 @@ impl ValueEventKind {
             Self::Transition => "TransitionEvent",
             Self::Blob => "BlobEvent",
             Self::WebGlContext => "WebGLContextEvent",
+            Self::ToolActivated => "ToolActivatedEvent",
+            Self::ToolCancel => "ToolCancelEvent",
+            Self::Gamepad => "GamepadEvent",
+            Self::PictureInPicture => "PictureInPictureEvent",
         }
     }
 
     fn length(self) -> i32 {
         match self {
-            Self::Blob => 2,
+            Self::Blob | Self::PictureInPicture => 2,
             _ => 1,
         }
     }
@@ -81,15 +93,34 @@ struct WebGlContextEventPrototypeDeclaration {
     status_message: (),
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToolActivatedEvent, enumerable, receiver)]
+struct ToolActivatedEventPrototypeDeclaration {
+    #[webapi(accessor_property = "toolName", getter = payload_getter, data = v8str(scope, TOOL_NAME_SLOT))]
+    tool_name: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToolCancelEvent, enumerable, receiver)]
+struct ToolCancelEventPrototypeDeclaration {
+    #[webapi(accessor_property = "toolName", getter = payload_getter, data = v8str(scope, TOOL_NAME_SLOT))]
+    tool_name: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "ToolEventInit")]
+struct ToolEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(name = "toolName", with = string_member)]
+    tool_name: v8::Local<'s, v8::String>,
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "WebGLContextEventInit")]
 struct WebGlContextEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(with = string_member)]
     status_message: v8::Local<'s, v8::String>,
 }
@@ -99,12 +130,8 @@ struct WebGlContextEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "AnimationEventInit")]
 struct AnimationEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "animationName", with = string_member)]
     animation_name: v8::Local<'s, v8::String>,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
@@ -116,12 +143,8 @@ struct AnimationEventInit<'s> {
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "TransitionEventInit")]
 struct TransitionEventInit<'s> {
-    #[webidl(default = false)]
-    bubbles: bool,
-    #[webidl(default = false)]
-    cancelable: bool,
-    #[webidl(default = false)]
-    composed: bool,
+    #[webidl(inherit)]
+    base: EventInit,
     #[webidl(name = "elapsedTime", converter = "double", default = 0.0)]
     elapsed_time: f64,
     #[webidl(name = "propertyName", with = string_member)]
@@ -130,19 +153,70 @@ struct TransitionEventInit<'s> {
     pseudo_element: v8::Local<'s, v8::String>,
 }
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::GamepadEvent, enumerable, receiver)]
+struct GamepadEventPrototypeDeclaration {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, GAMEPAD_SLOT))]
+    gamepad: (),
+}
+
 #[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "BlobEventInit")]
-struct BlobEventInit<'s> {
+#[webidl(prefix = "GamepadEventInit")]
+struct GamepadEventInit<'s> {
     #[webidl(default = false)]
     bubbles: bool,
     #[webidl(default = false)]
     cancelable: bool,
     #[webidl(default = false)]
     composed: bool,
-    #[webidl(with = blob_member)]
+    #[webidl(with = gamepad_member)]
+    gamepad: Option<v8::Local<'s, v8::Object>>,
+}
+
+fn gamepad_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Result<Option<v8::Local<'s, v8::Object>>, webidl::WebIdlError> {
+    let context = webidl::Context::member("GamepadEventInit", name);
+    let value = webidl::property_result(scope, object, name, context)?
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    if value.is_null_or_undefined() {
+        return Ok(None);
+    }
+    let gamepad = v8::Local::<v8::Object>::try_from(value)
+        .map_err(|_| webidl::WebIdlError::cannot_convert(context, "Gamepad"))?;
+    if !web_api_interfaces::Gamepad::is_instance(scope, gamepad) {
+        return Err(webidl::WebIdlError::cannot_convert(context, "Gamepad"));
+    }
+    Ok(Some(gamepad))
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "BlobEventInit")]
+struct BlobEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::Blob)]
     data: v8::Local<'s, v8::Object>,
     #[webidl(converter = "double")]
     timecode: Option<f64>,
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::PictureInPictureEvent, enumerable, receiver)]
+struct PictureInPictureEventPrototype {
+    #[webapi(accessor_property, getter = payload_getter, data = v8str(scope, PICTURE_IN_PICTURE_WINDOW_SLOT))]
+    picture_in_picture_window: (),
+}
+
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "PictureInPictureEventInit")]
+struct PictureInPictureEventInit<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(required, interface = web_api_interfaces::PictureInPictureWindow)]
+    picture_in_picture_window: v8::Local<'s, v8::Object>,
 }
 
 fn string_member<'s>(
@@ -158,23 +232,6 @@ fn string_member<'s>(
             .ok_or_else(|| webidl::WebIdlError::pending_exception(context)),
         None => Ok(v8str(scope, "")),
     }
-}
-
-fn blob_member<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
-    let context = webidl::Context::member("BlobEventInit", name);
-    let value = webidl::property_result(scope, object, name, context)?
-        .filter(|value| !value.is_undefined())
-        .ok_or_else(|| webidl::WebIdlError::missing_required(context))?;
-    let object = v8::Local::<v8::Object>::try_from(value)
-        .map_err(|_| webidl::WebIdlError::cannot_convert(context, "Blob"))?;
-    if !web_api_interfaces::Blob::is_instance(scope, object) {
-        return Err(webidl::WebIdlError::cannot_convert(context, "Blob"));
-    }
-    Ok(object)
 }
 
 pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
@@ -196,6 +253,18 @@ pub(in crate::context_bootstrap) fn install_value_event_template_bindings<'s>(
         "BlobEvent" => {
             BlobEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
         }
+        "ToolActivatedEvent" => {
+            ToolActivatedEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "ToolCancelEvent" => {
+            ToolCancelEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
+        "PictureInPictureEvent" => {
+            PictureInPictureEventPrototype::initialize_prototype_template(scope, prototype)
+        }
+        "GamepadEvent" => {
+            GamepadEventPrototypeDeclaration::initialize_prototype_template(scope, prototype)
+        }
         _ => {}
     }
 }
@@ -206,7 +275,9 @@ fn payload_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let key = args.data().to_rust_string_lossy(scope);
-    if let Some(value) = event_private_value(scope, args.this(), &key) {
+    let target = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("validated value event receiver");
+    if let Some(value) = event_private_value(scope, target, &key) {
         rv.set(value);
     }
 }
@@ -231,6 +302,10 @@ fn value_event_constructor<'s>(
         Some(1) => ValueEventKind::Transition,
         Some(2) => ValueEventKind::Blob,
         Some(3) => ValueEventKind::WebGlContext,
+        Some(4) => ValueEventKind::ToolActivated,
+        Some(5) => ValueEventKind::ToolCancel,
+        Some(6) => ValueEventKind::Gamepad,
+        Some(7) => ValueEventKind::PictureInPicture,
         _ => return,
     };
     if !args.is_construct_call() {
@@ -269,7 +344,11 @@ fn value_event_constructor<'s>(
                     PSEUDO_ELEMENT_SLOT,
                     parsed.pseudo_element.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::Transition => {
                 let parsed =
@@ -287,7 +366,11 @@ fn value_event_constructor<'s>(
                     PSEUDO_ELEMENT_SLOT,
                     parsed.pseudo_element.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::WebGlContext => {
                 let parsed =
@@ -298,7 +381,11 @@ fn value_event_constructor<'s>(
                     STATUS_MESSAGE_SLOT,
                     parsed.status_message.into(),
                 );
-                (parsed.bubbles, parsed.cancelable, parsed.composed)
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
             }
             ValueEventKind::Blob => {
                 let parsed = webidl::parse_dictionary_object::<BlobEventInit>(scope, dictionary)?;
@@ -309,6 +396,45 @@ fn value_event_constructor<'s>(
                     TIMECODE_SLOT,
                     v8::Number::new(scope, parsed.timecode.unwrap_or(f64::NAN)).into(),
                 );
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::ToolActivated | ValueEventKind::ToolCancel => {
+                let parsed = webidl::parse_dictionary_object::<ToolEventInit>(scope, dictionary)?;
+                set_event_private_value(scope, state, TOOL_NAME_SLOT, parsed.tool_name.into());
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::PictureInPicture => {
+                let parsed = webidl::parse_dictionary_object::<PictureInPictureEventInit>(
+                    scope, dictionary,
+                )?;
+                set_event_private_value(
+                    scope,
+                    state,
+                    PICTURE_IN_PICTURE_WINDOW_SLOT,
+                    parsed.picture_in_picture_window.into(),
+                );
+                (
+                    parsed.base.bubbles,
+                    parsed.base.cancelable,
+                    parsed.base.composed,
+                )
+            }
+            ValueEventKind::Gamepad => {
+                let parsed =
+                    webidl::parse_dictionary_object::<GamepadEventInit>(scope, dictionary)?;
+                let gamepad = parsed
+                    .gamepad
+                    .map(Into::into)
+                    .unwrap_or_else(|| v8::null(scope).into());
+                set_event_private_value(scope, state, GAMEPAD_SLOT, gamepad);
                 (parsed.bubbles, parsed.cancelable, parsed.composed)
             }
         };

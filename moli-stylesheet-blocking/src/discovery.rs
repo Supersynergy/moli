@@ -254,6 +254,7 @@ pub trait StylesheetBlockingReadView {
         self.document_base_url_clone()
     }
     fn document_node_id(&self) -> NativeNodeId;
+    fn document_is_quirks_mode(&self) -> bool;
 
     fn document_order_stylesheet_candidate_ids_before(
         &self,
@@ -285,6 +286,11 @@ impl StylesheetBlockingReadView for NativeDom {
 
     fn document_node_id(&self) -> NativeNodeId {
         self.document_node_id()
+    }
+
+    fn document_is_quirks_mode(&self) -> bool {
+        self.document()
+            .is_some_and(|document| document.is_quirks_mode())
     }
 
     fn document_order_stylesheet_candidate_ids_before(
@@ -333,6 +339,12 @@ impl StylesheetBlockingReadView for DomHost {
         self.document_handle()
     }
 
+    fn document_is_quirks_mode(&self) -> bool {
+        self.node(self.document_handle())
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.is_quirks_mode())
+    }
+
     fn document_order_stylesheet_candidate_ids_before(
         &self,
         target_node_id: Option<NodeId>,
@@ -359,7 +371,10 @@ pub fn stylesheet_preload_link_request(
     let element = document.stylesheet_element(native_node_id)?;
     if !element.is_html_element("link")
         || element.disabled
-        || !stylesheet_type_is_supported(element.type_attr.as_deref())
+        || element
+            .type_attr
+            .as_deref()
+            .is_some_and(|value| !value.is_empty() && !moli_web_mime::is_css_mime(value))
     {
         return None;
     }
@@ -423,7 +438,8 @@ fn stylesheet_link_disposition_in_view(
         element.nonce.as_deref(),
         element.charset.as_deref(),
         element.fetch_priority.as_deref(),
-    );
+    )
+    .with_quirks_mode_mime_compatibility(document.document_is_quirks_mode());
     let is_alternate = link_rel_includes_token(rel, "alternate");
     let blocking = !is_alternate && media_blocks_scripts(element.media.as_deref());
     Some(if blocking {
@@ -846,5 +862,21 @@ mod tests {
         assert!(host.remove_attribute(link, "disabled"));
         assert!(host.set_attribute(link, "type", "text/plain"));
         assert!(stylesheet_preload_link_request(&host, node_id).is_none());
+
+        for value in [
+            "text/css; charset=UTF-8",
+            "\tTEXT/CSS \r\n",
+            "text/css;ignored",
+        ] {
+            assert!(host.set_attribute(link, "type", value));
+            assert!(
+                stylesheet_preload_link_request(&host, node_id).is_some(),
+                "CSS preload MIME hint {value:?} must select the typed stylesheet owner"
+            );
+        }
+        for value in [" ", "\u{a0}text/css", "text/css, text/css"] {
+            assert!(host.set_attribute(link, "type", value));
+            assert!(stylesheet_preload_link_request(&host, node_id).is_none());
+        }
     }
 }

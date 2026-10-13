@@ -38,21 +38,13 @@ pub fn apply_cursor_direction_by_key<T>(
     direction: CursorDirection,
     mut key_for: impl FnMut(&T) -> &Key,
 ) -> Vec<T> {
+    // Unique index cursors select the lowest primary key for each index key,
+    // including when the distinct index keys are visited in reverse order.
+    if direction.is_unique() {
+        entries.dedup_by(|right, left| key_for(left) == key_for(right));
+    }
     if direction.is_reverse() {
         entries.reverse();
-    }
-    if direction.is_unique() {
-        let mut deduped = Vec::with_capacity(entries.len());
-        let mut last_key: Option<Key> = None;
-        for entry in entries {
-            let key = key_for(&entry).clone();
-            if last_key.as_ref().is_some_and(|last| last == &key) {
-                continue;
-            }
-            last_key = Some(key);
-            deduped.push(entry);
-        }
-        return deduped;
     }
     entries
 }

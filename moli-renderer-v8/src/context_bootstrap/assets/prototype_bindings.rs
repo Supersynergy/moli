@@ -15,6 +15,7 @@ use super::super::{
     css_runtime::install_css_typed_om_template_bindings,
     css_stylesheet_runtime::install_css_stylesheet_template_bindings,
     dom_rect::install_dom_rect_template_bindings,
+    dom_rect_list::install_dom_rect_list_template_bindings,
     event_template::install_event_template_bindings,
     file_api::install_file_api_template_bindings,
     geometry_runtime::install_geometry_template_bindings,
@@ -50,6 +51,7 @@ use super::super::{
     streams::install_stream_template_bindings,
     style_font_template::install_style_font_template_bindings,
     svg_runtime::install_svg_template_bindings,
+    time_ranges::install_time_ranges_template_bindings,
     touch_runtime::install_touch_template_bindings,
     view_transition_runtime::install_view_transition_template_bindings,
     web_audio_runtime::{
@@ -409,6 +411,8 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_abort_template_bindings(scope, template, spec.interface.name());
     install_attr_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_template_bindings(scope, template, spec.interface.name());
+    install_time_ranges_template_bindings(scope, template, spec.interface.name());
+    install_dom_rect_list_template_bindings(scope, template, spec.interface.name());
     install_dom_exception_template_bindings(scope, template, spec.interface.name());
     install_dom_implementation_template_bindings(scope, template, spec.interface.name());
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
@@ -422,6 +426,12 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
+    super::super::picture_in_picture::install(scope, template, spec.interface.name());
+    super::super::video_codecs::install_video_codec_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     install_message_port_template_bindings(scope, template, spec.interface.name());
     if spec.interface.name() == "BroadcastChannel" {
         install_broadcast_channel_template_bindings(scope, template);
@@ -457,6 +467,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
         template,
         spec.interface.name(),
     );
+    super::super::web_mcp::install_template_bindings(scope, template, spec.interface.name());
     crate::native_bridge::install_collection_template_bindings(
         scope,
         template,

@@ -190,6 +190,10 @@ fn classifies_binary_main_document_headers() {
     )]));
     assert!(response_headers_indicate_raw_document(&[(
         "Content-Type".to_owned(),
+        b"application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_vec(),
+    )]));
+    assert!(response_headers_indicate_raw_document(&[(
+        "Content-Type".to_owned(),
         b"image/png".to_vec(),
     )]));
     assert!(response_headers_indicate_raw_document(&[(
@@ -237,6 +241,12 @@ fn classifies_supported_lightweight_document_mime_types() {
         "application/pdf",
         "application/zip",
         "application/wasm",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "font/woff2",
     ] {
         assert!(
@@ -317,6 +327,9 @@ fn matches_script_and_form_content_types() {
     assert!(is_json_mime("Application/JSON; charset=utf-8"));
     assert!(is_json_mime("application/manifest+json"));
     assert!(is_json_mime("text/json"));
+    assert!(is_json_mime("Text/JSON; charset=utf-8"));
+    assert!(!is_json_mime("text/json+blah"));
+    assert!(!is_json_mime("image/json"));
 
     assert!(is_media_source_type_supported(
         "video/mp4; codecs=\"avc1.42E01E\""

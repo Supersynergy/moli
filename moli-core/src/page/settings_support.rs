@@ -326,6 +326,29 @@ impl Page {
         )
     }
 
+    /// Updates the DevTools hiding override; the browser startup flag remains effective.
+    pub async fn set_scrollbars_hidden_async(&mut self, hidden: bool) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::SetScrollbarsHidden(hidden),
+            "set scrollbars hidden",
+        )
+        .await
+    }
+
+    pub fn start_set_scrollbars_hidden(&self, hidden: bool) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetScrollbarsHidden(hidden))
+    }
+
+    pub fn finish_set_scrollbars_hidden(&mut self, completion: CompletedPageCommand) -> Result<()> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "set scrollbars hidden",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
     pub async fn set_emulated_media_async(
         &mut self,
         overrides: &EmulatedMediaOverrides,
@@ -506,22 +529,43 @@ impl Page {
         )
     }
 
+    /// Apply one captured target policy in a single renderer owner turn.
+    pub fn start_set_navigator_and_document_activity(
+        &self,
+        navigator_overrides: moli_page_types::NavigatorOverrides,
+        document_activity: moli_page_types::DocumentActivity,
+    ) -> Result<PendingPageCommand> {
+        let pending =
+            self.start_page_command(RendererPageCommand::SetNavigatorAndDocumentActivity {
+                navigator_overrides,
+                document_activity,
+            })?;
+        self.requested_document_activity.set(document_activity);
+        Ok(pending)
+    }
+
+    /// Last activity policy admitted by this Page. It includes queued updates,
+    /// so a focus reversal cannot be skipped while its renderer is busy.
+    pub fn document_activity(&self) -> moli_page_types::DocumentActivity {
+        self.requested_document_activity.get()
+    }
+
     pub async fn set_document_activity_async(
         &mut self,
         activity: moli_page_types::DocumentActivity,
     ) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetDocumentActivity(activity),
-            "set document activity",
-        )
-        .await
+        let pending = self.start_set_document_activity(activity)?;
+        self.finish_set_document_activity(pending.wait().await?)
     }
 
     pub fn start_set_document_activity(
         &self,
         activity: moli_page_types::DocumentActivity,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetDocumentActivity(activity))
+        let pending =
+            self.start_page_command(RendererPageCommand::SetDocumentActivity(activity))?;
+        self.requested_document_activity.set(activity);
+        Ok(pending)
     }
 
     pub fn finish_set_document_activity(&mut self, completion: CompletedPageCommand) -> Result<()> {

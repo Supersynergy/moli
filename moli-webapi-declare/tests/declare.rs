@@ -291,6 +291,16 @@ struct NestedValueRecord {
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
+struct DeclaredDataProperties {
+    #[webapi(data_property)]
+    value: Option<u32>,
+
+    #[webapi(data_property, enumerable)]
+    enumerable_value: Option<u32>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(plain)]
 struct DefaultNameObject<'scope> {
     #[webapi(data_property, enumerable)]
     _visible_label: &'static str,
@@ -420,6 +430,60 @@ struct SampleFunctionTemplateDeclaration {
 
     #[webapi(native_data_property, getter = sample_native_holder_getter)]
     native_holder: (),
+}
+
+const DYNAMIC_ATTRIBUTE_NAME: &str = "runtimeAttribute";
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "AttributeMetadata", enumerable)]
+struct AttributeMetadataTemplateDeclaration {
+    #[webapi(accessor_property, getter = sample_receiver_getter)]
+    implicit_name: (),
+    #[webapi(accessor_property = "explicit-name", getter = sample_receiver_getter)]
+    explicit: (),
+    #[webapi(native_data_property, getter = sample_native_holder_getter)]
+    native_holder: (),
+    #[webapi(accessor_property = DYNAMIC_ATTRIBUTE_NAME, getter = sample_receiver_getter)]
+    dynamic: (),
+    #[webapi(accessor_property, symbol = "toStringTag", getter = sample_receiver_getter)]
+    tag: (),
+    #[webapi(method, callback = sample_now_callback)]
+    method: (),
+    #[webapi(constant = "READY", value = 4u32)]
+    ready: (),
+}
+
+#[test]
+fn prototype_attribute_metadata_tracks_static_attribute_keys() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    install_template::<AttributeMetadataTemplateDeclaration>(scope, global);
+    let attributes = AttributeMetadataTemplateDeclaration::PROTOTYPE_ATTRIBUTE_NAMES;
+    assert_eq!(
+        attributes,
+        ["implicitName", "explicit-name", "nativeHolder"]
+    );
+    for attribute in attributes {
+        assert!(
+            run_script(
+                scope,
+                &format!("Object.hasOwn(AttributeMetadata.prototype, {attribute:?})")
+            )
+            .boolean_value(scope)
+        );
+    }
+    assert!(
+        run_script(
+            scope,
+            "['runtimeAttribute', 'method', 'READY'].every(key => Object.hasOwn(AttributeMetadata.prototype, key)) && Object.hasOwn(AttributeMetadata.prototype, Symbol.toStringTag)"
+        )
+        .boolean_value(scope)
+    );
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -578,6 +642,48 @@ struct PrototypeBackedFallbackTagObject {}
     fallback_to_string_tag = "MissingSample",
 )]
 struct MissingPrototypeFallbackTagObject {}
+
+#[test]
+fn declared_data_properties_report_rejected_writes() {
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+
+    for (name, declaration) in [
+        (
+            "value",
+            DeclaredDataProperties {
+                value: Some(42),
+                enumerable_value: None,
+            },
+        ),
+        (
+            "enumerableValue",
+            DeclaredDataProperties {
+                value: None,
+                enumerable_value: Some(42),
+            },
+        ),
+    ] {
+        let target = v8::Object::new(scope);
+        assert_eq!(
+            target.set_integrity_level(scope, v8::IntegrityLevel::Frozen),
+            Some(true)
+        );
+        let error = declaration
+            .initialize(scope, target)
+            .expect_err("rejected property writes must fail initialization");
+        assert_eq!(
+            error.to_string(),
+            format!("failed to define `{name}` value")
+        );
+        let key = v8::String::new(scope, name).unwrap();
+        assert_eq!(target.has_own_property(scope, key.into()), Some(false));
+    }
+}
 
 #[test]
 fn declared_template_and_object_have_expected_surface() {
@@ -2987,4 +3093,56 @@ mod interfaces {
         pub(super) SamplePerformance;
         pub(super) SampleTemplate;
     }
+}
+
+#[test]
+fn null_prototype_declarations_ignore_object_prototype_pollution() {
+    #[derive(WebApiObject)]
+    #[webapi(plain)]
+    struct NullPrototype {
+        #[webapi(prototype, value = v8::null(scope))]
+        prototype: (),
+    }
+
+    ensure_v8();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let object = NullPrototype::new().bind(scope).unwrap();
+    assert!(object.get_prototype(scope).unwrap().is_null());
+    let invalid = v8::Integer::new(scope, 1);
+    assert!(moli_webapi_declare::set_declared_prototype(scope, object, &invalid).is_err());
+    assert!(object.get_prototype(scope).unwrap().is_null());
+    run_script(
+        scope,
+        "Object.prototype.get = () => { throw Error('inherited getter') };",
+    );
+    let value = v8::Integer::new(scope, 7);
+    let descriptor =
+        moli_webapi_declare::DataPropertyDescriptorDeclaration::new(value.into(), false, true)
+            .bind(scope)
+            .unwrap();
+    assert!(descriptor.get_prototype(scope).unwrap().is_null());
+    let global = context.global(scope);
+    assert_eq!(
+        global.create_data_property(
+            scope,
+            v8::String::new(scope, "descriptor").unwrap().into(),
+            descriptor.into()
+        ),
+        Some(true)
+    );
+    assert!(
+        run_script(
+            scope,
+            r#"(() => {
+        const target={};Object.defineProperty(target,'value',descriptor);
+        const d=Object.getOwnPropertyDescriptor(target,'value');
+        return target.value===7 && d.writable===false && d.enumerable && d.configurable;
+    })()"#
+        )
+        .is_true()
+    );
 }

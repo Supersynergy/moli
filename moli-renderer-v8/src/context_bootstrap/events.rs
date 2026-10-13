@@ -1,17 +1,21 @@
 use super::*;
-use crate::util::{get_private_value, utf16_units, v8_string, v8_string_from_utf16_units, v8str};
+use crate::util::{get_private_value, v8_string, v8_string_from_utf16_units, v8str};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 mod base;
 mod device;
 mod init;
 mod kind;
+mod message;
+pub(crate) use message::construct_original_message_event;
 mod methods;
 mod subclasses;
+mod submit;
 mod value;
 mod wrappers;
 
 pub(in crate::context_bootstrap) mod audio;
+pub(in crate::context_bootstrap) mod speech;
 
 pub(in crate::context_bootstrap) use device::{
     device_motion_event_constructor, device_orientation_event_constructor,
@@ -26,6 +30,12 @@ const CLOSE_EVENT_WAS_CLEAN_SLOT: &str = "__moliCloseEventWasClean";
 const CLOSE_EVENT_CODE_SLOT: &str = "__moliCloseEventCode";
 const CLOSE_EVENT_REASON_SLOT: &str = "__moliCloseEventReason";
 const SUBMIT_EVENT_SUBMITTER_SLOT: &str = "__moliSubmitEventSubmitter";
+const SUBMIT_EVENT_AGENT_INVOKED_SLOT: &str = "__moliSubmitEventAgentInvoked";
+const SUBMIT_EVENT_RESPONSE_SLOT: &str = "__moliSubmitEventResponse";
+pub(crate) use submit::{mark_agent_submit_event, take_submit_event_response};
+pub(super) use submit::{
+    submit_event_agent_invoked_getter_function, submit_event_respond_with_callback,
+};
 const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
@@ -172,29 +182,6 @@ pub(crate) fn construct_original_storage_event_utf16<'s>(
     Some(event)
 }
 
-pub(in crate::context_bootstrap) fn define_storage_event_properties<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    key: Option<&str>,
-    old_value: Option<&str>,
-    new_value: Option<&str>,
-    url: &str,
-    storage_area: Option<v8::Local<'s, v8::Value>>,
-) {
-    let key = key.map(utf16_units);
-    let old_value = old_value.map(utf16_units);
-    let new_value = new_value.map(utf16_units);
-    define_storage_event_properties_utf16(
-        scope,
-        event,
-        key.as_deref(),
-        old_value.as_deref(),
-        new_value.as_deref(),
-        url,
-        storage_area,
-    );
-}
-
 pub(in crate::context_bootstrap) fn define_storage_event_properties_utf16<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -253,8 +240,8 @@ pub(crate) use base::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, clear_event_composed_path, define_event_property, event_backing,
     event_initialized, event_internal_bool_flag, event_is_dispatching, initialize_event_object,
-    initialize_event_object_with_type, mark_event_trusted, set_event_composed_path,
-    set_event_internal_flag, set_event_trusted,
+    initialize_event_object_with_type, mark_event_trusted, reinitialize_event_object,
+    set_event_composed_path, set_event_internal_flag, set_event_trusted,
 };
 
 fn event_subclass_kind<'s>(
@@ -272,6 +259,24 @@ pub(crate) fn event_is_error_event<'s>(
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
     event_subclass_kind(scope, event) == Some(EventSubclassKind::ErrorEvent)
+}
+
+/// Read the converted native payload without invoking author-shadowed attributes.
+pub(crate) fn error_event_handler_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> Option<[v8::Local<'s, v8::Value>; 5]> {
+    if !event_is_error_event(scope, event) {
+        return None;
+    }
+    let backing = event_backing(scope, event);
+    Some([
+        backing.get(scope, v8str(scope, "message").into())?,
+        backing.get(scope, v8str(scope, "filename").into())?,
+        backing.get(scope, v8str(scope, "lineno").into())?,
+        backing.get(scope, v8str(scope, "colno").into())?,
+        backing.get(scope, v8str(scope, "error").into())?,
+    ])
 }
 
 pub(crate) fn event_is_mouse_event<'s>(
@@ -365,7 +370,7 @@ pub(super) use base::{
     event_target_getter_function, event_type_getter_function, set_event_dispatch_fields,
     set_event_initialized,
 };
-pub(in crate::context_bootstrap) use init::parse_event_init;
+pub(in crate::context_bootstrap) use init::{EventInit, parse_event_init};
 pub(super) use kind::EventSubclassKind;
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
@@ -492,3 +497,8 @@ pub(crate) use wrappers::{
     event_attribute, event_bool_attribute, event_private_value, initialize_event_wrapper,
     new_event_state, new_event_wrapper, set_event_private_value,
 };
+
+pub(in crate::context_bootstrap) use message::message_event_init_callback;
+pub(in crate::context_bootstrap) use wrappers::event_value_attribute_getter;
+
+pub(crate) use subclasses::construct_original_error_event;

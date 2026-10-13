@@ -1,5 +1,6 @@
 use super::workers::WorkerExecutionState;
 use super::*;
+use crate::dom::native::Node;
 
 impl JsContextHost {
     pub(crate) fn document_has_browsing_context(&self, document: DomHandle) -> bool {
@@ -12,6 +13,35 @@ impl JsContextHost {
             || self
                 .lightweight_popup_id_for_document_handle(document)
                 .is_some()
+    }
+
+    pub(crate) fn document_is_fully_active(&self, document: DomHandle) -> bool {
+        if self.page_context_resources_closed {
+            return false;
+        }
+        // A retained Window association is insufficient: the Document and each
+        // ancestor must still be current in a live browsing context.
+        let mut document = document;
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if document == self.document_handle() {
+                return true;
+            }
+            if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
+                return self.lightweight_popup_is_open(popup_id);
+            }
+            let Some(frame) = self.child_browsing_context_host_for_document_handle(document) else {
+                return false;
+            };
+            if !visited.insert(frame) || !self.dom_host().is_connected(frame) {
+                return false;
+            }
+            let Some(parent_document) = self.dom_host().node(frame).and_then(Node::owner_document)
+            else {
+                return false;
+            };
+            document = parent_document;
+        }
     }
 
     pub(crate) fn document_activity(&self) -> moli_page_types::DocumentActivity {
@@ -45,6 +75,36 @@ impl JsContextHost {
         handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
     ) {
         if self.ordinary_page_turn_navigation_handoff_active {
+            self.top_level_navigation_handoff_tx.send(handoff);
+        } else {
+            self.enqueue_related_page_turn_completion();
+        }
+    }
+
+    fn enqueue_related_page_turn_completion(&self) {
+        if self.command_turn_output.is_none()
+            && !self.ordinary_page_turn_navigation_handoff_active
+            && let Some(environment) = self.page_script_environment()
+        {
+            environment.enqueue_related_page_turn_completion();
+        }
+    }
+
+    pub(crate) fn finish_related_page_turn_completion(&self) {
+        if self.command_turn_output.is_some()
+            || self.ordinary_page_turn_navigation_handoff_active
+            || self.page_script_environment().is_none()
+            || !self
+                .output_journal
+                .as_ref()
+                .is_some_and(|journal| journal.transport_is_bound())
+        {
+            // Initial auxiliary Documents retain their records and pending
+            // navigation until target adoption binds the output transport.
+            return;
+        }
+        self.publish_live_turn_output_prefix();
+        if let Some(handoff) = self.pending_location_navigation_handoff() {
             self.top_level_navigation_handoff_tx.send(handoff);
         }
     }
@@ -120,6 +180,7 @@ impl JsContextHost {
             causal_command,
             observation,
         ));
+        self.enqueue_related_page_turn_completion();
         true
     }
 
@@ -147,6 +208,7 @@ impl JsContextHost {
             return false;
         };
         output_journal.append_records(records);
+        self.enqueue_related_page_turn_completion();
         true
     }
 
@@ -173,6 +235,7 @@ impl JsContextHost {
             causal_command,
             action,
         ));
+        self.enqueue_related_page_turn_completion();
         true
     }
 

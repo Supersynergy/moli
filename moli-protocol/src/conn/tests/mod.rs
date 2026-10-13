@@ -245,6 +245,36 @@ fn idle_navigation_engine_reset_preserves_mock_layout_policy() {
 }
 
 #[tokio::test]
+async fn hidden_scrollbars_survive_idle_reset_and_browser_context_removal() {
+    let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+        crate::CdpInitialStoragePartition::memory(),
+        NavigationRuntimeConfig::new(
+            FetchConfig::default(),
+            OptionalResourceFetchMask::NONE,
+            true,
+            LayoutPolicy::OnDemand,
+        )
+        .with_scrollbars_hidden(true),
+    );
+    assert!(conn.release_idle_navigation_engine_memory_if_idle().reset);
+    assert!(
+        conn.standalone_navigation_engine
+            .runtime_config()
+            .scrollbars_hidden()
+    );
+    conn.insert_browser_context(BrowserContext::new("CTX-hidden-scrollbars".to_owned()));
+    let removed = conn
+        .remove_browser_context_by_id_restoring_active_async("CTX-hidden-scrollbars", None)
+        .await;
+    assert!(removed.is_some());
+    assert!(
+        conn.standalone_navigation_engine
+            .runtime_config()
+            .scrollbars_hidden()
+    );
+}
+
+#[tokio::test]
 async fn browser_context_install_and_removal_preserve_mock_layout_policy() {
     let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
         crate::CdpInitialStoragePartition::memory(),
@@ -789,7 +819,7 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
 
     assert_eq!(
         diagnostics["isolateScope"]["documentIsolateModel"],
-        json!("page-vm")
+        json!("related-pages")
     );
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentPageCount"],
@@ -899,21 +929,15 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
 #[tokio::test(flavor = "multi_thread")]
 async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
     let mut ctx = TestContext::new();
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>diagnostics capture</body>")
-        .await
-        .expect("diagnostics capture page should load");
     let mut browser_context = BrowserContext::new("BID-diagnostics-capture".to_owned());
     browser_context.set_active_target_id("TID-diagnostics-capture");
     browser_context.attach_active_session("SID-diagnostics-capture");
-    browser_context.set_target_url(page.final_url().as_str().to_owned());
-    let _ = browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
+    ctx.conn.insert_browser_context(browser_context);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body>diagnostics capture</body>",
+        Some("SID-diagnostics-capture"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 44_100,
@@ -1724,6 +1748,10 @@ fn materialized_navigation_test_state(
     requested_url: &str,
 ) -> NavigationDispatchState {
     NavigationDispatchState {
+        web_mcp_invocation: None,
+        navigation_initiator: None,
+        initial_document_environment: None,
+        auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id,

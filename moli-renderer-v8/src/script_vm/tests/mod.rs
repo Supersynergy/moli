@@ -1,3 +1,7 @@
+mod credential_container;
+mod credential_json_options;
+mod picture_in_picture_interfaces;
+mod writable_stream_native_receivers;
 use super::post_parse::dynamic_script_execute_is_runnable_before_dom_content_loaded;
 use super::{
     PostParseDriverStep, PostParseLifecycleAdvance, PostParseLifecycleCompletionAction,
@@ -240,6 +244,7 @@ fn register_pending_window_xhr_for_test(
     let internal_id = host.record_async_subresource_xhr(
         execution_context,
         v8::Global::new(scope, v8::Object::new(scope)),
+        false,
         Some(cancel_handle),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         None,
@@ -358,6 +363,7 @@ fn register_pending_window_fetch_for_test(
                         request_body: None,
                         body_source_id: 10_000 + internal_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: url.clone(),
                             status: 200,
                             headers: Vec::new(),
@@ -2130,44 +2136,92 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
     (info.width, info.height)
 }
 
+mod audio_node_interfaces;
+mod bitmap_rendering_context_interface_interfaces;
 mod blob_response_headers;
 mod browser_api;
 mod cache_interfaces;
 mod canvas_arguments;
+mod canvas_fill_rect;
 mod canvas_paths;
+mod canvas_transform_snapshots;
 mod canvas_webgl;
 mod child_dynamic_inline_scripts;
+mod credential_interface_exposure_interfaces;
+mod credential_interfaces;
+mod css_keyframes_mutations;
+mod css_keyframes_receivers;
 mod device_events;
+mod document_svg_root;
+
+mod gamepad_interfaces;
+
 mod dom_elements;
+mod dom_exception_proxy_identity;
 mod dom_xhr;
 mod element_click;
+mod eme_owner_interface_exposure_interfaces;
+mod encoded_video_chunk_shell;
 mod event_receivers;
+mod geometry_point_conversion_order;
 mod headers_list;
 mod http_fixture;
+mod iframe_load_delivery;
+mod media_owner_playback_interfaces;
+mod media_recorder_shell;
+mod performance_observer_contract;
+mod performance_receiver_consolidation;
+mod svg_animation_interfaces;
+mod svg_computed_path_precision;
+mod svg_detached_lengths;
+mod svg_transform_sync_consolidation;
 
 mod audio_event_interfaces;
+mod audio_value_owner_interface_exposure_interfaces;
+mod hyperlink_null_url_protocol;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
 mod lazy_storage;
 mod lazy_window_surfaces;
+mod midi_owner_interfaces;
 mod mouse_snapshot;
+mod native_bridge_identity;
+mod native_exception_stack_capture;
 mod no_cors_header_fill;
 mod observer_callbacks;
 mod observer_receivers;
+mod offline_audio_float;
 mod post_parse;
 mod queue_microtask;
+mod readable_algorithm_arrays;
+mod remote_playback_interface;
 mod rendering_update;
 mod script_terminal_completion;
+mod speech_events;
+mod storage_dense_name_arrays;
 mod streams;
+mod svg_filter_interfaces;
+mod svg_geometry_methods;
+mod svg_geometry_receivers;
+mod svg_length_validation;
+mod svg_number_validation;
+mod svg_root_factory_receivers;
+mod svg_switch_mpath_interfaces;
+mod text_encoder_utf16_progress;
+mod time_ranges;
 mod url_components;
+mod video_codecs_shell;
+mod web_lock_interface_exposure_interfaces;
 mod webgl_interfaces;
 mod webidl_collections;
 mod webidl_fetch;
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
+mod webtransport_stream_interface_exposure;
 mod window_execution_context;
+mod window_getter_consolidation;
 mod worklet_interfaces;
 
 mod string_timers;
@@ -2176,10 +2230,19 @@ mod history_replace_forward;
 
 mod extracted;
 mod navigation_timing_inheritance;
+mod payment_response_interfaces;
 
+mod body_mime_consolidation;
 mod response_blob_mime;
 
 mod intersection_target_order;
 mod observer_element_arguments;
+mod report_body_interface_exposure;
 
 mod media_device_interfaces;
+
+mod dom_rect_factory_descriptors;
+mod dom_rect_structured_clone;
+mod domrect_receiver_consolidation;
+
+mod resize_observer_entries;

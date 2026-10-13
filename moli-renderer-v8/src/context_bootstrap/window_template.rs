@@ -69,7 +69,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_open_callback)]
     open: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_close_callback)]
     close: (),
 
     #[webapi(method, length = 0, callback = window_noop_callback)]
@@ -175,6 +175,8 @@ struct WindowMediaTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowIdentityAccessorsDeclaration {
+    #[webapi(accessor_property, getter = window_closed_getter)]
+    closed: (),
     #[webapi(accessor_property, getter = window_window_getter)]
     window: (),
 
@@ -190,14 +192,8 @@ struct WindowIdentityAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_frames_getter)]
     frames: (),
 
-    #[webapi(accessor_property, getter = window_closed_getter)]
-    closed: (),
-
     #[webapi(accessor_property, getter = window_frame_element_getter)]
     frame_element: (),
-
-    #[webapi(accessor_property, getter = window_document_getter)]
-    document: (),
 
     #[webapi(
         accessor_property,
@@ -242,7 +238,7 @@ struct WindowIdentityAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable)]
 struct WindowPostRuntimeAccessorsDeclaration {
-    #[webapi(accessor_property, getter = window_opener_getter)]
+    #[webapi(accessor_property, getter = window_opener_getter, setter = window_opener_setter)]
     opener: (),
 
     #[webapi(accessor_property, getter = window_inner_width_getter)]
@@ -348,6 +344,15 @@ pub(crate) fn install_window_own_template_bindings<'s>(
     // metadata. Installing on this aggregate template also gives accessor
     // functions the actual WindowProxy as `this`.
     WindowIdentityAccessorsDeclaration::initialize_prototype_template(scope, window_template);
+    // Synthetic Window wrappers need the same protected getter as globals.
+    // Their Document is resolved by the callback rather than a global cache.
+    let document_getter = window_document_getter_template(scope, None);
+    window_template.set_accessor_property(
+        v8str(scope, "document").into(),
+        Some(document_getter),
+        None,
+        v8::PropertyAttribute::NONE,
+    );
     WindowEarlyTemplateMethodsDeclaration::initialize_prototype_template(scope, window_template);
     WindowObsoleteTemplateMethodsDeclaration::initialize_prototype_template(scope, window_template);
     network_host::install_window_network_bindings(scope, window_template);

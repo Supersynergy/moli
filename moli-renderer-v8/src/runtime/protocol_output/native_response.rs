@@ -8,6 +8,8 @@ use std::convert::Infallible;
 
 use moli_page_types::{DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId};
 
+use crate::devtools::command::RendererDevToolsMainNestedDispatch;
+
 use super::{
     PendingRendererOutputRecord, RendererCommandResponseAuthority, RendererCommandResponseLease,
     RendererOutputFence, RendererOutputItem, RendererTurnOutputJournal,
@@ -17,7 +19,7 @@ use crate::runtime::{RendererPageCommand, RendererPageReply};
 /// A resolved native frontend reply. The projection captures only immutable
 /// protocol metadata at admission; it cannot borrow a Browser or live Page.
 /// Both success and backend errors are published at the renderer boundary.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RendererNativeProtocolResponse {
     pub result: Result<serde_json::Value, RendererNativeProtocolError>,
     pub notifications: Vec<RendererNativeProtocolNotification>,
@@ -70,12 +72,30 @@ impl RendererNativeProtocolResponse {
 }
 
 /// Browser mirrors committed with a native terminal. These are frozen data,
-/// never callbacks into a live Page, and are discarded on attachment retirement.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// never callbacks into a live Page. Attachment retirement discards document
+/// updates; command-local replay can instead fail the terminal at projection.
+#[derive(Clone, Debug, PartialEq)]
 pub enum RendererNativeProtocolStateUpdate {
+    /// Frozen V8 replay and state, projected by the ordered protocol consumer
+    /// before this terminal. Retirement can still turn enable into an error;
+    /// neither the adapter waiter nor a replacement attachment owns that choice.
+    RuntimeSubscription {
+        enabled: bool,
+        output: Box<crate::runtime::RendererRuntimeCommandOutput>,
+    },
+    /// Persistent binding mutations share the subscription's ordered ingress;
+    /// adapter completion cannot restore bindings cleared by a later disable.
+    RuntimeBinding {
+        binding: crate::protocol_types::RuntimeBindingRegistration,
+        remove: bool,
+        output: Box<crate::runtime::RendererRuntimeCommandOutput>,
+    },
+    WebMcpEnabled(bool),
     /// Register object IDs from the successful terminal result before delivery.
     /// The reply already owns the payload; this update only retains its group.
-    RemoteObjects { object_group: Option<String> },
+    RemoteObjects {
+        object_group: Option<String>,
+    },
     DomRemoteObjectNode {
         object_id: String,
         node: serde_json::Value,
@@ -93,7 +113,7 @@ type NativeResponseProjection = Box<
 /// A complete reply to the original frontend call, not a live Page observation.
 /// Its metadata remains valid even if the Page is replaced before projection.
 /// The frontend router uses its globally allocated call id to deliver it once.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RendererNativeCommandTerminal {
     pub command_id: FrontendCommandId,
     pub session: DevToolsSessionKey,
@@ -233,9 +253,10 @@ impl RendererNativeCommandReadyResponse {
 /// inside the same renderer turn; only the terminal projection can publish a
 /// frontend response. These continuations never await Browser state or I/O.
 pub struct RendererNativeOperation {
+    // Breaks the Native call -> operation -> page command type cycle.
     pub(crate) command: Box<RendererPageCommand>,
     completion: NativeOperationCompletion,
-    nested_main: bool,
+    nested_dispatch: RendererDevToolsMainNestedDispatch,
 }
 
 pub enum RendererNativeOperationStep {
@@ -272,10 +293,19 @@ impl RendererNativeOperation {
         + Send
         + 'static,
     ) -> Self {
-        let nested_main = command.nested_dispatch()
-            == crate::devtools::command::RendererDevToolsMainNestedDispatch::PageAgent;
+        let nested_dispatch = match &command {
+            RendererPageCommand::Inspector(envelope)
+                if envelope.runtime_binding_removal_name().is_some() =>
+            {
+                RendererDevToolsMainNestedDispatch::NativeInspectorSession
+            }
+            _ if command.nested_dispatch() == RendererDevToolsMainNestedDispatch::PageAgent => {
+                RendererDevToolsMainNestedDispatch::PageAgent
+            }
+            _ => RendererDevToolsMainNestedDispatch::OwnerOnly,
+        };
         Self {
-            nested_main,
+            nested_dispatch,
             command: Box::new(command),
             completion: NativeOperationCompletion::Terminal(Box::new(project)),
         }
@@ -293,7 +323,7 @@ impl RendererNativeOperation {
         Self {
             command: Box::new(command),
             completion: NativeOperationCompletion::Lookup(Box::new(next)),
-            nested_main: false,
+            nested_dispatch: RendererDevToolsMainNestedDispatch::OwnerOnly,
         }
     }
 
@@ -305,22 +335,26 @@ impl RendererNativeOperation {
         + Send
         + 'static,
     ) -> Self {
-        let nested_main = command.nested_dispatch()
-            == crate::devtools::command::RendererDevToolsMainNestedDispatch::PageAgent;
+        let nested_dispatch =
+            if command.nested_dispatch() == RendererDevToolsMainNestedDispatch::PageAgent {
+                RendererDevToolsMainNestedDispatch::PageAgent
+            } else {
+                RendererDevToolsMainNestedDispatch::OwnerOnly
+            };
         let mut operation = Self::then(command, next);
-        operation.nested_main = nested_main;
+        operation.nested_dispatch = nested_dispatch;
         operation
     }
 
     /// Preserve an enclosing handler's isolate-entry requirement even when
     /// its first lookup happens to be a native node/realm query.
     pub fn require_owner_turn(mut self) -> Self {
-        self.nested_main = false;
+        self.nested_dispatch = RendererDevToolsMainNestedDispatch::OwnerOnly;
         self
     }
 
-    pub(crate) fn can_dispatch_on_nested_main(&self) -> bool {
-        self.nested_main
+    pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
+        self.nested_dispatch
     }
 }
 
@@ -333,6 +367,31 @@ enum NativeReadyReply {
 }
 
 impl RendererCdpCall {
+    pub(crate) fn runtime_binding_removal_name(&self) -> &str {
+        let RendererPageCommand::Inspector(envelope) = self.operation.command.as_ref() else {
+            unreachable!("nested native Inspector dispatch requires an Inspector payload")
+        };
+        envelope
+            .runtime_binding_removal_name()
+            .expect("only removeBinding supports nested native Inspector dispatch")
+    }
+
+    pub(crate) fn into_runtime_binding_removal_commit(
+        mut self,
+        output: Result<crate::runtime::RendererRuntimeCommandOutput, String>,
+    ) -> RendererPageCommand {
+        let RendererPageCommand::Inspector(envelope) = *self.operation.command else {
+            unreachable!("nested native Inspector dispatch requires an Inspector payload")
+        };
+        self.operation.command = Box::new(RendererPageCommand::Inspector(
+            envelope.into_runtime_binding_removal_commit(output),
+        ));
+        self.operation.nested_dispatch = RendererDevToolsMainNestedDispatch::PageAgent;
+        // Keep the original response lease and terminal projection. Neither
+        // the V8 response capture nor the adapter can publish another reply.
+        RendererPageCommand::Native(self)
+    }
+
     pub(crate) fn dispatch(
         self,
         vm: &mut crate::runtime::PageVm,
@@ -341,7 +400,8 @@ impl RendererCdpCall {
             mut operation,
             response,
         } = self;
-        let nested_main = operation.nested_main;
+        let nested_main =
+            operation.nested_dispatch == RendererDevToolsMainNestedDispatch::PageAgent;
         let reply = loop {
             // A lookup may construct another Inspector operation. Bind
             // each one to the attachment captured for the original call.
@@ -356,7 +416,9 @@ impl RendererCdpCall {
                 NativeOperationCompletion::Lookup(next) => match next(reply) {
                     RendererNativeOperationStep::Continue(next) => {
                         assert!(
-                            !nested_main || next.nested_main,
+                            !nested_main
+                                || next.nested_dispatch
+                                    == RendererDevToolsMainNestedDispatch::PageAgent,
                             "a nested native continuation cannot acquire an owner-only isolate"
                         );
                         operation = next;

@@ -7,18 +7,22 @@ pub use moli_v8_util::{
     define_non_enumerable_static_property, define_non_enumerable_static_string_property,
     get_own_static_property, get_private_object, get_private_value, get_property,
     global_constructor_object, global_constructor_prototype,
-    initialize_intrinsic_interface_registry, new_null_prototype_object, object_bool_property,
+    initialize_ecmascript_intrinsic_registry, new_null_prototype_object, object_bool_property,
     object_chain_contains, object_defined_string_property, object_non_empty_string_property,
     object_number_property, object_own_static_bool_property, object_own_static_property_as_array,
     object_own_static_string_property, object_property_as_array, object_property_as_object,
-    object_string_property, private_key, register_intrinsic_interface,
-    registered_intrinsic_constructor, registered_intrinsic_prototype, set_null_prototype,
+    object_string_property, private_key, register_ecmascript_intrinsic,
+    registered_ecmascript_constructor, registered_ecmascript_prototype, set_null_prototype,
     set_private_value, throw_range_error, throw_type_error, v8_json_parse, v8_string, v8str,
     walk_object_chain,
 };
 use moli_webapi_declare::WebApiValue;
 pub(crate) use moli_webapi_declare::define_array_data_property as define_v8_array_data_property;
-use std::{ptr::NonNull, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    ptr::NonNull,
+    rc::Rc,
+};
 use url::Url;
 use widestring::U16String;
 
@@ -26,10 +30,170 @@ const SCRIPT_BASE_URL_HOST_DEFINED_OPTIONS_MARKER: &str = "moli-script-base-url-
 
 // Access-check callbacks cannot inspect the global object to rediscover the host:
 // that property lookup would recursively invoke the same V8 access check. This
-// non-owning slot is valid while the context can execute because the matching
-// ScriptVm context state retains its `JsContextHostBridgeRef`.
+// slot starts non-owning during fallible bootstrap, then a successfully
+// published Document realm promotes it to a Context-owned host reference. That
+// mirrors ScriptState/Oilpan's retained-realm edge closely enough for Moli's
+// non-tracing Rust heap: a retained function or DOM wrapper keeps its native
+// Document backing alive, while temporary WindowProxy facades remain
+// non-owning and fail closed as soon as the host detaches.
+struct ContextHostPointerSlot {
+    host_ptr: NonNull<JsContextHost>,
+    host_lifecycle: Rc<Cell<ContextHostLifecycle>>,
+    retained_realm_owner: RefCell<Option<RetainedDocumentRealmHostOwner>>,
+}
+
+struct RetainedDocumentRealmHostOwner {
+    host: Option<Rc<RefCell<JsContextHost>>>,
+    deferred_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
+    retained_v8_handle_state: Vec<Box<dyn std::any::Any>>,
+}
+
+impl Drop for RetainedDocumentRealmHostOwner {
+    fn drop(&mut self) {
+        if let Some(host) = self.host.take() {
+            self.deferred_release_queue
+                .defer(host, std::mem::take(&mut self.retained_v8_handle_state));
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContextHostLifecycle {
+    Active,
+    Detached,
+    Destroyed,
+}
+
+/// Marks a V8 Context whose native Document host has been retired.
+///
+/// Navigation can keep the stable WindowProxy while replacing its Context and
+/// `JsContextHost`; final Page close also parks that proxy on a host-free
+/// facade. In both cases retained functions and wrappers can outlive the Rust
+/// host, so every raw-pointer entry point must fail closed before inspecting
+/// embedder data.
 #[derive(Debug)]
-struct ContextHostPointerSlot(NonNull<JsContextHost>);
+struct DisconnectedPageContext;
+
+/// Marks a real Document realm whose browsing-context execution authority has
+/// ended while its ordinary JS and DOM objects remain usable if author code
+/// still retains them.
+#[derive(Debug)]
+struct DetachedDocumentPageContext;
+
+/// Identifies a main default Window realm after its active registrations retire.
+pub(crate) struct MainDefaultWindowContext;
+
+/// Active native registries root their objects until teardown. A detached
+/// realm instead keeps those objects in its own V8-traced graph, so retaining
+/// a Document preserves wrapper identity without a Rust -> V8 -> Rust cycle.
+#[derive(Debug)]
+pub(crate) enum RealmObjectHandle {
+    Strong(v8::Global<v8::Object>),
+    Traced(v8::Weak<v8::Object>),
+}
+
+impl RealmObjectHandle {
+    /// Completed native state keeps identity without rooting the object's JS graph.
+    pub(crate) fn weak(
+        scope: &mut v8::PinScope<'_, '_>,
+        object: v8::Local<'_, v8::Object>,
+    ) -> Self {
+        Self::Traced(v8::Weak::new(scope, object))
+    }
+
+    pub(crate) fn new(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> Self {
+        if page_context_is_detached_document(scope.get_current_context()) {
+            Self::traced(scope, object)
+        } else {
+            Self::Strong(v8::Global::new(scope, object))
+        }
+    }
+
+    fn traced(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> Self {
+        const ROOTS: &str = "__moliRetainedRealmObjects";
+        let context = object
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let anchor = context.get_extras_binding_object(scope);
+        let roots = get_private_value(scope, anchor, ROOTS)
+            .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+            .unwrap_or_else(|| {
+                let roots = v8::Array::new(scope, 0);
+                roots.set_prototype(scope, v8::null(scope).into());
+                set_private_value(scope, anchor, ROOTS, roots.into());
+                roots
+            });
+        roots.set_index(scope, roots.length(), object.into());
+        Self::Traced(v8::Weak::new(scope, object))
+    }
+
+    pub(crate) fn to_local<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        match self {
+            Self::Strong(object) => Some(v8::Local::new(scope, object)),
+            Self::Traced(object) => object.to_local(scope),
+        }
+    }
+
+    pub(crate) fn retain_in_realm(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        if let Self::Strong(object) = self {
+            let object = v8::Local::new(scope, &*object);
+            *self = Self::traced(scope, object);
+        }
+    }
+
+    pub(crate) fn is_strong(&self) -> bool {
+        matches!(self, Self::Strong(_))
+    }
+}
+
+/// Value edges owned by native state become ordinary V8 edges when a realm
+/// retires. A private holder supports primitives as well as objects and keeps
+/// cross-realm values attached to the realm that owns the native state.
+pub(crate) enum RealmValueHandle {
+    Strong(v8::Global<v8::Value>),
+    Traced(RealmObjectHandle),
+}
+
+impl RealmValueHandle {
+    const VALUE: &str = "__moliRetainedRealmValue";
+
+    pub(crate) fn new(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> Self {
+        if page_context_is_detached_document(scope.get_current_context()) {
+            Self::traced(scope, value)
+        } else {
+            Self::Strong(v8::Global::new(scope, value))
+        }
+    }
+
+    fn traced(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> Self {
+        let holder = v8::Object::new(scope);
+        set_private_value(scope, holder, Self::VALUE, value);
+        Self::Traced(RealmObjectHandle::traced(scope, holder))
+    }
+
+    pub(crate) fn to_local<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> v8::Local<'s, v8::Value> {
+        match self {
+            Self::Strong(value) => v8::Local::new(scope, value),
+            Self::Traced(holder) => holder
+                .to_local(scope)
+                .and_then(|holder| get_private_value(scope, holder, Self::VALUE))
+                .unwrap_or_else(|| v8::undefined(scope).into()),
+        }
+    }
+
+    pub(crate) fn retain_in_realm(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        if let Self::Strong(value) = self {
+            let value = v8::Local::new(scope, &*value);
+            *self = Self::traced(scope, value);
+        }
+    }
+}
 
 /// Materializes the unexposed prototype described by a WebIDL iterator
 /// FunctionTemplate. The temporary constructor is an implementation detail, so
@@ -373,6 +537,9 @@ pub(super) fn context_host_ptr_from_global_bridge(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Option<*mut JsContextHost> {
     let context = scope.get_current_context();
+    if page_context_is_disconnected(context) {
+        return None;
+    }
     if let Some(host_ptr) = context_host_ptr_from_context_slot(context) {
         return Some(host_ptr);
     }
@@ -384,24 +551,123 @@ pub(super) fn context_host_ptr_from_global_bridge(
 pub(super) fn install_context_host_pointer_slot(
     context: v8::Local<'_, v8::Context>,
     host_ptr: *mut JsContextHost,
+    host_lifecycle: Rc<Cell<ContextHostLifecycle>>,
 ) {
     let host_ptr =
         NonNull::new(host_ptr).expect("V8 context JsContextHost pointer should not be null");
-    let previous = context.set_slot(Rc::new(ContextHostPointerSlot(host_ptr)));
     assert!(
-        previous
-            .as_deref()
-            .is_none_or(|previous| previous.0 == host_ptr),
-        "V8 context JsContextHost pointer must not be rebound"
+        host_lifecycle.get() == ContextHostLifecycle::Active,
+        "a retired JsContextHost must not be installed into a V8 context"
     );
+    if let Some(existing) = context.get_slot::<ContextHostPointerSlot>() {
+        assert!(
+            existing.host_ptr == host_ptr && Rc::ptr_eq(&existing.host_lifecycle, &host_lifecycle),
+            "V8 context JsContextHost pointer must not be rebound"
+        );
+        return;
+    }
+    let previous = context.set_slot(Rc::new(ContextHostPointerSlot {
+        host_ptr,
+        host_lifecycle: host_lifecycle.clone(),
+        retained_realm_owner: RefCell::new(None),
+    }));
+    debug_assert!(previous.is_none());
 }
 
 pub(super) fn context_host_ptr_from_context_slot(
     context: v8::Local<'_, v8::Context>,
 ) -> Option<*mut JsContextHost> {
+    if page_context_is_disconnected(context) {
+        return None;
+    }
     context
         .get_slot::<ContextHostPointerSlot>()
-        .map(|slot| slot.0.as_ptr())
+        .map(|slot| slot.host_ptr.as_ptr())
+}
+
+pub(crate) fn retain_context_host_for_document_realm(
+    context: v8::Local<'_, v8::Context>,
+    host: Rc<RefCell<JsContextHost>>,
+    deferred_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
+) {
+    let slot = context
+        .get_slot::<ContextHostPointerSlot>()
+        .expect("published Document realm must have a JsContextHost pointer slot");
+    let host_ptr = NonNull::new(host.as_ptr())
+        .expect("published Document realm JsContextHost pointer should not be null");
+    assert_eq!(
+        slot.host_ptr, host_ptr,
+        "published Document realm must retain its installed JsContextHost"
+    );
+    assert!(
+        slot.host_lifecycle.get() != ContextHostLifecycle::Destroyed,
+        "destroyed JsContextHost must not gain a retained realm owner"
+    );
+    let mut retained = slot.retained_realm_owner.borrow_mut();
+    if let Some(existing) = retained.as_ref() {
+        assert!(
+            existing
+                .host
+                .as_ref()
+                .is_some_and(|existing| Rc::ptr_eq(existing, &host)),
+            "Document realm JsContextHost owner must not be rebound"
+        );
+        return;
+    }
+    *retained = Some(RetainedDocumentRealmHostOwner {
+        host: Some(host),
+        deferred_release_queue,
+        retained_v8_handle_state: Vec::new(),
+    });
+}
+
+pub(crate) fn retain_context_v8_handle_state_for_safe_release<T: 'static>(
+    context: v8::Local<'_, v8::Context>,
+    state: Rc<T>,
+) {
+    let slot = context
+        .get_slot::<ContextHostPointerSlot>()
+        .expect("retained Context embedder state requires a Document host slot");
+    let mut retained_owner = slot.retained_realm_owner.borrow_mut();
+    let retained_owner = retained_owner
+        .as_mut()
+        .expect("retained Context embedder state requires a published real realm");
+    retained_owner
+        .retained_v8_handle_state
+        .push(Box::new(state));
+}
+
+pub(crate) fn page_context_is_disconnected(context: v8::Local<'_, v8::Context>) -> bool {
+    context.get_slot::<DisconnectedPageContext>().is_some()
+        || context
+            .get_slot::<ContextHostPointerSlot>()
+            .is_some_and(|slot| match slot.host_lifecycle.get() {
+                ContextHostLifecycle::Active => false,
+                ContextHostLifecycle::Detached => slot.retained_realm_owner.borrow().is_none(),
+                ContextHostLifecycle::Destroyed => true,
+            })
+}
+
+pub(crate) fn page_context_is_detached_document(context: v8::Local<'_, v8::Context>) -> bool {
+    context.get_slot::<DetachedDocumentPageContext>().is_some()
+        || context
+            .get_slot::<ContextHostPointerSlot>()
+            .is_some_and(|slot| slot.host_lifecycle.get() == ContextHostLifecycle::Detached)
+}
+
+pub(crate) fn detach_document_page_context(context: v8::Local<'_, v8::Context>) {
+    if page_context_is_disconnected(context) || page_context_is_detached_document(context) {
+        return;
+    }
+    let slot = context
+        .get_slot::<ContextHostPointerSlot>()
+        .expect("detached Document realm must have a JsContextHost pointer slot");
+    assert!(
+        slot.retained_realm_owner.borrow().is_some(),
+        "only a retained real Document realm may enter detached state"
+    );
+    let previous = context.set_slot(Rc::new(DetachedDocumentPageContext));
+    debug_assert!(previous.is_none());
 }
 
 /// Convenience wrapper for callbacks that immediately need the host value.
@@ -445,6 +711,13 @@ pub(super) fn context_host_ptr_from_window_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> Option<*mut JsContextHost> {
+    if page_context_is_disconnected(scope.get_current_context())
+        || object
+            .get_creation_context(scope)
+            .is_some_and(page_context_is_disconnected)
+    {
+        return None;
+    }
     if let Some(value) = object.get_internal_field(scope, 0)
         && let Ok(external) = v8::Local::<v8::External>::try_from(value)
     {

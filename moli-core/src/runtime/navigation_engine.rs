@@ -19,12 +19,12 @@ use moli_fetch::{
     BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchResult, Request,
     StreamingRawResponse, ensure_http_status_success,
 };
-use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
+use moli_page_types::{LayoutConfiguration, LayoutPolicy, OptionalResourceFetchMask};
 use moli_renderer_v8::{
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
-    RendererBrowserContextRuntimeOwnerAccess, RendererDocumentReplacement,
-    RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
-    RendererWebStorageHandles, SharedStorageBucketStore, WeakIndexedDbManager,
+    RendererBrowserContextRuntimeOwnerAccess, RendererReservedServiceWorkerClient,
+    RendererServiceWorkerMainResourceFetch, RendererWebStorageHandles, SharedStorageBucketStore,
+    WeakIndexedDbManager,
     network::{
         BrowserResourceRuntime, BrowserResourceRuntimeOwner, PageNetworkPolicy,
         navigation::{DocumentFetchContextSeed, NavigationResourceLoader},
@@ -185,6 +185,14 @@ pub struct BuiltDocumentPage {
     pub pending_download: Option<RendererPendingDownloadActivation>,
 }
 
+/// Commit metadata for a Document installed in the caller's existing Page.
+/// The owning Page handle stays with that caller throughout the operation.
+pub struct CommittedDocumentPageReplacement {
+    pub page_creation_diagnostics: RendererPageCreationDiagnostics,
+    pub page_creation_artifacts: RendererPageCreationArtifacts,
+    pub pending_download: Option<RendererPendingDownloadActivation>,
+}
+
 /// A renderer document whose isolate and DevTools agent are reserved, but
 /// whose parser and execution contexts have not started.
 pub struct PreparedDocumentPage {
@@ -193,19 +201,14 @@ pub struct PreparedDocumentPage {
 
 #[derive(Debug, Clone)]
 pub struct PreparedDocumentPageCommitConfiguration {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
     pub runtime_isolated_worlds: Vec<RuntimeIsolatedWorldDefinition>,
     pub permission_overrides: Vec<PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
-    pub script_execution_disabled: bool,
-    pub bypass_content_security_policy: bool,
-    pub emulated_media: EmulatedMediaOverrides,
-    pub idle_override: Option<crate::page::EmulatedIdleOverride>,
-    pub navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub viewport_surface: Option<ViewportSurface>,
-    pub document_activity: moli_page_types::DocumentActivity,
+    pub document_settings: moli_page_types::DocumentSettings,
     pub browser_resource_runtime: BrowserResourceRuntime,
     pub navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub network_offline: bool,
@@ -253,6 +256,7 @@ impl PreparedDocumentPage {
         self.prepared
             .update_commit_configuration(
                 moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
+                    web_mcp_invocation: configuration.web_mcp_invocation,
                     document_start_scripts: configuration.document_start_scripts,
                     runtime_bindings: configuration.runtime_bindings,
                     runtime_inspector_session_restore_snapshots: configuration
@@ -260,13 +264,7 @@ impl PreparedDocumentPage {
                     runtime_isolated_worlds: configuration.runtime_isolated_worlds,
                     permission_overrides: configuration.permission_overrides,
                     extra_http_headers: configuration.extra_http_headers,
-                    script_execution_disabled: configuration.script_execution_disabled,
-                    bypass_content_security_policy: configuration.bypass_content_security_policy,
-                    emulated_media: configuration.emulated_media,
-                    idle_override: configuration.idle_override,
-                    navigator_overrides: configuration.navigator_overrides,
-                    viewport_surface: configuration.viewport_surface,
-                    document_activity: configuration.document_activity,
+                    document_settings: configuration.document_settings,
                     browser_resource_runtime: configuration.browser_resource_runtime,
                     navigator_identity: configuration.navigator_identity,
                     network_offline: configuration.network_offline,
@@ -316,6 +314,34 @@ impl PreparedDocumentPage {
     pub async fn cancel(self) -> Result<()> {
         self.prepared.cancel().await
     }
+
+    pub async fn commit_page_replacement(
+        self,
+        permit: PreparedDocumentPageCommitPermit,
+        page: &mut Page,
+    ) -> std::result::Result<
+        CommittedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementError,
+    > {
+        use moli_renderer_v8::RendererPageReplacementError;
+        if self.renderer_owner_local_host_id() != page.renderer_owner_local_host_id()
+            || self.renderer_page_id() != page.renderer_page_id()
+        {
+            return Err(RendererPageReplacementError::document_preserved(anyhow!(
+                "prepared Document belongs to a different live Page"
+            )));
+        }
+        let mut replacement = self.prepared.commit_page_replacement(permit.permit).await?;
+        let pending_download = replacement.take_pending_download();
+        let (page_creation_diagnostics, page_creation_artifacts) = page
+            .adopt_renderer_document_replacement(replacement)
+            .map_err(RendererPageReplacementError::document_unavailable)?;
+        Ok(CommittedDocumentPageReplacement {
+            page_creation_diagnostics,
+            page_creation_artifacts,
+            pending_download,
+        })
+    }
 }
 
 /// Handle to an in-flight document page build started via
@@ -355,7 +381,7 @@ pub struct NavigationRuntimeConfig {
     fetch_config: FetchConfig,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
-    layout_policy: LayoutPolicy,
+    layout_configuration: LayoutConfiguration,
 }
 
 impl NavigationRuntimeConfig {
@@ -365,11 +391,28 @@ impl NavigationRuntimeConfig {
         subframe_loading_enabled: bool,
         layout_policy: LayoutPolicy,
     ) -> Self {
+        Self::new_with_layout_configuration(
+            fetch_config,
+            optional_resource_fetch_mask,
+            subframe_loading_enabled,
+            LayoutConfiguration {
+                policy: layout_policy,
+                ..LayoutConfiguration::default()
+            },
+        )
+    }
+
+    pub fn new_with_layout_configuration(
+        fetch_config: FetchConfig,
+        optional_resource_fetch_mask: OptionalResourceFetchMask,
+        subframe_loading_enabled: bool,
+        layout_configuration: LayoutConfiguration,
+    ) -> Self {
         Self {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
+            layout_configuration,
         }
     }
 
@@ -390,7 +433,20 @@ impl NavigationRuntimeConfig {
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.layout_policy
+        self.layout_configuration.policy
+    }
+
+    pub fn scrollbars_hidden(&self) -> bool {
+        self.layout_configuration.scrollbars_hidden
+    }
+
+    pub fn with_scrollbars_hidden(mut self, hidden: bool) -> Self {
+        self.layout_configuration.scrollbars_hidden = hidden;
+        self
+    }
+
+    pub fn layout_configuration(&self) -> LayoutConfiguration {
+        self.layout_configuration
     }
 }
 
@@ -407,11 +463,11 @@ impl Default for NavigationRuntimeConfig {
 
 impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
     fn from(config: &crate::config::BrowserConfig) -> Self {
-        Self::new(
+        Self::new_with_layout_configuration(
             config.fetch().clone(),
             config.optional_resource_fetch_mask(),
             config.subframe_loading_enabled(),
-            config.layout_policy(),
+            config.layout_configuration(),
         )
     }
 }
@@ -420,7 +476,8 @@ impl From<&crate::config::BrowserConfig> for NavigationRuntimeConfig {
 pub struct NavigationEngine {
     fetch_config: FetchConfig,
     page_network_policy: PageNetworkPolicy,
-    layout_policy: LayoutPolicy,
+    layout_configuration: LayoutConfiguration,
+    emulated_scrollbars_hidden: bool,
     js_runtime: JsRuntime,
     resource_runtime: Option<BrowserResourceRuntime>,
     browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
@@ -515,6 +572,7 @@ impl NavigationEngine {
             config,
             browser_context_access,
             Some(browser_context_owner),
+            None,
         )
         .expect("standalone browser context owner must remain live during construction")
     }
@@ -544,6 +602,20 @@ impl NavigationEngine {
             config,
             browser_context_access,
             None,
+            None,
+        )
+    }
+
+    pub fn new_for_pending_auxiliary_page(
+        config: NavigationRuntimeConfig,
+        browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
+        page: &moli_renderer_v8::RendererPendingAuxiliaryPage,
+    ) -> Result<Self> {
+        Self::new_with_runtime_config_and_browser_context_access_inner(
+            config,
+            browser_context_access,
+            None,
+            Some(page.renderer_runtime()),
         )
     }
 
@@ -551,21 +623,34 @@ impl NavigationEngine {
         config: NavigationRuntimeConfig,
         browser_context_access: RendererBrowserContextRuntimeOwnerAccess,
         standalone_browser_context_owner: Option<RendererBrowserContextRuntimeOwner>,
+        existing_runtime: Option<JsRuntime>,
     ) -> Result<Self> {
         let NavigationRuntimeConfig {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
+            layout_configuration,
         } = config;
         let resource_runtime = browser_context_access
             .current_browser_resource_runtime()
             .map_err(|error| anyhow!("browser context resource owner unavailable: {error}"))?;
-        let js_runtime =
-            JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
+        let js_runtime = match existing_runtime {
+            Some(runtime) => {
+                anyhow::ensure!(
+                    runtime
+                        .browser_context_runtime()
+                        .shares_state_with(&browser_context_access.runtime()),
+                    "auxiliary Page cannot be adopted into a different browser context"
+                );
+                runtime
+            }
+            None => {
+                JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?
+            }
+        };
         js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(layout_policy)?;
+            .configure_layout_configuration(layout_configuration)?;
         let standalone_lifetime_owner = standalone_browser_context_owner.map(|owner| {
             Rc::new(NavigationEngineLifetimeOwner {
                 js_runtime: Some(js_runtime.clone()),
@@ -579,7 +664,8 @@ impl NavigationEngine {
                 subframe_loading_enabled,
                 false,
             ),
-            layout_policy,
+            layout_configuration,
+            emulated_scrollbars_hidden: false,
             js_runtime,
             resource_runtime: Some(resource_runtime),
             browser_context_access,
@@ -595,11 +681,11 @@ impl NavigationEngine {
         subframe_loading_enabled: bool,
     ) -> Result<Self> {
         Self::new_with_runtime_config_and_shared_renderer_owner(
-            NavigationRuntimeConfig::new(
+            NavigationRuntimeConfig::new_with_layout_configuration(
                 fetch_config,
                 optional_resource_fetch_mask,
                 subframe_loading_enabled,
-                renderer_owner_source.layout_policy,
+                renderer_owner_source.layout_configuration,
             ),
             renderer_owner_source,
         )
@@ -613,12 +699,12 @@ impl NavigationEngine {
             fetch_config,
             optional_resource_fetch_mask,
             subframe_loading_enabled,
-            layout_policy,
+            layout_configuration,
         } = config;
         renderer_owner_source
             .js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(layout_policy)?;
+            .configure_layout_configuration(layout_configuration)?;
         let resource_runtime = renderer_owner_source
             .browser_context_access
             .current_browser_resource_runtime()
@@ -630,7 +716,8 @@ impl NavigationEngine {
                 subframe_loading_enabled,
                 false,
             ),
-            layout_policy,
+            layout_configuration,
+            emulated_scrollbars_hidden: false,
             js_runtime: renderer_owner_source.js_runtime.clone(),
             resource_runtime: Some(resource_runtime),
             browser_context_access: renderer_owner_source.browser_context_access.clone(),
@@ -658,6 +745,11 @@ impl NavigationEngine {
 
     pub fn set_document_activity(&mut self, activity: moli_page_types::DocumentActivity) {
         self.document_activity = activity;
+    }
+
+    /// Seeds target-local scrollbar emulation before the next Document starts.
+    pub fn set_emulated_scrollbars_hidden(&mut self, hidden: bool) {
+        self.emulated_scrollbars_hidden = hidden;
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
@@ -692,16 +784,16 @@ impl NavigationEngine {
     }
 
     pub fn runtime_config(&self) -> NavigationRuntimeConfig {
-        NavigationRuntimeConfig::new(
+        NavigationRuntimeConfig::new_with_layout_configuration(
             self.fetch_config.clone(),
             self.optional_resource_fetch_mask(),
             self.subframe_loading_enabled(),
-            self.layout_policy,
+            self.layout_configuration,
         )
     }
 
     pub fn layout_policy(&self) -> LayoutPolicy {
-        self.layout_policy
+        self.layout_configuration.policy
     }
 
     pub fn image_fetch_enabled(&self) -> bool {
@@ -947,6 +1039,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
@@ -958,7 +1052,9 @@ impl NavigationEngine {
             raw_url,
             body,
             request_headers,
-            initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+            request_origin.unwrap_or_else(|| {
+                initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url)
+            }),
         )
         .map(|request| {
             let request = request.with_top_level_navigation_cookie_context();
@@ -966,10 +1062,11 @@ impl NavigationEngine {
             if !infer_referrer_from_initiator {
                 request = request.without_inferred_referrer();
             }
+            if let Some(metadata) = request_metadata {
+                request = request.with_subresource_request_metadata(metadata);
+            }
             if let Some(initiator_url) = initiator_url {
-                request
-                    .with_initiator_url(initiator_url)
-                    .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+                request.with_initiator_url(initiator_url)
             } else {
                 request
             }
@@ -993,6 +1090,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<String>,
@@ -1005,6 +1104,8 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            request_metadata,
+            request_origin,
             method,
             raw_url,
             body.map(String::into_bytes),
@@ -1020,6 +1121,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
@@ -1032,7 +1135,9 @@ impl NavigationEngine {
             raw_url,
             body,
             request_headers,
-            initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
+            request_origin.unwrap_or_else(|| {
+                initiator_url.map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url)
+            }),
         )
         .map(|request| {
             let request = request.with_top_level_navigation_cookie_context();
@@ -1040,10 +1145,11 @@ impl NavigationEngine {
             if !infer_referrer_from_initiator {
                 request = request.without_inferred_referrer();
             }
+            if let Some(metadata) = request_metadata {
+                request = request.with_subresource_request_metadata(metadata);
+            }
             if let Some(initiator_url) = initiator_url {
-                request
-                    .with_initiator_url(initiator_url)
-                    .with_request_origin(moli_url::WebOrigin::from_url(initiator_url))
+                request.with_initiator_url(initiator_url)
             } else {
                 request
             }
@@ -1088,6 +1194,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<String>,
@@ -1100,6 +1208,8 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            request_metadata,
+            request_origin,
             method,
             raw_url,
             body.map(String::into_bytes),
@@ -1117,6 +1227,8 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
+        request_origin: Option<moli_url::WebOrigin>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
@@ -1130,6 +1242,8 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            request_metadata,
+            request_origin,
             method,
             raw_url,
             body,
@@ -1367,57 +1481,6 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn build_html_page_from_response_with_storage_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-    ) -> Result<BuiltDocumentPage> {
-        self.build_html_page_from_response_with_storage_and_inspector_session_restores_async(
-            storage,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            response_body,
-            document_start_scripts,
-            runtime_bindings,
-            Vec::new(),
-            extra_http_headers,
-            script_execution_disabled,
-            false,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            None,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub async fn build_html_page_from_response_with_storage_and_inspector_session_restores_async(
         &mut self,
         storage: NavigationPageStorageHandles,
@@ -1540,11 +1603,15 @@ impl NavigationEngine {
                 document_start_scripts,
                 runtime_bindings,
                 extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                emulated_media,
-                viewport_surface,
-                document_activity: self.document_activity,
+                document_settings: moli_page_types::DocumentSettings {
+                    script_execution_disabled,
+                    scrollbars_hidden: self.emulated_scrollbars_hidden,
+                    bypass_content_security_policy,
+                    emulated_media,
+                    viewport_surface,
+                    document_activity: self.document_activity,
+                    ..Default::default()
+                },
                 network_offline,
                 blocked_url_patterns,
                 fetch_subresource_interception_enabled,
@@ -1555,59 +1622,6 @@ impl NavigationEngine {
             },
         )?;
         Ok(PendingBuiltDocumentPage { pending })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn start_build_html_page_from_response_with_storage(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-    ) -> Result<PendingBuiltDocumentPage> {
-        let page_reservation = self.reserve_page_for_creation();
-        self.start_build_html_page_from_response_with_storage_and_inspector_session_restores(
-            page_reservation,
-            storage,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            response_body,
-            document_start_scripts,
-            runtime_bindings,
-            Vec::new(),
-            extra_http_headers,
-            script_execution_disabled,
-            false,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            None,
-            None,
-            None,
-        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1674,84 +1688,9 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn build_streaming_raw_page_from_external_body_async(
-        &mut self,
-        cookie_store: SharedBrowserCookieStore,
-        web_storage: RendererWebStorageHandles,
-        indexed_db_manager: Option<WeakIndexedDbManager>,
-        storage_bucket_store: Option<SharedStorageBucketStore>,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        stage: PageVmInitStage,
-        reply_boundary: moli_renderer_v8::RendererReplyBoundary,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<BuiltDocumentPage> {
-        let page_reservation = self.reserve_page_for_creation();
-        let prepared = self
-            .prepare_streaming_raw_page_from_external_body_async(
-                page_reservation,
-                None,
-                cookie_store,
-                web_storage,
-                indexed_db_manager,
-                storage_bucket_store,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                raw_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                script_execution_disabled,
-                false,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                stage,
-                reply_boundary,
-                root_frame_id,
-                resource_source,
-                reserved_service_worker_client,
-                main_document_commit,
-            )
-            .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
     async fn prepare_streaming_raw_page_from_external_body_async(
         &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
+        page_reservation: impl Into<moli_renderer_v8::RendererDocumentPreparationTarget>,
         cookie_store: SharedBrowserCookieStore,
         web_storage: RendererWebStorageHandles,
         indexed_db_manager: Option<WeakIndexedDbManager>,
@@ -1795,7 +1734,6 @@ impl NavigationEngine {
             .js_runtime
             .prepare_streaming_raw_document_from_external_body(
                 page_reservation,
-                replacement,
                 requested_url,
                 final_url,
                 navigation_initiator_url,
@@ -1820,11 +1758,15 @@ impl NavigationEngine {
                     document_start_scripts,
                     runtime_bindings,
                     extra_http_headers,
-                    script_execution_disabled,
-                    bypass_content_security_policy,
-                    emulated_media,
-                    viewport_surface,
-                    document_activity: self.document_activity,
+                    document_settings: moli_page_types::DocumentSettings {
+                        script_execution_disabled,
+                        scrollbars_hidden: self.emulated_scrollbars_hidden,
+                        bypass_content_security_policy,
+                        emulated_media,
+                        viewport_surface,
+                        document_activity: self.document_activity,
+                        ..Default::default()
+                    },
                     network_offline,
                     blocked_url_patterns,
                     fetch_subresource_interception_enabled,
@@ -1840,131 +1782,9 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn build_streaming_raw_page_from_external_body_with_storage_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        stage: PageVmInitStage,
-    ) -> Result<BuiltDocumentPage> {
-        self.build_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
-            storage,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            raw_body,
-            document_start_scripts,
-            runtime_bindings,
-            Vec::new(),
-            extra_http_headers,
-            script_execution_disabled,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            stage,
-            moli_renderer_v8::RendererReplyBoundary::Stage,
-            None,
-            CommittedDocumentResourceSource::Synthetic,
-            None,
-            None,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn build_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        stage: PageVmInitStage,
-        reply_boundary: moli_renderer_v8::RendererReplyBoundary,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<BuiltDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.build_streaming_raw_page_from_external_body_async(
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            raw_body,
-            document_start_scripts,
-            runtime_bindings,
-            runtime_inspector_session_restore_snapshots,
-            extra_http_headers,
-            script_execution_disabled,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            stage,
-            reply_boundary,
-            root_frame_id,
-            resource_source,
-            reserved_service_worker_client,
-            main_document_commit,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub async fn prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
         &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
+        page_reservation: impl Into<moli_renderer_v8::RendererDocumentPreparationTarget>,
         storage: NavigationPageStorageHandles,
         requested_url: Url,
         final_url: Url,
@@ -1997,7 +1817,6 @@ impl NavigationEngine {
             storage.into_parts();
         self.prepare_streaming_raw_page_from_external_body_async(
             page_reservation,
-            replacement,
             cookie_store,
             web_storage,
             indexed_db_manager,
@@ -2073,11 +1892,15 @@ impl NavigationEngine {
                     document_start_scripts: options.document_start_scripts,
                     runtime_bindings: options.runtime_bindings,
                     extra_http_headers: options.extra_http_headers,
-                    script_execution_disabled: options.script_execution_disabled,
-                    bypass_content_security_policy: options.bypass_content_security_policy,
-                    emulated_media: options.emulated_media,
-                    viewport_surface: options.viewport_surface,
-                    document_activity: self.document_activity,
+                    document_settings: moli_page_types::DocumentSettings {
+                        script_execution_disabled: options.script_execution_disabled,
+                        scrollbars_hidden: self.emulated_scrollbars_hidden,
+                        bypass_content_security_policy: options.bypass_content_security_policy,
+                        emulated_media: options.emulated_media,
+                        viewport_surface: options.viewport_surface,
+                        document_activity: self.document_activity,
+                        ..Default::default()
+                    },
                     network_offline: options.network_offline,
                     blocked_url_patterns: options.blocked_url_patterns,
                     fetch_subresource_interception_enabled: options
@@ -2099,210 +1922,6 @@ impl NavigationEngine {
             page_creation_artifacts,
             pending_download,
         })
-    }
-
-    async fn prepare_document_page_from_response_options_best_effort_async(
-        &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
-        cookie_store: SharedBrowserCookieStore,
-        web_storage: RendererWebStorageHandles,
-        indexed_db_manager: Option<WeakIndexedDbManager>,
-        storage_bucket_store: Option<SharedStorageBucketStore>,
-        options: DocumentPageLoadOptions,
-        stage: PageVmInitStage,
-    ) -> Result<PreparedDocumentPage> {
-        let raw_body =
-            ExternalRawDocumentBodyStream::from_bytes(options.response_body.into_bytes());
-        self.prepare_streaming_raw_page_from_external_body_async(
-            page_reservation,
-            replacement,
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            options.requested_url,
-            options.final_url,
-            options.navigation_initiator_url,
-            options.redirected,
-            options.redirect_count,
-            options.response_status,
-            options.response_headers,
-            raw_body,
-            options.document_start_scripts,
-            options.runtime_bindings,
-            options.runtime_inspector_session_restore_snapshots,
-            options.extra_http_headers,
-            options.script_execution_disabled,
-            options.bypass_content_security_policy,
-            options.emulated_media,
-            options.viewport_surface,
-            options.network_offline,
-            options.blocked_url_patterns,
-            options.fetch_subresource_interception_enabled,
-            options.fetch_subresource_interception_resource_type,
-            stage,
-            moli_renderer_v8::RendererReplyBoundary::Stage,
-            options.root_frame_id,
-            options.resource_source,
-            None,
-            options.main_document_commit,
-        )
-        .await
-    }
-
-    async fn build_document_page_from_response_options_best_effort_async(
-        &mut self,
-        cookie_store: SharedBrowserCookieStore,
-        web_storage: RendererWebStorageHandles,
-        indexed_db_manager: Option<WeakIndexedDbManager>,
-        storage_bucket_store: Option<SharedStorageBucketStore>,
-        options: DocumentPageLoadOptions,
-    ) -> Result<BuiltDocumentPage> {
-        let page_reservation = self.reserve_page_for_creation();
-        let prepared = self
-            .prepare_document_page_from_response_options_best_effort_async(
-                page_reservation,
-                None,
-                cookie_store,
-                web_storage,
-                indexed_db_manager,
-                storage_bucket_store,
-                options,
-                PageVmInitStage::Load,
-            )
-            .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_document_page_from_response_with_storage_and_inspector_session_restores_async(
-        &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        replacement: Option<RendererDocumentReplacement>,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<PreparedDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.prepare_document_page_from_response_options_best_effort_async(
-            page_reservation,
-            replacement,
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            DocumentPageLoadOptions {
-                resource_source,
-                root_frame_id,
-                main_document_commit,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                response_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-            },
-            PageVmInitStage::DomContentLoaded,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn build_document_page_from_response_with_storage_async(
-        &mut self,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        extra_http_headers: moli_fetch::RequestHeaders,
-        script_execution_disabled: bool,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        resource_source: CommittedDocumentResourceSource,
-    ) -> Result<BuiltDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.build_document_page_from_response_options_best_effort_async(
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            DocumentPageLoadOptions {
-                resource_source,
-                root_frame_id: None,
-                main_document_commit: None,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                response_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots: Vec::new(),
-                extra_http_headers,
-                script_execution_disabled,
-                bypass_content_security_policy: false,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-            },
-        )
-        .await
     }
 
     fn start_page_child_frame_lifecycle_work_best_effort(
@@ -2529,6 +2148,58 @@ mod tests {
             browser.js_runtime.renderer_owner_handle().layout_policy(),
             LayoutPolicy::Mock
         );
+    }
+
+    #[test]
+    fn hidden_scrollbars_follow_browser_and_shared_navigation_configuration() {
+        let browser_config = BrowserConfig::default()
+            .with_layout_policy(LayoutPolicy::OnDemand)
+            .with_scrollbars_hidden(true);
+        let browser = Browser::new(browser_config.clone()).expect("hidden scrollbar browser");
+        assert!(
+            browser
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+
+        let source = NavigationEngine::new_with_runtime_config((&browser_config).into());
+        assert!(source.runtime_config().scrollbars_hidden());
+        assert!(
+            source
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+        let shared = NavigationEngine::new_with_fetch_config_and_shared_renderer_owner(
+            FetchConfig::default(),
+            &source,
+            OptionalResourceFetchMask::NONE,
+            true,
+        )
+        .expect("matching owner configuration");
+        assert!(shared.runtime_config().scrollbars_hidden());
+        assert!(shared.shares_renderer_owner_with(&source));
+
+        let conflicting = source.runtime_config().with_scrollbars_hidden(false);
+        assert!(
+            NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(
+                conflicting,
+                &source
+            )
+            .is_err()
+        );
+        assert!(
+            source
+                .js_runtime
+                .renderer_owner_handle()
+                .scrollbars_hidden()
+        );
+    }
+
+    #[test]
+    fn hidden_scrollbars_require_real_layout_for_rust_callers() {
+        assert!(Browser::new(BrowserConfig::default().with_scrollbars_hidden(true)).is_err());
     }
 
     #[test]

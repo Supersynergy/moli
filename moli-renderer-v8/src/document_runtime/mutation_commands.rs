@@ -1444,6 +1444,15 @@ impl DocumentRuntime {
         self.dom_host.set_autofilled_state(handle, autofilled)
     }
 
+    pub(crate) fn set_web_mcp_activity(
+        &mut self,
+        handle: DomHandle,
+        form: bool,
+        submit: bool,
+    ) -> bool {
+        self.dom_host.set_web_mcp_activity(handle, form, submit)
+    }
+
     pub(crate) fn set_input_files(
         &mut self,
         handle: DomHandle,
@@ -1800,7 +1809,7 @@ pub(super) fn finish_runtime_mutation_effects(
         );
     }
     runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
-    if changed {
+    if changed && !stylesheet_owner_changes.is_empty() {
         let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
             runtime.prepare_stylesheet_owner_runtime_changes(&stylesheet_owner_changes);

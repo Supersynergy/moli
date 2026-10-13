@@ -1,5 +1,6 @@
 use super::super::history_runtime::state::{push_history_entry, replace_history_entry};
 use super::*;
+use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 
 pub(crate) fn apply_local_window_location_navigation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -24,6 +25,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let state = v8::null(scope).into();
             let next_entry = create_navigation_entry(
                 scope,
+                owner,
                 resolved.as_str(),
                 None,
                 next_navigation_index,
@@ -32,7 +34,6 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             );
             let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
             set_navigation_entry_document_id(scope, next_entry, document_id.as_str());
-            bind_navigation_entry_runtime_owner(scope, next_entry, owner);
             let _ = push_history_entry(scope, history, next_entry);
             if super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
                 scope, owner,
@@ -58,6 +59,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                 .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
             let entry = create_navigation_entry(
                 scope,
+                owner,
                 resolved.as_str(),
                 None,
                 current_navigation_index,
@@ -66,7 +68,6 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             );
             let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
             set_navigation_entry_document_id(scope, entry, document_id.as_str());
-            bind_navigation_entry_runtime_owner(scope, entry, owner);
             replace_history_entry(scope, history, entry);
             cache_current_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, entry);
@@ -91,11 +92,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
         }
         LocationNavigationKind::Reload => {
             if let Some(record) = entries.get(current_index as usize) {
-                let entry = super::super::history_runtime::native::entry_wrapper(
-                    scope,
-                    owner,
-                    record.clone(),
-                );
+                let entry = entry_wrappers::for_window(scope, owner, record.clone());
                 let current_entry = previous_entry.unwrap_or(entry);
                 if previous_entry.is_none() {
                     sync_navigation_current_entry_from_history_entry(scope, owner, entry);

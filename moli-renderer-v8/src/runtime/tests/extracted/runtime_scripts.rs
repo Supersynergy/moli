@@ -721,38 +721,87 @@ async fn child_default_runtime_evaluate_pending_await_promise_does_not_leak_inte
     );
     let child_context_id = child_context_ids[0];
 
-    let evaluate = dispatch_runtime_protocol_with_context_resolution_for_test(
+    let (response_tx, mut response_rx) = oneshot::channel();
+    let (evaluate, _) = page
+        .run_async_command(
+            RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
+                None,
+                "evaluate".to_owned(),
+                serde_json::json!({
+                    "id": 67,
+                    "method": "Runtime.evaluate",
+                    "params": {
+                        "contextId": child_context_id,
+                        "expression": "new Promise(resolve => { globalThis.resolveChildAwait = resolve; })",
+                        "awaitPromise": true,
+                        "returnByValue": true
+                    }
+                }).to_string(),
+                RendererRuntimeInspectorResponseSender::new(67, response_tx),
+            ),
+        )
+        .await
+        .expect("child Runtime.evaluate awaitPromise should dispatch");
+    assert!(matches!(
+        evaluate,
+        RendererPageReply::RuntimeInspectorProtocolMessages(ref messages) if messages.is_empty()
+    ));
+    assert!(matches!(
+        response_rx.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+
+    let resolved = dispatch_runtime_protocol_with_context_resolution_for_test(
         &page,
         "evaluate",
         serde_json::json!({
-            "id": 67,
+            "id": 68,
             "method": "Runtime.evaluate",
             "params": {
                 "contextId": child_context_id,
-                "expression": "new Promise(() => {})",
-                "awaitPromise": true,
+                "expression": "resolveChildAwait('child-result'); 'resolved'",
                 "returnByValue": true
             }
         }),
     )
     .await
-    .expect("child Runtime.evaluate awaitPromise should dispatch");
-    let response =
-        runtime_protocol_response_by_id(&evaluate, 67).expect("child awaitPromise response");
+    .expect("the pending child evaluation must release Page dispatch");
+    assert_eq!(
+        runtime_protocol_response_by_id(&resolved, 68).expect("resolver response")["result"]["result"]
+            ["value"],
+        serde_json::json!("resolved")
+    );
+    let completion = tokio::time::timeout(Duration::from_secs(2), &mut response_rx)
+        .await
+        .expect("the child Promise response must settle on its Page owner")
+        .expect("the child response must retain its callback owner");
+    assert_eq!(completion.call_id, 67);
+    let response = completion
+        .output
+        .protocol_response(67)
+        .expect("child awaitPromise response");
+    let messages: Vec<_> = completion
+        .output
+        .messages()
+        .iter()
+        .cloned()
+        .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+        .collect();
     let messages_json =
-        serde_json::to_string(&evaluate).expect("Runtime.evaluate messages should serialize");
+        serde_json::to_string(&messages).expect("Runtime.evaluate messages should serialize");
     assert!(
         !messages_json.contains("__moliAwaitPromiseToken"),
-        "child Runtime.evaluate awaitPromise leaked internal polling token: {evaluate:?}"
+        "child Runtime.evaluate awaitPromise leaked internal polling token: {messages_json}"
     );
     assert!(
         !messages_json.contains("__moliPendingPromise"),
-        "child Runtime.evaluate awaitPromise leaked internal pending marker: {evaluate:?}"
+        "child Runtime.evaluate awaitPromise leaked internal pending marker: {messages_json}"
     );
     assert!(
-        response.get("error").is_some() || response["result"]["exceptionDetails"].is_object(),
-        "pending child Runtime.evaluate awaitPromise must fail closed instead of returning an internal success payload: {response:?}"
+        response.get("error").is_none() && response["result"].get("exceptionDetails").is_none(),
+        "a resolved child Promise must return its native result: {response:?}"
     );
+    assert_eq!(response["result"]["result"]["value"], "child-result");
 
     page.close_async()
         .await
@@ -2733,7 +2782,7 @@ async fn native_terminals_publish_before_waiters_are_polled() {
         pending.push((
             command_id,
             page.enqueue_protocol_command_in_inspector_session(
-                RendererPageCommand::Native(Box::new(command)),
+                RendererPageCommand::Native(command),
                 Some("session-a".to_owned()),
             )
             .expect("enqueue native terminal"),
@@ -2861,8 +2910,11 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
             DevToolsSessionKey::Attached("native".to_owned()),
             attachment,
             RendererNativeOperation::new(
-                RendererPageCommand::ComputedStylePropertiesForBackendNodeId {
-                    backend_node_id: u32::MAX,
+                RendererPageCommand::ComputedStyleProperties {
+                    reference:
+                        crate::runtime::page_surface::RendererDomNodeReference::BackendNodeId(
+                            u32::MAX,
+                        ),
                 },
                 move |reply| {
                     assert!(matches!(
@@ -2883,7 +2935,7 @@ async fn projected_native_success_and_error_publish_without_adapter_receipt() {
         guards.push(guard);
         waiters.push(
             page.enqueue_protocol_command_in_inspector_session(
-                RendererPageCommand::Native(Box::new(command)),
+                RendererPageCommand::Native(command),
                 Some("native".to_owned()),
             )
             .unwrap(),
@@ -4032,4 +4084,184 @@ fn parse_time_scaffold_lane_is_rejected_on_named_executor_lane() {
             })
             .await;
     });
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_expression_publishes_console_output_before_settlement() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let url = url::Url::parse("https://example.test/pending-expression-output").unwrap();
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url,
+        "<!doctype html><body>pending</body>",
+    )
+    .await;
+    dispatch_runtime_protocol_with_output_for_test(
+        &page,
+        serde_json::json!({"id": 731, "method": "Runtime.enable"}),
+    )
+    .await
+    .unwrap();
+    output_rx.drain();
+    let pending = page
+        .enqueue_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"new Promise(resolve => {
+                globalThis.__resolvePendingExpression = resolve;
+                console.log('owner-output-before-await');
+                setTimeout(() => console.log('owner-output-during-await'), 0);
+            })"#
+            .to_owned(),
+            await_promise: true,
+        })
+        .expect("the pending expression should enqueue");
+    let mut completion = Box::pin(pending.wait());
+    let observed = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut observed = Vec::new();
+        while observed.len() < 2 {
+            let output = tokio::select! {
+                result = &mut completion => panic!("the unresolved expression completed; error: {:?}", result.err()),
+                output = output_rx.recv() => output.expect("the output stream should stay open"),
+            };
+            for record in output.records() {
+                let RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch)) = record.item() else {
+                    continue;
+                };
+                for message in &batch.messages {
+                    let RendererRuntimeInspectorMessage::Protocol(message) = message else {
+                        continue;
+                    };
+                    if message.get("method").and_then(serde_json::Value::as_str)
+                        == Some("Runtime.consoleAPICalled")
+                        && let Some(value) = message["params"]["args"][0]["value"].as_str()
+                    {
+                        observed.push(value.to_owned());
+                    }
+                }
+            }
+        }
+        observed
+    })
+    .await
+    .expect("console output must arrive before promise settlement");
+    assert_eq!(
+        observed,
+        ["owner-output-before-await", "owner-output-during-await"]
+    );
+
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "__resolvePendingExpression('done'); 'resolved'".to_owned(),
+            await_promise: false,
+        }),
+    )
+    .await
+    .expect("a pending expression must allow another command to run")
+    .expect("the resolver command should succeed");
+    let output = tokio::time::timeout(Duration::from_secs(3), &mut completion)
+        .await
+        .expect("the expression should complete after its explicit resolution")
+        .expect("the resolved expression should succeed");
+    let (completion, _) = output.into_completion_and_predecessor();
+    let (reply, _, _) = completion.into_parts();
+    assert_eq!(renderer_json_value(reply), Some(serde_json::json!("done")));
+    page.close_async()
+        .await
+        .expect("close pending-expression page");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn navigation_follow_publishes_command_output_before_replacing_document() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let url = url::Url::parse("https://example.test/navigation-command-output").unwrap();
+    let mut page =
+        create_test_html_page(&runtime, &loader, url, "<!doctype html><body>source</body>").await;
+    dispatch_runtime_protocol_with_output_for_test(
+        &page,
+        serde_json::json!({"id": 732, "method": "Runtime.enable"}),
+    )
+    .await
+    .unwrap();
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "document.title = 'source document'".to_owned(),
+        await_promise: false,
+    })
+    .await
+    .expect("the source Document title should publish");
+    let initial_publications = output_rx.drain();
+    let source_stream = initial_publications
+        .last()
+        .expect("Runtime.enable must publish the source Document's output")
+        .cursor()
+        .stream();
+    let source_document = initial_publications
+        .iter()
+        .flat_map(|publication| publication.records())
+        .find_map(|record| match record.item() {
+            RendererOutputItem::Observation(RendererProtocolObservation::DocumentTitleChanged(
+                change,
+            )) if change.title == "source document" => Some(change.source_document),
+            _ => None,
+        })
+        .expect("the source title observation must identify its exact Document");
+    let replacement_url = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Ctitle%3Ereplacement%3C/title%3E%3Cbody%3Ereplacement%3C/body%3E";
+    let (reply, state) = tokio::time::timeout(
+        Duration::from_secs(3),
+        page.run_async_command(RendererPageCommand::EvaluateExpressionAndFollowPendingNavigation {
+            expression: format!(
+                "console.log('command-output-before-navigation'); location.href = {replacement_url:?}; 'navigating'"
+            ),
+            await_promise: false,
+        }),
+    )
+    .await
+    .expect("navigation follow should complete")
+    .expect("the command should survive its navigation");
+    assert_eq!(
+        renderer_json_value(reply),
+        Some(serde_json::json!("navigating"))
+    );
+    assert_eq!(state.document_title, "replacement");
+
+    let publications = output_rx.drain();
+    let source_output = publications
+        .iter()
+        .position(|publication| {
+            publication.records().iter().any(|record| matches!(
+                record.item(),
+                RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(batch))
+                    if batch.messages.iter().any(|message| matches!(
+                        message,
+                        RendererRuntimeInspectorMessage::Protocol(message)
+                            if message["method"] == "Runtime.consoleAPICalled"
+                                && message["params"]["args"][0]["value"] == "command-output-before-navigation"
+                    ))
+            ))
+        })
+        .expect("the source command's console notification must be retained");
+    assert_eq!(publications[source_output].cursor().stream(), source_stream);
+    let replacement_output = publications
+        .iter()
+        .position(|publication| {
+            publication.records().iter().any(|record| matches!(
+                record.item(),
+                RendererOutputItem::Observation(RendererProtocolObservation::DocumentTitleChanged(change))
+                    if change.title == "replacement" && change.source_document != source_document
+            ))
+        })
+        .expect("the replacement title observation must identify its new Document");
+    assert!(
+        source_output < replacement_output,
+        "command output must be published before replacing its source Document"
+    );
+    page.close_async()
+        .await
+        .expect("close navigation-output page");
 }

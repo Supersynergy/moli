@@ -40,8 +40,8 @@ use crate::types::ScriptErrorConstructorKind;
 use crate::types::ScriptSkipReason;
 use moli_page_types::{
     ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType, InspectorIssueSnapshot,
-    InspectorSourceCodeLocationSnapshot, LayoutPolicy, QuirksModeIssueSnapshot,
-    ScriptObservableOutput, ScriptObservableOutputItem, V8InspectorSessionAttach,
+    InspectorSourceCodeLocationSnapshot, QuirksModeIssueSnapshot, ScriptObservableOutput,
+    ScriptObservableOutputItem, V8InspectorSessionAttach,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -53,6 +53,7 @@ use std::{
 };
 use url::Url;
 
+mod auxiliary_page;
 pub(crate) mod backend_node_registry;
 mod command_turn_output;
 mod css_agent_state;
@@ -136,6 +137,10 @@ mod page_rendering_update;
 #[cfg(test)]
 mod page_rendering_update_body_test_support;
 mod page_resource_completion;
+mod resource_search;
+pub use resource_search::{
+    RendererMainDocumentResource, RendererResourceContentBody, RendererResourceSearchRequest,
+};
 mod page_resource_completion_task_completion;
 #[cfg(test)]
 mod page_selected_task_test_harness;
@@ -160,7 +165,8 @@ use css_agent_state::RendererCssAgentSessionState;
 use dom_agent_state::RendererDomAgentState;
 pub(in crate::runtime) use followed_navigation::{
     PageVmCommittedNavigationBootstrap, PageVmDocumentCommitPreparation,
-    PageVmPreparedFollowedNavigationCommit, attach_navigation_response_to_page_vm,
+    PageVmPreparedFollowedNavigationCommit, PageVmSourceDocumentCommit,
+    PageVmValidatedFollowedNavigationCommit, attach_navigation_response_to_page_vm,
 };
 #[cfg(test)]
 pub(crate) use page_dom_manipulation_test_support::PageDomManipulationTestFamily;
@@ -1081,20 +1087,14 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) document_policy_container: crate::document_runtime::DocumentPolicyContainer,
     pub(crate) document_default_language: Option<String>,
     pub(crate) document_last_modified: Option<f64>,
-    pub(crate) script_execution_disabled: bool,
-    pub(crate) bypass_content_security_policy: bool,
-    pub(crate) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    pub(crate) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    pub(crate) navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub(crate) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    pub(crate) document_activity: moli_page_types::DocumentActivity,
+    pub(crate) document_settings: moli_page_types::DocumentSettings,
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(crate) fetch_subresource_interception_enabled: bool,
     pub(crate) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-    pub(crate) layout_policy: LayoutPolicy,
+    pub(crate) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(crate) wpt_extensions_enabled: bool,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     pub(crate) reserved_service_worker_client_id:
@@ -1102,6 +1102,26 @@ pub(crate) struct PageVmEnvConfig {
 }
 
 impl PageVmEnvConfig {
+    fn inspector_protocol_configurations(
+        &self,
+    ) -> BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration> {
+        self.runtime_inspector_session_restore_snapshots
+            .iter()
+            .filter(|restore| restore.protocol_configuration.requires_restore())
+            .map(|restore| {
+                (
+                    DevToolsSessionKey::from_wire_session_id(
+                        restore
+                            .inspector_session_id
+                            .as_deref()
+                            .filter(|id| !id.is_empty()),
+                    ),
+                    restore.protocol_configuration.clone(),
+                )
+            })
+            .collect()
+    }
+
     pub(crate) fn apply_navigation_response_headers(
         &mut self,
         final_url: &Url,
@@ -1111,7 +1131,10 @@ impl PageVmEnvConfig {
             crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
                 headers, final_url,
             )
-            .with_content_security_policy_bypass(self.bypass_content_security_policy);
+            .with_content_security_policy_bypass(
+                self.document_settings.bypass_content_security_policy,
+            );
+        self.apply_main_document_commit_referrer();
         debug_assert!(
             self.document_policy_container
                 .navigation_response_frame_ancestors_check(
@@ -1126,6 +1149,24 @@ impl PageVmEnvConfig {
         self.document_last_modified =
             crate::document_last_modified::document_last_modified_from_headers(headers);
     }
+
+    pub(crate) fn apply_main_document_commit_referrer(&mut self) {
+        if let Some(referrer) = self
+            .main_document_commit
+            .as_ref()
+            .and_then(|commit| commit.document_referrer.as_ref())
+        {
+            self.document_policy_container.document_referrer = referrer.clone();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuxiliaryEnvironmentApply {
+    Navigation,
+    InheritedNavigation,
+    InitialRealm,
+    Adoption,
 }
 
 /// Runtime wiring for a live `PageVm`.
@@ -1142,11 +1183,13 @@ pub(crate) struct PageVmRuntimeHooks {
     pub(crate) browser_context_runtime: super::RendererBrowserContextRuntime,
     document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
     document_lifecycle_install: PageVmDocumentLifecycleInstall,
+    web_mcp_navigation: Option<moli_page_types::RendererWebMcpNavigation>,
     renderer_document_isolate_allocator: Option<RendererDocumentIsolateAllocator>,
     renderer_page_script_environment: Option<crate::script_vm::RendererPageScriptEnvironment>,
     renderer_document_isolate_reservation: Option<RendererDocumentIsolateReservation>,
     prepared_renderer_document_isolate_bootstrap:
         Option<Rc<std::cell::RefCell<Option<RendererDocumentIsolateBootstrap>>>>,
+    reused_initial_window: Option<Rc<std::cell::RefCell<Option<ScriptVm>>>>,
     renderer_document_isolate_mode: PageVmRendererDocumentIsolateMode,
     #[cfg(test)]
     // Standalone PageVm fixtures have no outer Browser/NavigationEngine root,
@@ -1191,6 +1234,13 @@ struct PageVmRendererDocumentIsolateBootstrap {
 }
 
 impl PageVmRuntimeHooks {
+    pub(in crate::runtime) fn with_web_mcp_navigation(
+        mut self,
+        id: Option<moli_page_types::RendererWebMcpNavigation>,
+    ) -> Self {
+        self.web_mcp_navigation = id;
+        self
+    }
     #[cfg(test)]
     fn standalone_base_for_test() -> Self {
         let owner = Rc::new(super::RendererBrowserContextRuntime::new());
@@ -1204,10 +1254,12 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
             prepared_renderer_document_isolate_bootstrap: None,
+            reused_initial_window: None,
             renderer_document_isolate_mode: PageVmRendererDocumentIsolateMode::default(),
             _standalone_browser_context_owner: Some(owner),
             _standalone_request_client_owner: None,
@@ -1279,10 +1331,12 @@ impl PageVmRuntimeHooks {
                 },
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
             prepared_renderer_document_isolate_bootstrap: None,
+            reused_initial_window: None,
             _standalone_request_client_owner: None,
             _standalone_browser_context_owner: None,
         }
@@ -1317,10 +1371,12 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::ReuseOrCreateInitial,
+            web_mcp_navigation: None,
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
             prepared_renderer_document_isolate_bootstrap: None,
+            reused_initial_window: None,
             renderer_document_isolate_mode:
                 PageVmRendererDocumentIsolateMode::RequireOwnerReservation,
             #[cfg(test)]
@@ -1373,6 +1429,23 @@ impl PageVmRuntimeHooks {
         self.prepared_renderer_document_isolate_bootstrap =
             Some(Rc::new(std::cell::RefCell::new(Some(bootstrap))));
         Ok(self)
+    }
+
+    pub(in crate::runtime) fn with_auxiliary_page_bootstrap(
+        mut self,
+        bootstrap: RendererDocumentIsolateBootstrap,
+        reservation: RendererDocumentIsolateReservation,
+    ) -> Self {
+        assert!(reservation.is_active());
+        self.renderer_page_script_environment = Some(
+            bootstrap
+                .renderer_page_script_environment()
+                .expect("staged auxiliary bootstrap must retain its Page environment"),
+        );
+        self.renderer_document_isolate_reservation = Some(reservation);
+        self.prepared_renderer_document_isolate_bootstrap =
+            Some(Rc::new(std::cell::RefCell::new(Some(bootstrap))));
+        self
     }
 
     fn for_cross_document_commit(mut self) -> Self {
@@ -1563,6 +1636,7 @@ pub(super) enum ScannedScriptDeferral {
 pub(crate) struct PageVm {
     pub(super) page_id: PageId,
     pub(super) creation_id: u64,
+    state_capture_sequence: u64,
     pub(super) document_lifecycle: RendererDocumentLifecycleJournalHandle,
     pub(super) runtime_command_settlement: super::RendererRuntimeCommandOutputSettlement,
     pub(super) pending_runtime_command_output: Option<PageVmRuntimeCommandOutputScope>,
@@ -1603,19 +1677,14 @@ pub(crate) struct PageVm {
     pub(super) runtime_inspector_protocol_configurations:
         BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration>,
     pub(super) extra_http_headers: moli_fetch::RequestHeaders,
-    pub(super) bypass_content_security_policy: bool,
-    pub(super) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    pub(super) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    pub(super) navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub(super) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    pub(super) document_activity: moli_page_types::DocumentActivity,
+    pub(super) document_settings: moli_page_types::DocumentSettings,
     pub(super) network_offline: bool,
     pub(super) blocked_url_patterns: Vec<String>,
     pub(super) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(super) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(super) fetch_subresource_interception_enabled: bool,
     pub(super) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-    pub(super) layout_policy: LayoutPolicy,
+    pub(super) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(super) wpt_extensions_enabled: bool,
     pub(crate) runtime_hooks: PageVmRuntimeHooks,
     pub(super) navigation_response: Option<PageVmNavigationResponse>,
@@ -1776,6 +1845,10 @@ impl PageVm {
     pub(super) fn settle_renderer_output_publication(
         &mut self,
     ) -> Option<crate::runtime::RendererOutputPublication> {
+        // A command can still be pending when its owner yields. Its ready
+        // prefix belongs in this turn's publication, ahead of the DOM facts,
+        // rather than waiting for the command's eventual completion.
+        self.vm().append_live_command_output_prefix();
         // Every owner turn must freeze its DOM facts into the same ordered
         // stream as its other observations before settlement. Command turns
         // have already moved their causal suffix into command records; this
@@ -2200,28 +2273,40 @@ impl PageVm {
             .page_task_producer_routes_match(sources)
     }
 
-    fn commit_main_window_proxy_navigation(&mut self) -> Result<()> {
-        let Some(mut vm) = self.vm.take() else {
-            return Err(anyhow::anyhow!(
-                "main navigation attempted to commit an already retired PageVm"
-            ));
-        };
+    fn prepare_main_window_proxy_navigation(
+        &mut self,
+        page_id: PageId,
+    ) -> Result<crate::script_vm::MainWindowProxyNavigationCommit> {
+        let vm = self.vm.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("main navigation attempted to commit an already retired PageVm")
+        })?;
+        vm.prepare_main_window_proxy_navigation_commit(page_id.as_u64())
+    }
+
+    pub(in crate::runtime) fn record_main_navigation_commit(&mut self) {
+        let termination = self.document_lifecycle.request_termination(
+            self.document_lifecycle.identity(),
+            RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
+        );
+        debug_assert!(
+            matches!(
+                termination,
+                RendererDocumentLifecycleTransition::Recorded(_)
+                    | RendererDocumentLifecycleTransition::Deferred
+                    | RendererDocumentLifecycleTransition::Duplicate
+            ),
+            "cross-document navigation should terminate the active renderer document: {termination:?}"
+        );
+    }
+
+    pub(in crate::runtime) fn retire_committed_main_script_vm(&mut self) {
+        let mut vm = self
+            .vm
+            .take()
+            .expect("committed main navigation must retain its source ScriptVm until retirement");
         vm.detach_default_inspector_context_for_context_teardown();
         vm.close_page_context_resources_for_context_teardown();
-        match vm.detach_main_window_proxy_for_navigation_commit(self.page_id.as_u64()) {
-            Ok(()) => {
-                tracing::debug!(
-                    page_id = self.page_id.as_u64(),
-                    "committed main navigation before replacement realm bootstrap"
-                );
-                drop(vm);
-                Ok(())
-            }
-            Err(error) => {
-                self.vm = Some(vm);
-                Err(error)
-            }
-        }
+        drop(vm);
     }
 
     // Fresh PageVm bootstrap is a special V8-entry boundary.
@@ -2326,11 +2411,8 @@ impl PageVm {
         &mut self,
         restores: &[RendererInspectorSessionRestoreSnapshot],
     ) -> Result<()> {
-        if restores.is_empty() {
-            return Ok(());
-        }
         debug_assert!(
-            is_on_named_owner_execution_lane_for(&self.local_executor),
+            restores.is_empty() || is_on_named_owner_execution_lane_for(&self.local_executor),
             "runtime inspector session restore must execute on the matching named owner lane"
         );
         for restore in restores {
@@ -2339,6 +2421,11 @@ impl PageVm {
                 &restore.protocol_configuration,
                 &restore.v8_attach,
             )?;
+        }
+        // A committed WebMCP continuation can publish an immediate failure.
+        // Restore the enabled sessions before handing it to the new Document.
+        if let Some(id) = self.runtime_hooks.web_mcp_navigation.take() {
+            self.vm_mut().receive_web_mcp_navigation(id);
         }
         Ok(())
     }
@@ -2396,7 +2483,9 @@ impl PageVm {
                     self.vm_mut()
                         .exec_in_execution_context(execution_context_id, &script.source)?;
                 }
-                None => self.vm_mut().exec_runtime_turn(&script.source, None)?,
+                None => self
+                    .vm_mut()
+                    .exec_document_start_script_turn(&script.source)?,
             }
             tracing::debug!(
                 phase = "document start script",
@@ -3990,13 +4079,23 @@ impl PageVm {
             );
         }
 
+        self.state_capture_sequence = self
+            .state_capture_sequence
+            .checked_add(1)
+            .expect("Page state capture sequence exhausted");
         Ok(PageVmStateCapture {
+            snapshot_revision: super::RendererPageStateRevision::new(
+                self.creation_id,
+                self.state_capture_sequence,
+            ),
             final_url,
             document_title,
+            document_activity: self.document_settings.document_activity,
             report,
             navigation_response: self.navigation_response.clone(),
-            idle_override: self.idle_override,
+            idle_override: self.document_settings.idle_override,
             service_worker_client_id: self.vm().service_worker_client_id().as_u64(),
+            document_isolate_identity: self.vm().document_isolate_identity_for_diagnostics(),
             dedicated_worker_running_worker_isolate_count,
             performance_metric_snapshot,
         })
@@ -4268,15 +4367,43 @@ impl PageVm {
         let PageVmRendererDocumentIsolateBootstrap {
             renderer_document_isolate_bootstrap,
         } = page_vm_isolate_bootstrap;
+        let inherited_env = renderer_document_isolate_bootstrap
+            .initial_document_environment
+            .as_ref()
+            .map(|environment| {
+                let mut env = env.clone();
+                env.document_policy_container = environment.policy_container.clone();
+                env
+            });
+        let env = inherited_env.as_ref().unwrap_or(env);
         let backend_node_registry = new_shared_renderer_backend_node_registry();
         let initial_document_loader_bootstrap =
             crate::network::context::DocumentResourceLoaderBootstrap::new(
                 loader.clone(),
                 resource_task_runner,
             );
-        let vm_bootstrap = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
+        let mut vm = if let Some(reused) = runtime_hooks.reused_initial_window.take() {
+            let mut vm = reused.borrow_mut().take().ok_or_else(|| {
+                Box::new((
+                    anyhow!("initial Window was already consumed"),
+                    bootstrap_document.clone(),
+                ))
+            })?;
+            vm.commit_initial_empty_document_in_current_window(
+                &bootstrap_document,
+                post_domcontentloaded_page_task_sender,
+                script_event_parser_boundary_sender,
+                resource_completion_sender,
+                initial_document_loader_bootstrap,
+                env,
+                renderer_document_isolate_bootstrap,
+            )
+            .map_err(|error| Box::new((error, bootstrap_document)))?;
+            vm
+        } else {
+            let vm_bootstrap = ScriptVmDefaultWorldBootstrap::from_dom_host_with_resource_completion_sender_browser_context_runtime_and_document_isolate(
             bootstrap_document,
-            env.bypass_content_security_policy,
+            env.document_settings.bypass_content_security_policy,
             post_domcontentloaded_page_task_sender,
             script_event_parser_boundary_sender,
             resource_completion_sender,
@@ -4291,20 +4418,59 @@ impl PageVm {
             env.top_level_storage_key.clone(),
             env.reserved_service_worker_client_id,
         )?;
-        let mut vm = vm_bootstrap.finish()?;
+            vm_bootstrap.finish()?
+        };
         vm.set_document_navigator_identity(&env.navigator_identity);
-        vm.set_layout_policy(env.layout_policy);
+        vm.set_layout_policy(env.layout_configuration.policy);
+        vm.set_scrollbars_hidden(
+            env.layout_configuration
+                .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),
+        );
         vm.install_page_task_capabilities(page_task_capabilities);
         vm.set_root_document_lifecycle(document_lifecycle.clone());
+        let mut page_vm = Self::finish_construction(
+            page_id,
+            local_executor,
+            env,
+            runtime_hooks,
+            document_lifecycle,
+            page_task_queue,
+            vm,
+            started,
+        );
+        page_vm
+            .apply_environment_config(
+                env,
+                if inherited_env.is_some() {
+                    AuxiliaryEnvironmentApply::InheritedNavigation
+                } else {
+                    AuxiliaryEnvironmentApply::Navigation
+                },
+            )
+            .map_err(|error| Box::new((error, page_vm.vm().document_runtime.dom_host().clone())))?;
+        Ok(page_vm)
+    }
+
+    fn finish_construction(
+        page_id: PageId,
+        local_executor: JsLocalExecutor,
+        env: &PageVmEnvConfig,
+        runtime_hooks: PageVmRuntimeHooks,
+        document_lifecycle: RendererDocumentLifecycleJournalHandle,
+        page_task_queue: PageTaskQueue,
+        vm: ScriptVm,
+        started: Instant,
+    ) -> Self {
         let dom_agent_state = vm.renderer_dom_agent_state();
         let report = ScriptExecutionReport::default();
         let creation_id = register_page_vm_creation();
         let document_loader = vm
             .current_main_document_resource_loader()
             .expect("PageVm bootstrap must publish the committed Document resource authority");
-        let mut page_vm = Self {
+        let page_vm = Self {
             page_id,
             creation_id,
+            state_capture_sequence: 0,
             document_lifecycle,
             runtime_command_settlement: super::RendererRuntimeCommandOutputSettlement::default(),
             pending_runtime_command_output: None,
@@ -4326,29 +4492,9 @@ impl PageVm {
             permission_overrides: env.permission_overrides.clone(),
             document_start_scripts: env.document_start_scripts.clone(),
             runtime_bindings: env.runtime_bindings.clone(),
-            runtime_inspector_protocol_configurations: env
-                .runtime_inspector_session_restore_snapshots
-                .iter()
-                .filter(|restore| restore.protocol_configuration.requires_restore())
-                .map(|restore| {
-                    (
-                        DevToolsSessionKey::from_wire_session_id(
-                            restore
-                                .inspector_session_id
-                                .as_deref()
-                                .filter(|session_id| !session_id.is_empty()),
-                        ),
-                        restore.protocol_configuration.clone(),
-                    )
-                })
-                .collect(),
+            runtime_inspector_protocol_configurations: env.inspector_protocol_configurations(),
             extra_http_headers: env.extra_http_headers.clone(),
-            bypass_content_security_policy: env.bypass_content_security_policy,
-            emulated_media: env.emulated_media.clone(),
-            idle_override: env.idle_override,
-            navigator_overrides: env.navigator_overrides.clone(),
-            viewport_surface: env.viewport_surface,
-            document_activity: env.document_activity,
+            document_settings: env.document_settings.clone(),
             network_offline: env.network_offline,
             blocked_url_patterns: env.blocked_url_patterns.clone(),
             indexed_db_manager: env.indexed_db_manager.clone(),
@@ -4356,7 +4502,7 @@ impl PageVm {
             fetch_subresource_interception_enabled: env.fetch_subresource_interception_enabled,
             fetch_subresource_interception_resource_type: env
                 .fetch_subresource_interception_resource_type,
-            layout_policy: env.layout_policy,
+            layout_configuration: env.layout_configuration,
             wpt_extensions_enabled: env.wpt_extensions_enabled,
             runtime_hooks,
             navigation_response: None,
@@ -4369,73 +4515,74 @@ impl PageVm {
             "page vm runtime initialized"
         );
         page_vm
-            .vm_mut()
-            .set_indexed_db_manager(env.indexed_db_manager.clone());
-        if let Some(storage_bucket_store) = env.storage_bucket_store.clone() {
-            page_vm
-                .vm_mut()
-                .set_storage_bucket_store(storage_bucket_store);
+    }
+
+    fn apply_environment_config(
+        &mut self,
+        env: &PageVmEnvConfig,
+        mode: AuxiliaryEnvironmentApply,
+    ) -> Result<()> {
+        if mode != AuxiliaryEnvironmentApply::InitialRealm {
+            self.vm_mut()
+                .set_indexed_db_manager(env.indexed_db_manager.clone());
+            if let Some(storage_bucket_store) = env.storage_bucket_store.clone() {
+                self.vm_mut().set_storage_bucket_store(storage_bucket_store);
+            }
         }
-        page_vm.vm_mut().set_web_storage_handles(&env.web_storage);
-        page_vm
-            .vm_mut()
-            .set_script_execution_disabled(env.script_execution_disabled);
-        page_vm
-            .vm_mut()
+        self.vm_mut().set_web_storage_handles(&env.web_storage);
+        self.vm_mut()
+            .initialize_document_settings(&env.document_settings, env.layout_configuration)?;
+        self.vm_mut()
             .set_permission_overrides(&env.permission_overrides);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_extra_http_headers(&env.extra_http_headers);
-        page_vm
-            .vm_mut()
-            .set_main_navigation_policy_container(env.document_policy_container.clone());
-        page_vm
-            .vm_mut()
-            .document_runtime
-            .set_document_default_language(env.document_default_language.clone());
-        page_vm
-            .vm_mut()
-            .document_runtime
-            .set_document_source_last_modified(env.document_last_modified);
-        page_vm
-            .vm_mut()
+        if mode != AuxiliaryEnvironmentApply::Adoption {
+            if matches!(
+                mode,
+                AuxiliaryEnvironmentApply::InitialRealm
+                    | AuxiliaryEnvironmentApply::InheritedNavigation
+            ) {
+                self.vm_mut()
+                    .document_runtime
+                    .set_initial_document_policy_container(env.document_policy_container.clone());
+            } else {
+                self.vm_mut()
+                    .set_main_navigation_policy_container(env.document_policy_container.clone());
+            }
+            self.vm_mut()
+                .document_runtime
+                .set_document_default_language(env.document_default_language.clone());
+            self.vm_mut()
+                .document_runtime
+                .set_document_source_last_modified(env.document_last_modified);
+        }
+        self.vm_mut()
             .set_stored_document_start_scripts(&env.document_start_scripts);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm
-            .vm_mut()
-            .set_emulated_media_for_bootstrap(&env.emulated_media);
-        page_vm.vm_mut().set_idle_override(env.idle_override);
-        page_vm
-            .vm_mut()
-            .set_navigator_overrides(&env.navigator_overrides);
-        page_vm
-            .vm_mut()
-            .set_viewport_surface_for_bootstrap(env.viewport_surface);
-        page_vm
-            .vm_mut()
-            .set_document_activity_for_bootstrap(env.document_activity);
-        page_vm.vm_mut().set_network_offline(env.network_offline);
-        page_vm
-            .vm_mut()
+        self.vm_mut().set_network_offline(env.network_offline);
+        self.vm_mut()
             .set_blocked_url_patterns(&env.blocked_url_patterns);
-        page_vm.vm_mut().set_fetch_subresource_interception(
+        self.vm_mut().set_fetch_subresource_interception(
             env.fetch_subresource_interception_enabled,
             env.fetch_subresource_interception_resource_type,
         );
-        page_vm
-            .vm_mut()
-            .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
-        if env.navigation_bootstrap_entry.is_none()
-            && let Some(position) = env
-                .main_document_commit
-                .as_ref()
-                .and_then(|commit| commit.session_history_position)
-        {
-            page_vm.vm_mut().install_session_history_position(position);
+        if matches!(
+            mode,
+            AuxiliaryEnvironmentApply::Navigation | AuxiliaryEnvironmentApply::InheritedNavigation
+        ) {
+            self.vm_mut()
+                .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
+            if env.navigation_bootstrap_entry.is_none()
+                && let Some(position) = env
+                    .main_document_commit
+                    .as_ref()
+                    .and_then(|commit| commit.session_history_position)
+            {
+                self.vm_mut().install_session_history_position(position);
+            }
         }
-        Ok(page_vm)
+        Ok(())
     }
 
     pub(super) fn new_from_parser_stream_and_run_document_start(
@@ -4620,6 +4767,7 @@ impl PageVm {
         parser_session: &mut DocumentParserSession,
         started: Instant,
     ) -> Result<PageVm> {
+        let reuses_initial_window = runtime_hooks.reused_initial_window.is_some();
         let mut page_vm =
             parser_session.with_parser_stream_dom_host_for_bootstrap(|bootstrap_document| {
                 PageVm::new_with_bootstrap_document_recovery(
@@ -4632,6 +4780,13 @@ impl PageVm {
                     started,
                 )
             })?;
+        if reuses_initial_window {
+            crate::runtime::phase_one::rebind_main_document_parser_before_parsing(
+                parser_session,
+                page_vm.vm_mut(),
+                crate::runtime::phase_one::main_document_parser_scripting_enabled(env),
+            );
+        }
         {
             let fallback = env.document_default_language.as_deref();
             let dom_host = page_vm.vm_mut().document_runtime.dom_host_mut();
@@ -4659,7 +4814,7 @@ impl PageVm {
     }
 
     pub(super) fn renderer_backend_node_id_for_live_handle(
-        &mut self,
+        &self,
         handle: DomHandle,
     ) -> Option<u32> {
         let document_id = self.vm().document_id_for_live_node_handle(handle)?;
@@ -4680,7 +4835,7 @@ impl PageVm {
     }
 
     fn renderer_backend_node_id_for_node_key(
-        &mut self,
+        &self,
         document_id: DocumentId,
         handle: DomHandle,
     ) -> u32 {
@@ -5155,7 +5310,10 @@ async fn wait_for_page_task_source_load_arrival(
 fn register_page_vm_creation() -> u64 {
     PAGE_VM_DROP_TRACKER.with(|tracker| {
         let mut tracker = tracker.borrow_mut();
-        tracker.next_id += 1;
+        tracker.next_id = tracker
+            .next_id
+            .checked_add(1)
+            .expect("Page VM creation sequence exhausted");
         let id = tracker.next_id;
         tracker.creation_order.push(id);
         id

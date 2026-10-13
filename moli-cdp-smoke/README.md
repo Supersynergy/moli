@@ -39,13 +39,18 @@ and instrumentation pause must leave Main work pending while IO remains live.
 `DOM.setNodeStackTracesEnabled`, and `DOM.disable` must also complete through
 their frontend native wrappers before the client sends resume. Disabling must
 invalidate the original node bindings while the outer evaluation stays paused.
+Paused scoped queries also cover selectors, child captures, AX, and geometry;
+selector bindings, subtree depth, AX backend identity, and nonempty layout are
+checked. Child-node notifications must precede their request's terminal, and
+ready Main replies must retain wire order even when awaited in reverse.
 All scenarios use local fixture documents, match the navigation's loader and
 `DOMContentLoaded` before setup, track the original response session
 and exactly one terminal per command, retain the full wire transcript, and use
 protocol events/responses instead of sleeps or retries.
 
-Four mutation cases explicitly preserve Moli's current VM entry boundary:
-`DOM.setAttributeValue`, `CSS.setStyleSheetText`, `Page.setDocumentContent`, and
+Six mutation cases explicitly preserve Moli's current VM entry boundary:
+`DOM.setAttributeValue`, `DOM.removeNode`, `DOM.scrollIntoViewIfNeeded`,
+`CSS.setStyleSheetText`, `Page.setDocumentContent`, and
 `Emulation.setHardwareConcurrencyOverride` wait for resume in Moli but complete
 during ordinary pause in Chromium. This is a Moli implementation limitation,
 not a CDP requirement; supporting nested mutation later must deliberately update
@@ -151,19 +156,90 @@ both sessions. The identical probe timed out at the replacement evaluation after
 10,000 ms when Moli's parent-session renderer-inspector detach fix was removed,
 and passed after the fix was restored.
 
+The Puppeteer Shadow DOM accessibility workflow was calibrated on 2026-10-08
+with puppeteer-core 24.30.0 against `/usr/bin/chromium` 145.0.7632.116, then run
+unchanged against Moli. `puppeteer_shadow_accessibility.mjs` checks default and
+unfiltered accessibility snapshots across open, closed, and nested closed shadow
+roots, assigned and fallback slots, and a host named from its shadow contents.
+ShadowRoot `queryAXTree` requests using `objectId`, `nodeId`, and `backendNodeId`
+must return the same backend refs as the full snapshot and stay within the host
+subtree. Snapshot refs resolve to the same elements adopted by Puppeteer ARIA
+selectors. Three `ElementHandle.click()` calls must emit exactly three trusted
+clicks in open/closed/slotted order; updated names preserve AX and backend refs,
+and old names stop matching. Removing and restoring a slot assignment must
+switch the exposed fallback/assigned controls. The complete `--group puppeteer`
+passed one run against each engine; use `--endpoint URL` for the Chromium run.
+
+The Puppeteer accessibility visibility workflow was calibrated on 2026-10-09
+with the same client and Chromium executable, then run unchanged against Moli.
+`puppeteer_accessibility_visibility.mjs` starts with a fresh Document and checks
+an objectId partial AX request before the first full snapshot. It resolves an
+external hidden label, observes label text changes, and preserves AX and backend
+refs. Both snapshot modes then check computed display, visibility overrides,
+HTML inert,
+explicit content-visibility:hidden, hidden/until-found CSS overrides, and
+hidden ARIA reference names.
+Closed shadow styles, :host rules, and assigned-slot visibility participate in
+the same checks. Two ARIA-handle clicks must emit exactly two trusted events;
+hiding and restoring a control preserves its AX and backend refs, and CSSOM
+rule edits update snapshots in both the Document and closed shadow root.
+The complete Puppeteer group passed all 24 scenarios against each engine.
+The separate Moli layout-policy group passed all 37 scenarios; AX style reads
+do not publish or refresh layout. Viewport-dependent content-visibility:auto
+display locking remains outside this visibility contract.
+
+The Puppeteer descendant-name workflow was calibrated on 2026-10-10 with the
+same client and Chromium executable, then run unchanged against Moli.
+`puppeteer_accessibility_names.mjs` checks 28 parent-button name cases from
+child SVG/span ARIA alternatives, native image
+`alt`, external hidden labels, cycles and shared references, mixed inline text,
+visibility overrides, inert/ARIA-hidden descendants, and closed-shadow slots.
+It starts with a cold partial AX request, compares both snapshot modes, resolves
+the parent button's backend ref through ARIA, and requires two trusted clicks.
+Changing or hiding the icon updates its parent's name without changing refs.
+Whitespace-only contents preserve tooltip names and inline word boundaries.
+The complete Puppeteer group passed all 25 scenarios against each engine; the
+separate Moli layout-policy group passed all 37 scenarios. Live Bootstrap 5.3
+Modal and Offcanvas pages also matched Chromium for all 22 icon-labelled Copy
+buttons and their ARIA backend refs. Each page completed a trusted ARIA-handle
+click after explicit scrolling and screenshot layout publication.
+AX name reads do not publish layout or change the frozen-layout policy.
+
+The accessibility whitespace workflow was calibrated on 2026-10-11 with
+Puppeteer 24.30.0 and Debian Chromium 145.0.7632.116.
+`puppeteer_accessibility_whitespace.mjs` covers 31 cases: NBSP within, around,
+and alone in names; repeated NBSP; HTML whitespace folding; other Unicode
+spaces; and vertical tab. Name sources include contents, ARIA labels and
+references, hidden references, native labels, image alternatives, title,
+placeholder, input value, descendants, and closed-shadow contents and slots.
+Each case checks a cold partial AX request, the full tree, both Puppeteer
+snapshot modes, and positive and negative ARIA queries. A separate fixture
+keeps ASCII-space and NBSP names side by side and tests exact matching through
+`nodeId`, `backendNodeId`, and `objectId`. Repeated NBSP/ASCII-space mutations
+must update names and selectors while preserving the target's AX and DOM refs.
+The complete Puppeteer group passed all 26 scenarios against both engines.
+
 The `navigation-outcomes` group was calibrated on 2026-08-23 against Debian
 `/usr/bin/chromium` 145.0.7632.116 and then run unchanged against Moli. It
 directly drives `Page.navigate` and correlates the result with the matching
 Document request/response identity. The matrix covers text, renderable HTML,
 empty, redirected, and HTTP-error attachments; unsupported binary MIME; an
-ordinary HTML 502 document; 204 No Content; and a reset before response
+ordinary HTML 502 document; 204 No Content; 205 Reset Content; and a reset before response
 headers. Chromium reports successful attachments as `isDownload=true` plus
 `net::ERR_ABORTED` while retaining the old Document, but a 204 reports the same
 error with `isDownload=false`; the smoke therefore treats `isDownload`, not the
-error string, as authoritative. Moli currently commits binary responses and
-204 responses as external Documents where Chromium retains the old Document;
-those two cases assert internally coherent response/lifecycle evidence and
-record the engine-selected outcome rather than claiming parity. For a 404
+error string, as authoritative. The 204/205 matrix was expanded on 2026-10-02
+against the same executable. Eight raw CDP probes cover ordinary responses,
+attachments, request-stage `Fetch.fulfillRequest`, and response-stage
+`Fetch.continueResponse`. The expanded group was also run unchanged against
+Chromium three times. Ordinary and intercepted 204/205 responses retain the
+Document, realm, form values, and navigation history, emit exactly one matching
+`Network.loadingFailed` with `net::ERR_ABORTED` and `canceled=true`, and never
+emit DOMContentLoaded for the attempted loader. Attachments retain
+`isDownload=true` even with status 204/205. Moli still commits binary responses
+as external Documents where Chromium retains the old Document; that case
+asserts internally coherent response/lifecycle evidence and records the
+engine-selected outcome rather than claiming parity. For a 404
 attachment, both engines preserve `isDownload` and the HTTP response evidence,
 while Chromium commits an error Document with `net::ERR_INVALID_RESPONSE` and
 Moli retains the prior Document with `net::ERR_ABORTED`; that difference is
@@ -497,7 +573,7 @@ Runner layout:
   against a Chromium CDP endpoint before validating moli.
 - `groups/playwright_compat.py`: Playwright upstream derived route and CDPSession compatibility samples.
 - `groups/chrome_remote_interface.py`, `groups/cdp_use.py`, and `groups/stagehand.py`: optional published-client workflows, with subprocess and JSON-result handling shared by `groups/external_process.py`.
-- `groups/puppeteer.py` and `puppeteer_smoke.mjs`: pinned Puppeteer workflows driven from the uv runner through Node.
+- `groups/puppeteer.py` and `puppeteer_smoke.mjs`: pinned Puppeteer workflows driven from the uv runner through Node. `puppeteer_shadow_accessibility.mjs` covers Shadow DOM snapshots, scoped AX refs, ARIA handle clicks, and slot/name updates. `puppeteer_accessibility_visibility.mjs` covers computed visibility, CSS overrides, stable refs, and Document/shadow CSSOM updates.
 - `groups/agent_browser.py`: optional real agent-browser CLI workflows with isolated config, daemon namespace, and endpoint identity verification.
 - `groups/network.py`: document/fetch/XHR routing, Network event observation, parser script and stylesheet body capture, WebSocket, and downloads.
 - `groups/workers.py`: dedicated worker `postMessage`, SharedWorker port reuse, worker fetch routing/auth, and worker XHR routing.

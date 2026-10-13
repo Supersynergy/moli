@@ -341,6 +341,7 @@ impl ScriptVm {
         .with_initiator_url(&pending.info.document_url)
         .with_request_origin(pending.request_origin.clone())
         .with_request_mode(pending.request_mode)
+        .with_use_cors_preflight(pending.continuation.use_cors_preflight())
         .with_credentials_mode(pending.credentials_mode)
         .with_network_partition_key(pending.network_partition_key.clone())
         .with_subframe_context(pending.info.frame_id.is_some());
@@ -612,6 +613,7 @@ impl ScriptVm {
         .with_initiator_url(&pending_fetch.info.document_url)
         .with_request_origin(pending_fetch.request_origin.clone())
         .with_request_mode(pending_fetch.request_mode)
+        .with_use_cors_preflight(pending_fetch.continuation.use_cors_preflight())
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_auth(auth.into())
         .with_subframe_context(pending_fetch.info.frame_id.is_some());
@@ -1079,6 +1081,7 @@ impl ScriptVm {
         // Request-stage fulfillment has no followed redirects yet. Reuse this
         // complete head for validation and response materialization.
         let head = moli_fetch::ResponseHead {
+            status_text: None,
             final_url: info.url.clone(),
             status: response_code,
             headers: response_headers.clone(),
@@ -1823,6 +1826,7 @@ impl ScriptVm {
             WorkerOwnedFetchTarget::from_continuation(&pending.pending.continuation)
         {
             let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: pending.response.final_url.clone(),
                 status: response_code,
                 headers: response_headers.clone(),
@@ -1886,6 +1890,7 @@ impl ScriptVm {
         if let Some(target) = WorkerOwnedXhrTarget::from_continuation(&pending.pending.continuation)
         {
             let response = response_body.clone_as_navigation_response(moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: pending.response.final_url.clone(),
                 status: response_code,
                 headers: response_headers.clone(),
@@ -1958,6 +1963,7 @@ impl ScriptVm {
             None,
             Ok(
                 response_body.into_navigation_response(moli_fetch::ResponseHead {
+                    status_text: None,
                     final_url: pending.response.final_url,
                     status: response_code,
                     headers: response_headers,

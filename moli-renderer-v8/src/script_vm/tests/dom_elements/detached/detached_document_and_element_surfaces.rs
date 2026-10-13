@@ -9,7 +9,7 @@ fn detached_document_shallow_clones_are_empty_and_accept_a_new_root() {
         .expect("Document shallow clone probe should evaluate");
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
-    assert_eq!(result["checks"], 245);
+    assert_eq!(result["checks"], 273);
 }
 
 #[test]
@@ -543,7 +543,7 @@ fn detached_interaction_brand_checks_accept_standard_prototype_methods() {
     rootSame: root === host.shadowRoot,
     rectType: Object.prototype.toString.call(rect),
     rectWidthType: typeof rect.width,
-    rectsArray: Array.isArray(rects),
+    rectsType: Object.prototype.toString.call(rects),
     activeAfterFocus,
     activeAfterBlur,
     events: events.join(","),
@@ -565,7 +565,7 @@ fn detached_interaction_brand_checks_accept_standard_prototype_methods() {
 
     assert_eq!(
         result,
-        r#"{"rootType":"[object ShadowRoot]","rootSame":true,"rectType":"[object DOMRect]","rectWidthType":"number","rectsArray":true,"activeAfterFocus":true,"activeAfterBlur":true,"events":"focus,click,blur","attachOwn":false,"boundingOwn":false,"rectsOwn":false,"focusOwn":false,"blurOwn":false,"clickOwn":false,"elementOwners":"Element,Element,Element,Element,Element,Element,Element,Element","elementShapes":"true:function:1:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:2:true:true:true|true:function:1:true:true:true","actionOwners":"HTMLElement,HTMLElement,HTMLElement","actionShapes":"true:function:0:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true"}"#
+        r#"{"rootType":"[object ShadowRoot]","rootSame":true,"rectType":"[object DOMRect]","rectWidthType":"number","rectsType":"[object DOMRectList]","activeAfterFocus":true,"activeAfterBlur":true,"events":"focus,click,blur","attachOwn":false,"boundingOwn":false,"rectsOwn":false,"focusOwn":false,"blurOwn":false,"clickOwn":false,"elementOwners":"Element,Element,Element,Element,Element,Element,Element,Element","elementShapes":"true:function:1:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:2:true:true:true|true:function:1:true:true:true","actionOwners":"HTMLElement,HTMLElement,HTMLElement","actionShapes":"true:function:0:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true"}"#
     );
 }
 
@@ -1472,6 +1472,12 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   assert(!("hreflang" in div), "div should not expose hreflang");
   assert(!("download" in document.createElement("link")), "link should not expose download");
   assert(!("ping" in document.createElement("link")), "link should not expose ping");
+  for (const property of ["hreflang", "type"]) {
+    const area = document.createElement("area");
+    area.setAttribute(property, "retained attribute");
+    assert(!(property in area), `area should not expose ${property}`);
+    assert(area.getAttribute(property) === "retained attribute", `${property} remains an attribute`);
+  }
 
   const parsed = new DOMParser().parseFromString(
     "<html><head><link></head><body><a></a><area></area></body></html>",
@@ -1699,4 +1705,42 @@ fn text_legacy_dom_string_reflectors_use_owner_prototypes() {
         .expect("text legacy DOMString reflectors should evaluate");
 
     assert_eq!(result, "ok");
+}
+
+#[test]
+fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
+    let mut vm = new_storage_test_vm("https://domparser-html-mode.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  const quirks = parser.parseFromString(
+    "<html><head></head><body></body></html>",
+    "text/html"
+  );
+  const standards = parser.parseFromString(
+    "<!doctype html><html><head></head><body></body></html>",
+    "text/html"
+  );
+  const noscript = parser.parseFromString(
+    "<body><noscript><p id='first'></p><p id='second'></p></noscript></body>",
+    "text/html"
+  );
+  return JSON.stringify({
+    quirks: quirks.compatMode,
+    standards: standards.compatMode,
+    noscriptChildren: Array.from(noscript.querySelector("noscript").children)
+      .map(element => element.id)
+  });
+})()
+"#,
+        )
+        .expect("DOMParser HTML parse mode probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"quirks":"BackCompat","standards":"CSS1Compat","noscriptChildren":["first","second"]}"#
+    );
 }

@@ -159,11 +159,7 @@ fn prepare(
                 .ok_or_else(|| CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"))?;
             Ok(Operation::new(
                 Command::SetBypassContentSecurityPolicy(enabled),
-                |reply| match reply {
-                    Ok(Reply::Unit) => Response::success(json!({})),
-                    Err(error) => Response::error(-32000, error.to_string()),
-                    _ => unreachable!("Page CSP configuration reply"),
-                },
+                native::unit_response,
             ))
         }
         PageAction::ResetNavigationHistory => Ok(Operation::new(

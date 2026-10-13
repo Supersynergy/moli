@@ -489,6 +489,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) use_cors_preflight: bool,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -499,6 +500,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            use_cors_preflight: false,
         }
     }
 }
@@ -509,18 +511,15 @@ pub(crate) fn service_worker_fetch_request_metadata(
     let subresource_metadata = request.subresource_request_metadata();
     ServiceWorkerFetchRequestMetadata {
         cache: service_worker_request_cache_label(request.cache_mode()).to_owned(),
-        referrer: if request.infers_referrer_from_initiator() {
-            "about:client".to_owned()
-        } else {
-            String::new()
-        },
-        referrer_policy: subresource_metadata
-            .and_then(|metadata| metadata.referrer_policy.clone())
+        referrer: request
+            .referrer_header_value(&request.url)
             .unwrap_or_default(),
+        referrer_policy: request.effective_referrer_policy().to_owned(),
         integrity: subresource_metadata
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
         keepalive: false,
+        use_cors_preflight: request.use_cors_preflight(),
     }
 }
 
@@ -662,6 +661,7 @@ pub(crate) struct ServiceWorkerNavigationPreloadResponseStarted {
     pub(crate) event_id: ServiceWorkerEventId,
     pub(crate) owner: ServiceWorkerRunOwner,
     pub(crate) request_url: Url,
+    pub(crate) request_method: String,
     pub(crate) request_mode: moli_fetch::RequestMode,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) response_head: MaterializedServiceWorkerFetchResponseHead,
@@ -695,6 +695,7 @@ pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
+    pub(crate) status_text: String,
     pub(crate) headers: Vec<(String, Vec<u8>)>,
 }
 
@@ -730,4 +731,114 @@ pub(crate) struct ServiceWorkerFetchDispatch {
     pub(crate) cancel_handle: moli_fetch::FetchCancelHandle,
     pub(crate) direct_completion_tx:
         Option<tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>>,
+}
+
+#[cfg(test)]
+mod referrer_tests {
+    use super::*;
+
+    #[test]
+    fn native_fetch_event_metadata_resolves_referrer_policy_and_source() {
+        let source = Url::parse("https://user:password@origin.test/from?q=1#private").unwrap();
+        let full = "https://origin.test/from?q=1";
+        let default = "strict-origin-when-cross-origin";
+        for (target, policy, document_policy, referrer, expected_policy, expected_referrer) in [
+            (
+                "https://origin.test/resource",
+                None,
+                None,
+                None,
+                default,
+                full,
+            ),
+            (
+                "https://cross.test/resource",
+                None,
+                None,
+                None,
+                default,
+                "https://origin.test/",
+            ),
+            ("http://cross.test/resource", None, None, None, default, ""),
+            (
+                "https://origin.test/resource",
+                None,
+                Some("origin"),
+                None,
+                "origin",
+                "https://origin.test/",
+            ),
+            (
+                "https://origin.test/resource",
+                Some(""),
+                Some("no-referrer"),
+                None,
+                "no-referrer",
+                "",
+            ),
+            (
+                "https://origin.test/resource",
+                Some("unsafe-url"),
+                Some("no-referrer"),
+                None,
+                "unsafe-url",
+                full,
+            ),
+            (
+                "https://origin.test/resource",
+                Some("no-referrer"),
+                Some("unsafe-url"),
+                None,
+                "no-referrer",
+                "",
+            ),
+            (
+                "https://origin.test/resource",
+                None,
+                Some(""),
+                None,
+                default,
+                full,
+            ),
+            (
+                "https://origin.test/resource",
+                Some("unsafe-url"),
+                None,
+                Some(""),
+                "unsafe-url",
+                "",
+            ),
+            (
+                "https://origin.test/resource",
+                Some("unsafe-url"),
+                None,
+                Some("https://origin.test/selected#private"),
+                "unsafe-url",
+                "https://origin.test/selected",
+            ),
+        ] {
+            let mut request = Request::get(target)
+                .unwrap()
+                .with_initiator_url(&source)
+                .with_cache_mode(RequestCacheMode::Validate)
+                .with_use_cors_preflight(true)
+                .with_subresource_request_metadata(moli_fetch::SubresourceRequestMetadata {
+                    referrer_policy: policy.map(str::to_owned),
+                    document_referrer_policy: document_policy.map(str::to_owned),
+                    integrity: Some("sha384-test".to_owned()),
+                });
+            if let Some(referrer) = referrer {
+                request = request.with_fetch_referrer(referrer).unwrap();
+            }
+            let metadata = service_worker_fetch_request_metadata(&request);
+            assert_eq!(
+                metadata.referrer, expected_referrer,
+                "{target} {policy:?} {document_policy:?}"
+            );
+            assert_eq!(metadata.referrer_policy, expected_policy);
+            assert_eq!(metadata.cache, "reload");
+            assert_eq!(metadata.integrity, "sha384-test");
+            assert!(metadata.use_cors_preflight);
+        }
+    }
 }

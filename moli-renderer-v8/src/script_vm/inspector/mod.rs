@@ -11,6 +11,7 @@ mod v8_backend;
 use self::agent::RendererDevToolsAgent;
 pub(crate) use self::agent::{
     RendererDomDebuggerPauseScheduler, RendererDomDebuggerScheduledPause,
+    RendererInspectorObjectWrapper,
 };
 pub(super) use self::agent_sessions::PageInspectorSessionTarget;
 use self::agent_sessions::inspector_session_key;
@@ -27,6 +28,7 @@ pub(super) use self::outbound::ScriptVmInspectorCommandTurnOutputScope;
 #[cfg(test)]
 use self::v8_backend::RendererInspectorClientUniqueIdState;
 pub(in crate::script_vm) use self::v8_backend::RendererInspectorIsolateBackend;
+pub(in crate::script_vm) use self::v8_backend::finish_page_close_termination;
 pub(crate) use self::v8_backend::{
     RendererInspectorIsolateBackendHandle, dispatch_inspector_io_owner_wake,
     dispatch_inspector_main_owner_wake,
@@ -34,7 +36,6 @@ pub(crate) use self::v8_backend::{
 use crate::devtools::target::RendererDevToolsTargetHandle;
 #[cfg(test)]
 use crate::runtime::RendererRuntimeCommandOutputRecorder;
-use crate::runtime::RendererRuntimeInspectorResponseSender;
 use crate::{
     frame_owner_model::FrameRealmId,
     protocol_types::RuntimeBindingRegistration,
@@ -43,8 +44,8 @@ use crate::{
 };
 use anyhow::Result;
 use moli_page_types::{
-    DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorResponseDelivery,
-    RendererInspectorSessionRestoreSnapshot, V8InspectorSessionState,
+    DevToolsSessionKey, RendererDevToolsAgentToken, RendererInspectorSessionRestoreSnapshot,
+    V8InspectorSessionState,
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::HashMap};
@@ -78,13 +79,18 @@ pub(super) struct ChildFrameRealmRecord {
     pub(super) child_handle: DomHandle,
     pub(super) local_window_id: crate::frame_owner_model::LocalWindowId,
     pub(super) owner_realm_id: FrameRealmId,
-    pub(super) context: v8::Global<v8::Context>,
-    pub(super) _bridge_ref: crate::native_bridge::JsContextHostBridgeRef,
-    pub(super) runtime_observable_context_token:
-        crate::native_bridge::RuntimeObservableContextToken,
+    pub(super) runtime: super::WindowRealmRuntime,
     pub(super) inspector_execution_context_id: i64,
     pub(super) inspector_execution_context_realm_id: Option<String>,
     pub(super) inspector_context_registration_id: DocumentInspectorContextRegistrationId,
+}
+
+impl std::ops::Deref for ChildFrameRealmRecord {
+    type Target = super::WindowRealmRuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 pub(super) struct ReportedExecutionContext {
@@ -115,6 +121,10 @@ impl DocumentInspectorBinding {
         self.devtools_target.clone()
     }
 
+    pub(crate) fn isolate_backend_handle(&self) -> RendererInspectorIsolateBackendHandle {
+        self.agent.isolate_backend_handle()
+    }
+
     pub(crate) fn dom_debugger_pause_scheduler(&self) -> RendererDomDebuggerPauseScheduler {
         self.agent.dom_debugger_pause_scheduler()
     }
@@ -142,22 +152,6 @@ impl DocumentInspectorBinding {
                 self.agent.with_frontend(backend, session_key, op)
             }
         }
-    }
-
-    pub(super) fn route_frontend_response(
-        &self,
-        inspector_session_id: Option<&str>,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<RendererRuntimeInspectorResponseSender> {
-        if response.response_delivery() == RendererInspectorResponseDelivery::AdapterReply {
-            return Ok(response);
-        }
-        let session_key = inspector_session_key(inspector_session_id);
-        let outbound = self
-            .agent
-            .frontend_outbound(&session_key)
-            .ok_or_else(|| anyhow::anyhow!("Inspector frontend session is not available"))?;
-        Ok(outbound.route_frontend_response(response))
     }
 
     pub(super) fn v8_session_state(
@@ -193,6 +187,10 @@ impl DocumentInspectorBinding {
     ) {
         self.agent
             .ensure_frontend(backend, inspector_session_key(inspector_session_id));
+    }
+
+    pub(super) fn object_wrapper(&self) -> RendererInspectorObjectWrapper {
+        self.agent.object_wrapper()
     }
 
     pub(super) fn end_runtime_command_output_for_session(

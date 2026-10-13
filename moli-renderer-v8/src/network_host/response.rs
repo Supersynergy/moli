@@ -9,8 +9,8 @@ use super::headers::{
 };
 use super::*;
 
+pub(in crate::network_host) use self::bindings::ParsedResponseInit;
 pub(crate) use self::bindings::response_constructor_callback;
-pub(in crate::network_host) use self::bindings::{ParsedResponseInit, parse_response_init};
 pub(super) use self::body_methods::install_response_body_methods;
 pub(crate) use self::cors::{
     FetchResponseSecurityViolation, cors_preflight_request_headers,
@@ -25,7 +25,7 @@ pub(crate) use self::cors::{
 #[cfg(test)]
 pub(crate) use self::materialize::materialize_response_object;
 pub(crate) use self::materialize::{
-    MaterializedResponseBody, MaterializedResponseHead,
+    FetchResponseRequest, MaterializedResponseBody, MaterializedResponseHead,
     build_fetch_response_object_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_body_source_for_request_mode_with_filter,

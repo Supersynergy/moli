@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, LayoutControlSurfaceHit, LayoutDisplay, LayoutElementCategory,
-    LayoutElementSemantics, LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace,
-    LayoutPaintedSurfaceHit, LayoutPassRequest, LayoutPassResult, LayoutPoint, LayoutPosition,
-    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollbarColors,
-    LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport, PaintBrush,
-    PaintCaptureRequest, PaintColor, PaintFragment, PaintShape, ResolvedLayoutElementStyles,
-    ResolvedLayoutStyle, build_layout_pass,
+    LayoutElementSemantics, LayoutEnvironment, LayoutError, LayoutFlushReason, LayoutFragmentKind,
+    LayoutNamespace, LayoutPaintedSurfaceHit, LayoutPassRequest, LayoutPassResult, LayoutPoint,
+    LayoutPosition, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect,
+    LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth,
+    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport,
+    PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment, PaintShape,
+    ResolvedLayoutElementStyles, ResolvedLayoutStyle, build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -104,6 +104,13 @@ impl LayoutSource for Source {
         self.0[node].label.to_owned()
     }
 
+    fn hyperlink(&self, node: usize) -> Option<moli_layout::LayoutHyperlink<usize>> {
+        (self.0[node].local_name == "a").then(|| moli_layout::LayoutHyperlink {
+            url: self.0[node].label.into(),
+            destination: None,
+        })
+    }
+
     fn scroll_offset(&self, node: Self::NodeId) -> LayoutPoint {
         self.0[node].scroll
     }
@@ -148,6 +155,48 @@ fn build(source: &Source, styles: &mut Styles) -> LayoutPassResult<usize> {
         styles,
         LayoutPassRequest::new(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test),
     )
+}
+
+#[test]
+fn owned_links_are_collected_only_for_printing_and_do_not_change_paint() {
+    let (raster, print) = {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::html_element("https://example.com/link", "a", vec![2]),
+            Node::element("child", vec![]),
+        ]);
+        let mut styles = Styles(HashMap::from([
+            (0, fixed_size(LayoutDisplay::Block, 320.0, 240.0)),
+            (1, fixed_size(LayoutDisplay::Block, 100.0, 40.0)),
+            (2, fixed_size(LayoutDisplay::Block, 30.0, 20.0)),
+        ]));
+        let viewport = LayoutViewport::new(320, 240, 1.0);
+        let raster = build_with_request(
+            &source,
+            &mut styles,
+            LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Test),
+        )
+        .into_paint_snapshot()
+        .unwrap();
+        let print = build_with_request(
+            &source,
+            &mut styles,
+            LayoutPassRequest::with_paint(viewport, LayoutFlushReason::Print),
+        )
+        .into_paint_snapshot()
+        .unwrap();
+        (raster, print)
+    };
+    assert!(raster.links.is_empty());
+    assert_eq!(raster.fragments, print.fragments);
+    assert_eq!(print.links.len(), 2, "anchor and inherited child regions");
+    assert!(
+        print
+            .links
+            .iter()
+            .all(|link| link.target.url.as_ref() == "https://example.com/link")
+    );
+    assert_eq!(print.links[0].rect.width, 100.0);
 }
 
 fn build_with_request(
@@ -803,6 +852,83 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
     assert!(extent.vertical_scrollbar.is_some());
 }
 
+#[test]
+fn hidden_scrollbar_environment_skips_feedback_and_preserves_scroll_ranges() {
+    let mut source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("content", Vec::new()),
+    ]);
+    source.0[1].scroll = LayoutPoint::new(0.0, 60.0);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(100.0),
+                },
+                overflow: Point {
+                    x: Overflow::Scroll,
+                    y: Overflow::Scroll,
+                },
+                ..Style::default()
+            },
+        ),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+
+    // The same authored styles need three iterations with classic controls:
+    // vertical overflow reveals a gutter, which then causes horizontal overflow.
+    let classic = build(&source, &mut styles);
+    assert_eq!(classic.metrics.numeric_layout_pass_count, 3);
+    assert_eq!(
+        classic.element_metrics_for_source(1).unwrap().client_size,
+        moli_layout::LayoutSize::new(185.0, 85.0)
+    );
+
+    let hidden = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(320, 240, 1.0), LayoutFlushReason::Test)
+            .with_environment(LayoutEnvironment {
+                scrollbars_hidden: true,
+            }),
+    );
+    assert_eq!(hidden.metrics.numeric_layout_pass_count, 1);
+    assert_eq!(hidden.metrics.numeric_feedback_invalidated_node_count, 0);
+    assert_eq!(
+        hidden
+            .metrics
+            .numeric_feedback_overflow_recomputed_node_count,
+        0
+    );
+    let metrics = hidden.element_metrics_for_source(1).unwrap();
+    assert_eq!(
+        metrics.client_size,
+        moli_layout::LayoutSize::new(200.0, 100.0)
+    );
+    assert_eq!(
+        metrics.scroll_size,
+        moli_layout::LayoutSize::new(200.0, 200.0)
+    );
+    let box_id = hidden.source_output(1).unwrap().principal_box.unwrap();
+    let extent = hidden.scroll_extent(box_id).unwrap();
+    assert_eq!(extent.applied_offset, LayoutPoint::new(0.0, 60.0));
+    assert_eq!(extent.maximum_offset, LayoutPoint::new(0.0, 100.0));
+    assert!(extent.allows_user_scroll_y);
+    assert!(extent.horizontal_scrollbar.is_none());
+    assert!(extent.vertical_scrollbar.is_none());
+    assert!(extent.scrollbar_corner.is_none());
+}
+
 fn fixed_inline_font() -> (ResolvedLayoutStyle, DocumentLayoutServices) {
     use style::values::computed::font::{
         FamilyName, FontFamily, FontFamilyList, FontFamilyNameSyntax, SingleFontFamily,
@@ -1157,6 +1283,86 @@ fn thin_and_hidden_scrollbars_match_chromium_client_geometry() {
         let extent = output.scroll_extent(box_id).unwrap();
         assert_eq!(extent.horizontal_scrollbar.is_some(), has_controls);
         assert_eq!(extent.vertical_scrollbar.is_some(), has_controls);
+    }
+}
+
+#[test]
+fn hidden_scrollbar_policy_preserves_explicit_stable_gutters_without_controls() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2]),
+        Node::element("content", Vec::new()),
+    ]);
+    // Chromium --hide-scrollbars removes automatic gutters, but stable gutters
+    // still use the authored auto/thin width even though no UI is painted.
+    for (width, thickness) in [
+        (LayoutScrollbarWidth::Auto, 15.0),
+        (LayoutScrollbarWidth::Thin, 10.0),
+        (LayoutScrollbarWidth::None, 0.0),
+    ] {
+        for (gutter, edges) in [
+            (LayoutScrollbarGutter::Auto, 0.0),
+            (LayoutScrollbarGutter::Stable, 1.0),
+            (LayoutScrollbarGutter::StableBothEdges, 2.0),
+        ] {
+            let mut styles = Styles::default();
+            styles
+                .0
+                .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+            let mut scroller = resolved(
+                LayoutDisplay::Block,
+                Style {
+                    size: Size {
+                        width: length(200.0),
+                        height: length(100.0),
+                    },
+                    overflow: Point {
+                        x: Overflow::Scroll,
+                        y: Overflow::Scroll,
+                    },
+                    ..Style::default()
+                },
+            );
+            scroller.set_scrollbar_style(width, gutter, None);
+            styles.0.insert(1, scroller);
+            styles
+                .0
+                .insert(2, fixed_size(LayoutDisplay::Block, 400.0, 300.0));
+            let output = build_with_request(
+                &source,
+                &mut styles,
+                LayoutPassRequest::with_paint(
+                    LayoutViewport::new(320, 240, 1.0),
+                    LayoutFlushReason::Test,
+                )
+                .with_environment(LayoutEnvironment {
+                    scrollbars_hidden: true,
+                }),
+            );
+            let metrics = output.element_metrics_for_source(1).unwrap();
+            assert_eq!(
+                metrics.client_size,
+                moli_layout::LayoutSize::new(200.0 - edges * thickness, 100.0)
+            );
+            assert_eq!(
+                metrics.client_border.x,
+                if edges == 2.0 { thickness } else { 0.0 }
+            );
+            assert_eq!(
+                metrics.scroll_size,
+                moli_layout::LayoutSize::new(400.0, 300.0)
+            );
+            let box_id = output.source_output(1).unwrap().principal_box.unwrap();
+            let extent = output.scroll_extent(box_id).unwrap();
+            assert!(extent.horizontal_scrollbar.is_none());
+            assert!(extent.vertical_scrollbar.is_none());
+            assert!(extent.scrollbar_corner.is_none());
+            assert!(
+                output
+                    .scrollbar_hit_test(LayoutPoint::new(190.0, 30.0))
+                    .is_none()
+            );
+        }
     }
 }
 

@@ -8,24 +8,33 @@ use crate::attrs::FieldAttrs;
 pub(crate) enum ConverterKind {
     #[default]
     DomString,
+    DomString16,
     UsvString,
     ByteString,
     BufferSource,
     CallbackFunction,
     CallbackInterface,
+    Octet,
     Long,
+    LongLong,
     EnforceRangeLong,
+    Short,
     UnsignedShort,
+    EnforceRangeUnsignedShort,
     ClampedUnsignedShort,
     UnsignedLong,
     EnforceRangeUnsignedLong,
+    EnforceRangeLongLong,
     UnsignedLongLong,
     EnforceRangeUnsignedLongLong,
     Float,
+    UnrestrictedFloat,
     Double,
     UnrestrictedDouble,
     Boolean,
     Enum,
+    Interface,
+    Dictionary,
     Raw,
 }
 
@@ -38,24 +47,32 @@ impl ConverterKind {
     pub(crate) fn from_lit(value: &LitStr) -> Result<Self, Error> {
         match value.value().as_str() {
             "dom_string" => Ok(Self::DomString),
+            "dom_string16" => Ok(Self::DomString16),
             "usv_string" => Ok(Self::UsvString),
             "byte_string" => Ok(Self::ByteString),
             "buffer_source" => Ok(Self::BufferSource),
             "callback_function" => Ok(Self::CallbackFunction),
             "callback_interface" => Ok(Self::CallbackInterface),
+            "octet" => Ok(Self::Octet),
             "long" => Ok(Self::Long),
+            "long_long" => Ok(Self::LongLong),
             "enforce_range_long" => Ok(Self::EnforceRangeLong),
+            "short" => Ok(Self::Short),
             "unsigned_short" => Ok(Self::UnsignedShort),
+            "enforce_range_unsigned_short" => Ok(Self::EnforceRangeUnsignedShort),
             "clamped_unsigned_short" => Ok(Self::ClampedUnsignedShort),
             "unsigned_long" => Ok(Self::UnsignedLong),
             "enforce_range_unsigned_long" => Ok(Self::EnforceRangeUnsignedLong),
+            "enforce_range_long_long" => Ok(Self::EnforceRangeLongLong),
             "unsigned_long_long" => Ok(Self::UnsignedLongLong),
             "enforce_range_unsigned_long_long" => Ok(Self::EnforceRangeUnsignedLongLong),
             "float" => Ok(Self::Float),
+            "unrestricted_float" => Ok(Self::UnrestrictedFloat),
             "double" => Ok(Self::Double),
             "unrestricted_double" => Ok(Self::UnrestrictedDouble),
             "boolean" => Ok(Self::Boolean),
             "enum" => Ok(Self::Enum),
+            "dictionary" => Ok(Self::Dictionary),
             "raw" => Ok(Self::Raw),
             _ => Err(Error::new(value.span(), "unsupported converter kind")),
         }
@@ -67,28 +84,37 @@ impl ConverterKind {
     pub(crate) fn wrapper_type(self, ty: &Type) -> proc_macro2::TokenStream {
         match self {
             Self::DomString => quote!(::moli_webidl::DomString),
+            Self::DomString16 => quote!(::moli_webidl::DomString16),
             Self::UsvString => quote!(::moli_webidl::UsvString),
             Self::ByteString => quote!(::moli_webidl::ByteString),
             Self::BufferSource => quote!(::moli_webidl::BufferSource),
             Self::CallbackFunction => quote!(::moli_webidl::WebIdlCallbackFunction),
             Self::CallbackInterface => quote!(::moli_webidl::WebIdlCallbackInterface),
+            Self::Octet => quote!(::moli_webidl::Octet),
             Self::Long => quote!(::moli_webidl::Long),
+            Self::LongLong => quote!(::moli_webidl::LongLong),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong),
+            Self::Short => quote!(::moli_webidl::Short),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort),
+            Self::EnforceRangeUnsignedShort => quote!(::moli_webidl::EnforceRangeUnsignedShort),
             Self::ClampedUnsignedShort => quote!(::moli_webidl::ClampedUnsignedShort),
             Self::UnsignedLong => quote!(::moli_webidl::UnsignedLong),
             Self::EnforceRangeUnsignedLong => {
                 quote!(::moli_webidl::EnforceRangeUnsignedLong)
             }
+            Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong),
             Self::UnsignedLongLong => quote!(::moli_webidl::UnsignedLongLong),
             Self::EnforceRangeUnsignedLongLong => {
                 quote!(::moli_webidl::EnforceRangeUnsignedLongLong)
             }
             Self::Float => quote!(::moli_webidl::Float),
+            Self::UnrestrictedFloat => quote!(::moli_webidl::UnrestrictedFloat),
             Self::Double => quote!(::moli_webidl::Double),
             Self::UnrestrictedDouble => quote!(::moli_webidl::UnrestrictedDouble),
             Self::Boolean => quote!(::moli_webidl::Boolean),
             Self::Enum => quote!(::moli_webidl::EnumValue<#ty>),
+            Self::Interface => quote!(::moli_webidl::InterfaceObject<'_>),
+            Self::Dictionary => quote!(::moli_webidl::Dictionary<#ty>),
             Self::Raw => quote!(#ty),
         }
     }
@@ -100,6 +126,9 @@ impl ConverterKind {
             Self::DomString => {
                 quote!(::moli_webidl::DomString(::std::convert::Into::into(#expr)))
             }
+            Self::DomString16 => {
+                quote!(::moli_webidl::DomString16(::std::convert::Into::into(#expr)))
+            }
             Self::UsvString => {
                 quote!(::moli_webidl::UsvString(::std::convert::Into::into(#expr)))
             }
@@ -108,9 +137,15 @@ impl ConverterKind {
             }
             Self::BufferSource => quote!(::moli_webidl::BufferSource::from(#expr)),
             Self::CallbackFunction | Self::CallbackInterface => quote!(#expr),
+            Self::Octet => quote!(::moli_webidl::Octet(#expr)),
             Self::Long => quote!(::moli_webidl::Long(#expr)),
+            Self::LongLong => quote!(::moli_webidl::LongLong(#expr)),
             Self::EnforceRangeLong => quote!(::moli_webidl::EnforceRangeLong(#expr)),
+            Self::Short => quote!(::moli_webidl::Short(#expr)),
             Self::UnsignedShort => quote!(::moli_webidl::UnsignedShort(#expr)),
+            Self::EnforceRangeUnsignedShort => {
+                quote!(::moli_webidl::EnforceRangeUnsignedShort(#expr))
+            }
             Self::ClampedUnsignedShort => {
                 quote!(::moli_webidl::ClampedUnsignedShort(#expr))
             }
@@ -118,15 +153,19 @@ impl ConverterKind {
             Self::EnforceRangeUnsignedLong => {
                 quote!(::moli_webidl::EnforceRangeUnsignedLong(#expr))
             }
+            Self::EnforceRangeLongLong => quote!(::moli_webidl::EnforceRangeLongLong(#expr)),
             Self::UnsignedLongLong => quote!(::moli_webidl::UnsignedLongLong(#expr)),
             Self::EnforceRangeUnsignedLongLong => {
                 quote!(::moli_webidl::EnforceRangeUnsignedLongLong(#expr))
             }
             Self::Float => quote!(::moli_webidl::Float(#expr)),
+            Self::UnrestrictedFloat => quote!(::moli_webidl::UnrestrictedFloat(#expr)),
             Self::Double => quote!(::moli_webidl::Double(#expr)),
             Self::UnrestrictedDouble => quote!(::moli_webidl::UnrestrictedDouble(#expr)),
             Self::Boolean => quote!(::moli_webidl::Boolean(#expr)),
             Self::Enum => quote!(::moli_webidl::EnumValue(#expr)),
+            Self::Interface => quote!(::moli_webidl::InterfaceObject(#expr)),
+            Self::Dictionary => quote!(::moli_webidl::Dictionary(#expr)),
             Self::Raw => quote!(#expr),
         }
     }
@@ -138,36 +177,57 @@ impl ConverterKind {
             Self::BufferSource => quote!(::std::convert::Into::into(#value)),
             Self::CallbackFunction | Self::CallbackInterface => value,
             Self::DomString
+            | Self::DomString16
             | Self::UsvString
+            | Self::Octet
             | Self::Long
+            | Self::LongLong
             | Self::EnforceRangeLong
+            | Self::Short
             | Self::UnsignedShort
+            | Self::EnforceRangeUnsignedShort
             | Self::ClampedUnsignedShort
             | Self::UnsignedLong
             | Self::EnforceRangeUnsignedLong
+            | Self::EnforceRangeLongLong
             | Self::UnsignedLongLong
             | Self::EnforceRangeUnsignedLongLong
             | Self::Float
+            | Self::UnrestrictedFloat
             | Self::Double
             | Self::UnrestrictedDouble
             | Self::Boolean
-            | Self::Enum => quote!(#value.0),
+            | Self::Enum
+            | Self::Interface
+            | Self::Dictionary => quote!(#value.0),
             Self::Raw => value,
         }
     }
 
     /// Builds the options value passed to `WebIdlConverter::convert`.
     ///
-    /// Today only string converters accept options. Rejecting
+    /// String and interface converters accept options. Rejecting
     /// `treat_null_as_empty_string` on non-string converters keeps invalid
     /// derive usage as a compile-time error instead of silently ignoring it.
     pub(crate) fn options_expr(
         self,
         attrs: &FieldAttrs,
     ) -> Result<proc_macro2::TokenStream, Error> {
+        if self == Self::Interface {
+            let interface = attrs.interface.as_ref().expect("interface converter path");
+            let brand_check = attrs
+                .brand_check
+                .as_ref()
+                .map(|path| quote!(#path))
+                .unwrap_or_else(|| quote!(<#interface>::is_instance));
+            return Ok(quote!(::moli_webidl::InterfaceOptions {
+                name: <#interface>::NAME,
+                brand_check: #brand_check,
+            }));
+        }
         if attrs.treat_null_as_empty_string {
             match self {
-                Self::DomString | Self::UsvString | Self::ByteString => {
+                Self::DomString | Self::DomString16 | Self::UsvString | Self::ByteString => {
                     return Ok(quote!(::moli_webidl::StringOptions {
                         treat_null_as_empty_string: true,
                     }));
@@ -184,11 +244,103 @@ impl ConverterKind {
     }
 }
 
-pub(crate) fn converter_kind(field: &Field, attrs: &FieldAttrs) -> Result<ConverterKind, Error> {
+/// A field conversion, optionally collecting an iterable of converted items.
+#[derive(Clone, Copy)]
+pub(crate) struct FieldConverter {
+    kind: ConverterKind,
+    sequence: bool,
+}
+
+impl FieldConverter {
+    pub(crate) fn wrapper_type(self, ty: &Type) -> proc_macro2::TokenStream {
+        if self.sequence {
+            let item_type = vec_inner_type(ty).expect("validated sequence Vec");
+            let item_converter = self.kind.wrapper_type(item_type);
+            quote!(::moli_webidl::Sequence<#item_converter>)
+        } else {
+            self.kind.wrapper_type(ty)
+        }
+    }
+
+    pub(crate) fn wrap_default(self, expr: Expr, ty: &Type) -> proc_macro2::TokenStream {
+        if self.sequence {
+            let item = self.kind.wrap_default(syn::parse_quote!(item));
+            quote!({
+                let default_items: #ty = #expr;
+                ::moli_webidl::Sequence(default_items.into_iter().map(|item| #item).collect())
+            })
+        } else {
+            self.kind.wrap_default(expr)
+        }
+    }
+
+    pub(crate) fn unwrap_value(self, value: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+        if self.sequence {
+            if self.kind == ConverterKind::Raw {
+                return quote!(#value.0);
+            }
+            let item = self.kind.unwrap_value(quote!(item));
+            quote!(#value.0.into_iter().map(|item| #item).collect::<::std::vec::Vec<_>>())
+        } else {
+            self.kind.unwrap_value(value)
+        }
+    }
+
+    pub(crate) fn options_expr(
+        self,
+        attrs: &FieldAttrs,
+    ) -> Result<proc_macro2::TokenStream, Error> {
+        self.kind.options_expr(attrs)
+    }
+}
+
+pub(crate) fn converter_kind(field: &Field, attrs: &FieldAttrs) -> Result<FieldConverter, Error> {
+    converter_kind_for_field_type(field, attrs, inner_type_for_field(field))
+}
+
+pub(crate) fn converter_kind_for_field_type(
+    field: &Field,
+    attrs: &FieldAttrs,
+    ty: &Type,
+) -> Result<FieldConverter, Error> {
+    let ty = if attrs.sequence {
+        vec_inner_type(ty).ok_or_else(|| {
+            Error::new(
+                ty.span(),
+                "sequence fields must use Vec<T> (or Option<Vec<T>>)",
+            )
+        })?
+    } else {
+        ty
+    };
+    let kind = element_converter_kind(field, attrs, ty)?;
+    Ok(FieldConverter {
+        kind,
+        sequence: attrs.sequence,
+    })
+}
+
+fn element_converter_kind(
+    field: &Field,
+    attrs: &FieldAttrs,
+    ty: &Type,
+) -> Result<ConverterKind, Error> {
+    if attrs.dictionary {
+        return Ok(ConverterKind::Dictionary);
+    }
+    if attrs.interface.is_some() {
+        if !is_v8_object_type(ty) {
+            return Err(Error::new(
+                ty.span(),
+                "interface fields must use v8::Local<'_, v8::Object> (or Option/sequence/variadic Vec of it)",
+            ));
+        }
+        return Ok(ConverterKind::Interface);
+    }
     if let Some(converter) = attrs.converter {
         return Ok(converter);
     }
-    converter_kind_for_type(inner_type_for_field(field)).ok_or_else(|| {
+    converter_kind_for_type(ty).ok_or_else(|| {
         Error::new(
             field.span(),
             "could not infer converter; add #[webidl(converter = \"...\")]",
@@ -233,6 +385,9 @@ fn infer_converter_kind(ty: &Type) -> Option<ConverterKind> {
     // domain enums must opt into `converter = "enum"` so invalid-token errors
     // get the correct WebIDL enum name.
     let ty = option_inner_type(ty).unwrap_or(ty);
+    if is_type_ident(ty, "u8") {
+        return Some(ConverterKind::Octet);
+    }
     if is_type_ident(ty, "u32") {
         return Some(ConverterKind::UnsignedLong);
     }
@@ -241,6 +396,12 @@ fn infer_converter_kind(ty: &Type) -> Option<ConverterKind> {
     }
     if is_type_ident(ty, "u16") {
         return Some(ConverterKind::UnsignedShort);
+    }
+    if is_type_ident(ty, "i16") {
+        return Some(ConverterKind::Short);
+    }
+    if is_type_ident(ty, "i64") {
+        return Some(ConverterKind::LongLong);
     }
     if is_type_ident(ty, "u64") {
         return Some(ConverterKind::UnsignedLongLong);
@@ -295,6 +456,23 @@ fn is_v8_local_type(ty: &Type) -> bool {
         .segments
         .last()
         .is_some_and(|segment| segment.ident == "Local")
+}
+
+fn is_v8_object_type(ty: &Type) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    let Some(segment) = type_path.path.segments.last() else {
+        return false;
+    };
+    if segment.ident != "Local" {
+        return false;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return false;
+    };
+    matches!(arguments.args.last(), Some(GenericArgument::Type(Type::Path(path)))
+        if path.path.segments.last().is_some_and(|segment| segment.ident == "Object"))
 }
 
 fn option_inner_type(ty: &Type) -> Option<&Type> {

@@ -1,3 +1,4 @@
+use super::state_tree::owner_document_native_handle;
 use super::*;
 use crate::{
     native_bridge::document::detached_install::{
@@ -110,20 +111,6 @@ fn string_or_null<'s>(
     Some(match value {
         Some(value) => v8_string(scope, &value)?.into(),
         None => v8::null(scope).into(),
-    })
-}
-
-fn owner_document_native_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
-    owner_document: v8::Local<'s, v8::Object>,
-) -> Option<DomHandle> {
-    detached_native_handle_for_runtime(scope, runtime_ptr, owner_document).or_else(|| {
-        node_runtime_and_handle_from_object(scope, owner_document)
-            .ok()
-            .and_then(|(node_runtime_ptr, handle)| {
-                (node_runtime_ptr == runtime_ptr).then_some(handle)
-            })
     })
 }
 
@@ -910,11 +897,6 @@ fn detached_insert_node_with_current_queue_policy<'s>(
         detached_replace_children_array(scope, parent, prospective_array);
     }
     detached_record_tree_mutation(scope, parent);
-    if !parent_has_native_handle {
-        for node in insert_nodes {
-            dispatch_detached_iframe_load_after_insert(scope, node);
-        }
-    }
     Ok(child)
 }
 
@@ -948,18 +930,4 @@ fn detached_pre_insert_contains<'s>(
         current = detached_parent_node_object(scope, candidate);
     }
     false
-}
-
-fn dispatch_detached_iframe_load_after_insert<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-) {
-    if detached_node_type(scope, node) == Some(1)
-        && detached_element_local_name(scope, node)
-            .is_some_and(|name| name.eq_ignore_ascii_case("iframe"))
-    {
-        let _ = crate::detached_event_target::dispatch_detached_simple_event(
-            scope, node, "load", false, false, false,
-        );
-    }
 }

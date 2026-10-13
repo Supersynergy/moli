@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::events::EventInit;
 use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
 use crate::context_bootstrap::navigation_activation::install_navigation_transition;
 use crate::context_bootstrap::navigation_events::navigation_scroll_event_is_active;
@@ -10,6 +11,7 @@ use crate::context_bootstrap::navigation_handler_callbacks::{
 use crate::context_bootstrap::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, runtime_window_is_global, runtime_window_owner,
 };
+use crate::context_bootstrap::web_storage::StorageReference;
 use crate::native_bridge::element::scroll_to_url_fragment_or_top;
 use crate::native_bridge::throw_dom_exception;
 use crate::util::context_host_ptr_from_global_bridge;
@@ -149,16 +151,6 @@ struct CapturedMouseEventInitDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct MessageEventInitDeclaration<'scope> {
-    data: v8::Local<'scope, v8::Value>,
-    origin: v8::Local<'scope, v8::String>,
-    last_event_id: v8::Local<'scope, v8::String>,
-    source: v8::Local<'scope, v8::Value>,
-    ports: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct InputEventInitDeclaration<'scope> {
     data: v8::Local<'scope, v8::Value>,
     input_type: v8::Local<'scope, v8::String>,
@@ -199,18 +191,27 @@ struct PopStateEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct PageTransitionEventOwnInitDeclaration {
-    persisted: bool,
+struct HashChangeEventInitDeclaration {
+    #[webapi(data_property = "oldURL")]
+    old_url: String,
+    #[webapi(data_property = "newURL")]
+    new_url: String,
+}
+
+/// Members are declared in Web IDL lexicographic order.
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "HashChangeEventInit")]
+struct HashChangeEventInitMembers {
+    #[webidl(name = "newURL", default = "", converter = "usv_string")]
+    new_url: String,
+    #[webidl(name = "oldURL", default = "", converter = "usv_string")]
+    old_url: String,
 }
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct ErrorEventInitDeclaration<'scope> {
-    message: v8::Local<'scope, v8::String>,
-    filename: v8::Local<'scope, v8::String>,
-    lineno: f64,
-    colno: f64,
-    error: Option<v8::Local<'scope, v8::Value>>,
+struct PageTransitionEventOwnInitDeclaration {
+    persisted: bool,
 }
 
 #[derive(WebApiObject)]
@@ -224,38 +225,9 @@ struct PromiseRejectionEventInitDeclaration<'scope> {
 #[webidl(prefix = "PromiseRejectionEventInit")]
 struct PromiseRejectionEventInitMembers<'s> {
     #[webidl(required)]
-    promise: v8::Local<'s, v8::Promise>,
+    promise: v8::Local<'s, v8::Object>,
     #[webidl(converter = "raw")]
     reason: Option<v8::Local<'s, v8::Value>>,
-}
-
-#[derive(webidl::WebIdlDictionary)]
-#[webidl(prefix = "SecurityPolicyViolationEventInit")]
-struct SecurityPolicyViolationEventInitMembers {
-    #[webidl(name = "documentURI", default = "")]
-    document_uri: String,
-    #[webidl(default = "")]
-    referrer: String,
-    #[webidl(name = "blockedURI", default = "")]
-    blocked_uri: String,
-    #[webidl(name = "violatedDirective", default = "")]
-    violated_directive: String,
-    #[webidl(name = "effectiveDirective", default = "")]
-    effective_directive: String,
-    #[webidl(name = "originalPolicy", default = "")]
-    original_policy: String,
-    #[webidl(default = "enforce")]
-    disposition: String,
-    #[webidl(name = "sourceFile", default = "")]
-    source_file: String,
-    #[webidl(default = "")]
-    sample: String,
-    #[webidl(name = "statusCode", converter = "unsigned_short", default = 0)]
-    status_code: u16,
-    #[webidl(name = "lineNumber", converter = "long", default = 0)]
-    line_number: i32,
-    #[webidl(name = "columnNumber", converter = "long", default = 0)]
-    column_number: i32,
 }
 
 #[derive(WebApiObject)]
@@ -289,35 +261,48 @@ struct ToggleEventInitMembers<'s> {
     old_state: String,
     #[webidl(default = "")]
     new_state: String,
-    #[webidl(with = toggle_event_source_member)]
+    #[webidl(converter = "raw")]
     source: Option<v8::Local<'s, v8::Value>>,
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "StorageEventInit")]
-struct StorageEventInitMembers<'s> {
-    #[webidl(nullable)]
-    key: Option<String>,
-    #[webidl(name = "oldValue", nullable)]
-    old_value: Option<String>,
-    #[webidl(name = "newValue", nullable)]
-    new_value: Option<String>,
+pub(super) struct StorageEventInitMembers<'s> {
+    #[webidl(inherit)]
+    base: EventInit,
+    #[webidl(nullable, converter = "raw")]
+    key: Option<webidl::DomString16>,
+    #[webidl(name = "newValue", nullable, converter = "raw")]
+    new_value: Option<webidl::DomString16>,
+    #[webidl(name = "oldValue", nullable, converter = "raw")]
+    old_value: Option<webidl::DomString16>,
+    #[webidl(name = "storageArea", converter = "raw", nullable)]
+    storage_area: Option<StorageReference<'s>>,
     #[webidl(default = "", converter = "usv_string")]
     url: String,
-    #[webidl(name = "storageArea", converter = "raw", nullable)]
-    storage_area: Option<v8::Local<'s, v8::Value>>,
 }
 
-fn toggle_event_source_member<'s>(
+impl StorageEventInitMembers<'_> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        (self.base.bubbles, self.base.cancelable, self.base.composed)
+    }
+}
+
+pub(super) fn parse_storage_event_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Result<Option<v8::Local<'s, v8::Value>>, webidl::WebIdlError> {
-    let context = webidl::Context::member("ToggleEventInit", name);
-    match webidl::property_result(scope, object, name, context)? {
-        Some(value) if value.is_undefined() => Ok(None),
-        Some(value) => Ok(Some(value)),
-        None => Ok(None),
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<StorageEventInitMembers<'s>> {
+    let parsed = webidl::dictionary_arg(args, 1, webidl::Context::argument("StorageEvent", 2))
+        .and_then(|object| match object {
+            Some(object) => webidl::parse_dictionary_object(scope, object),
+            None => Ok(StorageEventInitMembers::default()),
+        });
+    match parsed {
+        Ok(init) => Some(init),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
     }
 }
 
@@ -439,54 +424,20 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_captured_mous
     true
 }
 
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_message_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let data = init
-        .and_then(|object| crate::webidl::property(scope, object, "data"))
-        .unwrap_or_else(|| v8::null(scope).into());
-    let origin = init_string_property(scope, init, "origin", "");
-    let origin_value = v8_string(scope, &origin).unwrap();
-    let last_event_id = init_string_property(scope, init, "lastEventId", "");
-    let last_event_id_value = v8_string(scope, &last_event_id).unwrap();
-    let source =
-        init_value_property(scope, init, "source").unwrap_or_else(|| v8::null(scope).into());
-    let ports = init_value_property(scope, init, "ports");
-    let ports = frozen_message_event_ports(scope, ports);
-    MessageEventInitDeclaration::new(data, origin_value, last_event_id_value, source, ports)
-        .initialize(scope, event)
-        .expect("MessageEvent init declaration should initialize");
-}
-
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_storage_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let parsed = match init {
-        Some(init) => {
-            match webidl::parse_dictionary_object::<StorageEventInitMembers>(scope, init) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return false;
-                }
-            }
-        }
-        None => StorageEventInitMembers::default(),
-    };
-    crate::context_bootstrap::events::define_storage_event_properties(
+    parsed: StorageEventInitMembers<'s>,
+) {
+    crate::context_bootstrap::events::define_storage_event_properties_utf16(
         scope,
         event,
-        parsed.key.as_deref(),
-        parsed.old_value.as_deref(),
-        parsed.new_value.as_deref(),
+        parsed.key.as_ref().map(|value| value.0.as_slice()),
+        parsed.old_value.as_ref().map(|value| value.0.as_slice()),
+        parsed.new_value.as_ref().map(|value| value.0.as_slice()),
         &parsed.url,
-        parsed.storage_area,
+        parsed.storage_area.map(|value| value.0.into()),
     );
-    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_input_event<'s>(
@@ -513,6 +464,29 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_pop_state_eve
     PopStateEventInitDeclaration::new(state, false)
         .initialize(scope, event)
         .expect("PopStateEvent init declaration should initialize");
+}
+
+pub(in crate::context_bootstrap::events::subclasses) fn initialize_hash_change_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    init: Option<v8::Local<'s, v8::Object>>,
+) -> bool {
+    let parsed = match init {
+        Some(init) => {
+            match webidl::parse_dictionary_object::<HashChangeEventInitMembers>(scope, init) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    return false;
+                }
+            }
+        }
+        None => HashChangeEventInitMembers::default(),
+    };
+    HashChangeEventInitDeclaration::new(parsed.old_url, parsed.new_url)
+        .initialize(scope, event)
+        .expect("HashChangeEvent init declaration should initialize");
+    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_page_transition_event<'s>(
@@ -553,47 +527,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_toggle_event<
     true
 }
 
-fn frozen_message_event_ports<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: Option<v8::Local<'s, v8::Value>>,
-) -> v8::Local<'s, v8::Value> {
-    let Some(value) = value.filter(|value| value.is_array()) else {
-        let ports = v8::Array::new(scope, 0);
-        let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-        return ports.into();
-    };
-    let Some(source) = v8::Local::<v8::Array>::try_from(value).ok() else {
-        let ports = v8::Array::new(scope, 0);
-        let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-        return ports.into();
-    };
-    let ports = v8::Array::new(scope, source.length() as i32);
-    for index in 0..source.length() {
-        if let Some(port) = source.get_index(scope, index) {
-            let _ = ports.set_index(scope, index, port);
-        }
-    }
-    let _ = ports.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
-    ports.into()
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_error_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let message = init_string_property(scope, init, "message", "");
-    let message_value = v8_string(scope, &message).expect("ErrorEvent message");
-    let filename = init_string_property(scope, init, "filename", "");
-    let filename_value = v8_string(scope, &filename).expect("ErrorEvent filename");
-    let lineno = init_number_property(scope, init, "lineno", 0.0);
-    let colno = init_number_property(scope, init, "colno", 0.0);
-    let error = init_value_property(scope, init, "error");
-    ErrorEventInitDeclaration::new(message_value, filename_value, lineno, colno, error)
-        .initialize(scope, event)
-        .expect("ErrorEvent init declaration should initialize");
-}
-
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_promise_rejection_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -623,71 +556,6 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_promise_rejec
         .initialize(scope, event)
         .expect("PromiseRejectionEvent init declaration should initialize");
     true
-}
-
-pub(in crate::context_bootstrap::events::subclasses) fn initialize_security_policy_violation_event<
-    's,
->(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
-) -> bool {
-    let parsed = match init {
-        Some(init) => {
-            match webidl::parse_dictionary_object::<SecurityPolicyViolationEventInitMembers>(
-                scope, init,
-            ) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return false;
-                }
-            }
-        }
-        None => SecurityPolicyViolationEventInitMembers {
-            document_uri: String::new(),
-            referrer: String::new(),
-            blocked_uri: String::new(),
-            violated_directive: String::new(),
-            effective_directive: String::new(),
-            original_policy: String::new(),
-            disposition: "enforce".to_owned(),
-            source_file: String::new(),
-            sample: String::new(),
-            status_code: 0,
-            line_number: 0,
-            column_number: 0,
-        },
-    };
-    let disposition = match parsed.disposition.as_str() {
-        "enforce" => crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
-        "report" => crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
-        _ => {
-            throw_type_error(
-                scope,
-                "Failed to construct 'SecurityPolicyViolationEvent': disposition is not a valid SecurityPolicyViolationEventDisposition.",
-            );
-            return false;
-        }
-    };
-    crate::content_security_policy::initialize_security_policy_violation_event(
-        scope,
-        event,
-        &crate::content_security_policy::ContentSecurityPolicyViolationEventFields {
-            document_uri: &parsed.document_uri,
-            referrer: &parsed.referrer,
-            blocked_uri: &parsed.blocked_uri,
-            effective_directive: &parsed.effective_directive,
-            violated_directive: &parsed.violated_directive,
-            original_policy: &parsed.original_policy,
-            disposition,
-            source_file: &parsed.source_file,
-            sample: &parsed.sample,
-            line_number: parsed.line_number,
-            column_number: parsed.column_number,
-            status_code: i32::from(parsed.status_code),
-        },
-    )
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_navigation_current_entry_change_event<
@@ -1382,6 +1250,7 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_submit_event<
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
 ) -> bool {
+    let agent_invoked = init_bool_property(scope, init, "agentInvoked", false);
     let Some(submitter) = submit_event_submitter(scope, init) else {
         return false;
     };
@@ -1390,6 +1259,12 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_submit_event<
         event,
         SUBMIT_EVENT_SUBMITTER_SLOT,
         submitter,
+    );
+    crate::context_bootstrap::set_event_private_value(
+        scope,
+        event,
+        SUBMIT_EVENT_AGENT_INVOKED_SLOT,
+        v8::Boolean::new(scope, agent_invoked).into(),
     );
     true
 }

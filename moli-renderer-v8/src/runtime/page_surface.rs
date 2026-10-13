@@ -26,6 +26,9 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+mod auxiliary_document_response;
+pub(crate) use auxiliary_document_response::AuxiliaryDocumentResponseReceiver;
+pub use auxiliary_document_response::RendererAuxiliaryDocumentResponse;
 mod element_click;
 pub use element_click::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
@@ -37,8 +40,10 @@ mod window_document_source;
 pub use javascript_dialog::{
     RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
 };
+pub use popup_activation::RendererPopupActivationParts;
 pub use popup_activation::{
-    RendererPendingPopupActivation, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererNavigationInitiator, RendererPendingPopupActivation, RendererPopupActivationSource,
+    RendererPopupDisposition,
 };
 pub use window_document_source::RendererWindowDocumentSource;
 
@@ -310,15 +315,19 @@ pub struct RendererDocumentSourcedTopLevelLocationNavigation {
     source_document: RendererDocumentLifecycleIdentity,
     request: Box<RendererTopLevelNavigationRequest>,
     runtime_command_cause: Option<RendererRuntimeCommandCausalIdentity>,
+    navigation_initiator: Option<RendererNavigationInitiator>,
+    initial_document_environment: Option<RendererCapturedDocumentEnvironment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RendererTopLevelNavigationRequest {
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     url: String,
     request_method: String,
     request_body: Option<Vec<u8>>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    history_mutation: moli_page_types::NavigationHistoryMutation,
 }
 
 impl RendererDocumentSourcedTopLevelLocationNavigation {
@@ -354,18 +363,64 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
         Self {
             source_document,
             request: Box::new(RendererTopLevelNavigationRequest {
+                web_mcp_invocation: None,
                 url,
                 request_method,
                 request_body,
                 request_headers,
                 browser_navigation_kind,
+                history_mutation: moli_page_types::NavigationHistoryMutation::Push,
             }),
             runtime_command_cause,
+            navigation_initiator: None,
+            initial_document_environment: None,
         }
+    }
+
+    pub(crate) fn with_navigation_source(
+        mut self,
+        initiator: Option<RendererNavigationInitiator>,
+        environment: Option<RendererCapturedDocumentEnvironment>,
+    ) -> Self {
+        self.navigation_initiator = initiator;
+        self.initial_document_environment = environment;
+        self
+    }
+
+    pub fn navigation_initiator(&self) -> Option<&RendererNavigationInitiator> {
+        self.navigation_initiator.as_ref()
+    }
+
+    pub fn initial_document_environment(&self) -> Option<&RendererCapturedDocumentEnvironment> {
+        self.initial_document_environment.as_ref()
     }
 
     pub fn source_document(&self) -> RendererDocumentLifecycleIdentity {
         self.source_document
+    }
+
+    pub fn with_web_mcp_invocation(
+        mut self,
+        id: Option<moli_page_types::RendererWebMcpNavigation>,
+    ) -> Self {
+        self.request.web_mcp_invocation = id;
+        self
+    }
+
+    pub fn web_mcp_invocation(&self) -> Option<moli_page_types::RendererWebMcpNavigation> {
+        self.request.web_mcp_invocation.clone()
+    }
+
+    pub fn with_history_mutation(
+        mut self,
+        mutation: moli_page_types::NavigationHistoryMutation,
+    ) -> Self {
+        self.request.history_mutation = mutation;
+        self
+    }
+
+    pub fn history_mutation(&self) -> moli_page_types::NavigationHistoryMutation {
+        self.request.history_mutation
     }
 
     pub fn url(&self) -> &str {
@@ -816,9 +871,13 @@ pub struct RendererMainDocumentCommit {
     pub unreachable_url: Option<String>,
     pub security_origin: String,
     pub secure_context_type: String,
+    /// Selected request referrer, including an explicitly suppressed empty value.
+    pub document_referrer: Option<String>,
     pub timestamp: f64,
     /// Browser-owned session-history cursor and length at this document's commit.
     pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+    /// Browser-selected related page group, including history restoration.
+    pub browsing_context_group: Option<super::RendererBrowsingContextGroup>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1274,14 +1333,20 @@ impl RendererRuntimeInspectorMessageBatch {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererDomMutationEventBatch {
+    pub agent_token: RendererDevToolsAgentToken,
     pub session: DevToolsSessionKey,
     pub events: Vec<RendererDomMutationEvent>,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
 }
 
 impl RendererDomMutationEventBatch {
-    pub fn new(session: DevToolsSessionKey, events: Vec<RendererDomMutationEvent>) -> Self {
+    pub fn new(
+        agent_token: RendererDevToolsAgentToken,
+        session: DevToolsSessionKey,
+        events: Vec<RendererDomMutationEvent>,
+    ) -> Self {
         Self {
+            agent_token,
             session,
             events,
             renderer_agent_attachment_id: None,
@@ -4579,6 +4644,17 @@ pub(crate) enum RendererInspectorPageCommand {
         deferred_response: RendererRuntimeInspectorResponseSender,
     },
     RuntimeEnableEvents,
+    RuntimeDisableEvents,
+    RuntimeBindingEvents {
+        binding: crate::protocol_types::RuntimeBindingRegistration,
+        remove: bool,
+    },
+    /// The V8 session already executed removal. Only native restore metadata
+    /// remains to be committed before publishing the original native terminal.
+    CommitRuntimeBindingRemoval {
+        name: String,
+        output: Result<RendererRuntimeCommandOutput, String>,
+    },
     ApplyRuntimeProtocolState {
         session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
         isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
@@ -4657,7 +4733,12 @@ pub(crate) enum RendererInspectorPageCommand {
 
 #[non_exhaustive]
 pub enum RendererPageCommand {
-    Native(Box<RendererCdpCall>),
+    WebMcp {
+        session: DevToolsSessionKey,
+        command: moli_page_types::RendererWebMcpCommand,
+    },
+    // The call fits inline; its operation boxes the recursively contained page command.
+    Native(RendererCdpCall),
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,
@@ -4709,6 +4790,7 @@ pub enum RendererPageCommand {
     },
     NavigateTopLevelSameDocument {
         url: String,
+        replace_current: bool,
     },
     RefreshFullPageState,
     PageDiagnosticsSnapshot,
@@ -4821,23 +4903,23 @@ pub enum RendererPageCommand {
     #[cfg(test)]
     TakeDocumentLifecycleEvents,
     StopDocumentLifecycle,
-    ComputedStylePropertiesForBackendNodeId {
-        backend_node_id: u32,
+    ComputedStyleProperties {
+        reference: RendererDomNodeReference,
     },
     SetInlineStyleSheetTextForStyleSheetId {
         inspector_session_id: Option<String>,
         style_sheet_id: String,
         text: String,
     },
-    ScrollBackendNodeIntoViewIfNeeded {
-        backend_node_id: u32,
+    ScrollNodeIntoViewIfNeeded {
+        reference: RendererDomNodeReference,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
     },
     ClientRectForBackendNodeId {
         backend_node_id: u32,
     },
-    DocumentGeometryForBackendNodeId {
-        backend_node_id: u32,
+    DocumentGeometryForNode {
+        reference: RendererDomNodeReference,
     },
     DocumentHitTest {
         inspector_session_id: Option<String>,
@@ -4849,19 +4931,19 @@ pub enum RendererPageCommand {
     NodeHasGeometryForBackendNodeId {
         backend_node_id: u32,
     },
-    RemoveDocumentBackendNodeId {
-        backend_node_id: u32,
+    RemoveDocumentNode {
+        reference: RendererDomNodeReference,
     },
-    MutateDocumentBackendNodeAttribute {
-        backend_node_id: u32,
+    MutateDocumentNodeAttribute {
+        reference: RendererDomNodeReference,
         mutation: RendererDomAttributeMutation,
     },
     EditDocumentNode {
         inspector_session_id: Option<String>,
         edit: RendererDomEdit,
     },
-    FocusDocumentBackendNode {
-        backend_node_id: u32,
+    FocusDocumentNode {
+        reference: RendererDomNodeReference,
     },
     TriggerAutofill(RendererAutofillTriggerRequest),
     ResetNavigationHistory,
@@ -4870,15 +4952,18 @@ pub enum RendererPageCommand {
         files: Vec<crate::dom::native::SelectedFile>,
         append: bool,
     },
+    DocumentNodeExistsForBackendNodeId {
+        backend_node_id: u32,
+    },
     DocumentNodeSnapshotForBackendNodeId {
         backend_node_id: u32,
         depth: i32,
         pierce: bool,
     },
-    DocumentNodeSnapshotForBackendNodeIdInInspectorSession {
+    DocumentNodeSnapshotForNodeInInspectorSession {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         depth: i32,
         pierce: bool,
     },
@@ -4895,10 +4980,10 @@ pub enum RendererPageCommand {
         top_frame_id: String,
         options: RendererDomSnapshotCaptureOptions,
     },
-    DocumentChildNodeSnapshotEventsForBackendNodeId {
+    DocumentChildNodeSnapshotEventsForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        backend_node_id: u32,
+        reference: RendererDomNodeReference,
         depth: i32,
         pierce: bool,
     },
@@ -4908,25 +4993,25 @@ pub enum RendererPageCommand {
         selector: String,
         multiple: bool,
     },
-    DocumentQuerySelectorForChildFrameBackendNodeId {
+    DocumentQuerySelectorForChildFrameNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
         frame_id: String,
-        root_backend_node_id: u32,
+        root: RendererDomNodeReference,
         selector: String,
         multiple: bool,
     },
-    DocumentQuerySelectorForBackendNodeId {
+    DocumentQuerySelectorForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        root_backend_node_id: u32,
+        root: RendererDomNodeReference,
         selector: String,
         multiple: bool,
     },
-    DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
+    DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
         inspector_session_id: Option<String>,
         include_whitespace: bool,
-        root_backend_node_id: u32,
+        root: RendererDomNodeReference,
         selector: String,
         multiple: bool,
     },
@@ -4974,32 +5059,35 @@ pub enum RendererPageCommand {
     DocumentNodeAttributes {
         reference: RendererDomNodeReference,
     },
-    DocumentNodeTextForBackendNodeId {
-        backend_node_id: u32,
+    DocumentNodeText {
+        reference: RendererDomNodeReference,
     },
-    DocumentNodePropertyForBackendNodeId {
-        backend_node_id: u32,
+    DocumentNodeProperty {
+        reference: RendererDomNodeReference,
         name: String,
+    },
+    AccessibilityTreeNodes {
+        frame_id: Option<String>,
     },
     AccessibilityTreePayloadsForDocument {
         max_depth: Option<i32>,
     },
     AccessibilityNodePayloadForDocument,
-    AccessibilityTreePayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityTreePayloadsForNode {
+        reference: RendererDomNodeReference,
         max_depth: Option<i32>,
     },
-    AccessibilityNodePayloadForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityNodePayloadForNode {
+        reference: RendererDomNodeReference,
     },
-    AccessibilityNodeAndAncestorPayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityNodeAndAncestorPayloadsForNode {
+        reference: RendererDomNodeReference,
     },
-    AccessibilityChildNodePayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityChildNodePayloadsForNode {
+        reference: RendererDomNodeReference,
     },
-    AccessibilityPartialTreePayloadsForBackendNodeId {
-        backend_node_id: u32,
+    AccessibilityPartialTreePayloadsForNode {
+        reference: RendererDomNodeReference,
         fetch_relatives: bool,
     },
     AccessibilityTreePayloadsForChildFrame {
@@ -5022,8 +5110,8 @@ pub enum RendererPageCommand {
     OuterHtmlForDocument {
         include_shadow_dom: bool,
     },
-    OuterHtmlForBackendNodeId {
-        backend_node_id: u32,
+    OuterHtmlForNode {
+        reference: RendererDomNodeReference,
         include_shadow_dom: bool,
     },
     RenderPageDump {
@@ -5032,6 +5120,7 @@ pub enum RendererPageCommand {
     SerializeDocument,
     LayoutMetrics,
     PublishLayout,
+    PrintToPdf(RendererPrintToPdfRequest),
     CaptureScreenshot(RendererCaptureScreenshotRequest),
     CaptureScreencastFrame(RendererCaptureScreencastFrameRequest),
     BlobBytesForUuid {
@@ -5042,19 +5131,7 @@ pub enum RendererPageCommand {
         backend_node_ids: Vec<u32>,
     },
     DocumentStorageKeySnapshot,
-    SearchTextByLines {
-        text: String,
-        query: String,
-        case_sensitive: bool,
-        is_regex: bool,
-    },
-    SearchChildFrameResourceByLines {
-        frame_id: String,
-        url: String,
-        query: String,
-        case_sensitive: bool,
-        is_regex: bool,
-    },
+    SearchResourceByLines(Box<RendererResourceSearchRequest>),
     ChildFrameTreeSnapshot,
     ChildFrameOwnerNodeReference {
         inspector_session_id: Option<String>,
@@ -5155,8 +5232,13 @@ pub enum RendererPageCommand {
     SetPermissionOverrides(Vec<crate::protocol_types::PermissionOverrideRegistration>),
     SetIdleOverride(Option<crate::protocol_types::EmulatedIdleOverride>),
     SetNavigatorOverrides(moli_page_types::NavigatorOverrides),
+    SetNavigatorAndDocumentActivity {
+        navigator_overrides: moli_page_types::NavigatorOverrides,
+        document_activity: moli_page_types::DocumentActivity,
+    },
     SetDocumentActivity(moli_page_types::DocumentActivity),
     SetScriptExecutionDisabled(bool),
+    SetScrollbarsHidden(bool),
     SetBypassContentSecurityPolicy(bool),
     SetEmulatedMedia(crate::protocol_types::EmulatedMediaOverrides),
     SetViewportSurface(Option<crate::protocol_types::ViewportSurface>),
@@ -5264,6 +5346,24 @@ impl RendererPageCommand {
         Self::inspector_command(
             inspector_session_id,
             RendererInspectorPageCommand::RuntimeEnableEvents,
+        )
+    }
+
+    pub fn runtime_disable_events(inspector_session_id: Option<String>) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorPageCommand::RuntimeDisableEvents,
+        )
+    }
+
+    pub fn runtime_binding_events(
+        inspector_session_id: Option<String>,
+        binding: crate::protocol_types::RuntimeBindingRegistration,
+        remove: bool,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorPageCommand::RuntimeBindingEvents { binding, remove },
         )
     }
 
@@ -5552,6 +5652,7 @@ impl RendererPageCommand {
             Self::Native(command) => command.operation.command.cdp_nav_timing_label(),
             Self::Inspector(envelope) => envelope.cdp_nav_timing_label(),
             Self::DocumentStorageKeySnapshot => Some("DocumentStorageKeySnapshot"),
+            Self::SearchResourceByLines(..) => Some("SearchResourceByLines"),
             Self::CreateIsolatedWorldRuntimeActivity { .. } => {
                 Some("CreateIsolatedWorldRuntimeActivity")
             }
@@ -5567,29 +5668,30 @@ impl RendererPageCommand {
             Self::ChildFrameDocumentRootNodeReference { .. } => {
                 Some("ChildFrameDocumentRootNodeReference")
             }
+            Self::DocumentNodeExistsForBackendNodeId { .. } => {
+                Some("DocumentNodeExistsForBackendNodeId")
+            }
             Self::DocumentNodeSnapshotForBackendNodeId { .. } => {
                 Some("DocumentNodeSnapshotForBackendNodeId")
             }
-            Self::DocumentNodeSnapshotForBackendNodeIdInInspectorSession { .. } => {
-                Some("DocumentNodeSnapshotForBackendNodeIdInInspectorSession")
+            Self::DocumentNodeSnapshotForNodeInInspectorSession { .. } => {
+                Some("DocumentNodeSnapshotForNodeInInspectorSession")
             }
             Self::DocumentNodeSnapshotForDocument { .. } => Some("DocumentNodeSnapshotForDocument"),
             Self::DiscardDomAgentFrontendBindings { .. } => Some("DiscardDomAgentFrontendBindings"),
             Self::DomSnapshotCapture { .. } => Some("DomSnapshotCapture"),
-            Self::DocumentChildNodeSnapshotEventsForBackendNodeId { .. } => {
-                Some("DocumentChildNodeSnapshotEventsForBackendNodeId")
+            Self::DocumentChildNodeSnapshotEventsForNode { .. } => {
+                Some("DocumentChildNodeSnapshotEventsForNode")
             }
             Self::DocumentQuerySelectorForDocument { .. } => {
                 Some("DocumentQuerySelectorForDocument")
             }
-            Self::DocumentQuerySelectorForChildFrameBackendNodeId { .. } => {
-                Some("DocumentQuerySelectorForChildFrameBackendNodeId")
+            Self::DocumentQuerySelectorForChildFrameNode { .. } => {
+                Some("DocumentQuerySelectorForChildFrameNode")
             }
-            Self::DocumentQuerySelectorForBackendNodeId { .. } => {
-                Some("DocumentQuerySelectorForBackendNodeId")
-            }
-            Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId { .. } => {
-                Some("DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId")
+            Self::DocumentQuerySelectorForNode { .. } => Some("DocumentQuerySelectorForNode"),
+            Self::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode { .. } => {
+                Some("DocumentQuerySelectorWithChildNodeSnapshotEventsForNode")
             }
             Self::DocumentPerformSearch { .. } => Some("DocumentPerformSearch"),
             Self::DocumentGetSearchResults { .. } => Some("DocumentGetSearchResults"),
@@ -5605,32 +5707,27 @@ impl RendererPageCommand {
                 Some("DocumentBidiNodeSharedIdForBackendNodeId")
             }
             Self::DocumentNodeAttributes { .. } => Some("DocumentNodeAttributes"),
-            Self::DocumentNodeTextForBackendNodeId { .. } => {
-                Some("DocumentNodeTextForBackendNodeId")
-            }
-            Self::DocumentNodePropertyForBackendNodeId { .. } => {
-                Some("DocumentNodePropertyForBackendNodeId")
-            }
+            Self::DocumentNodeText { .. } => Some("DocumentNodeText"),
+            Self::DocumentNodeProperty { .. } => Some("DocumentNodeProperty"),
+            Self::AccessibilityTreeNodes { .. } => Some("AccessibilityTreeNodes"),
             Self::AccessibilityTreePayloadsForDocument { .. } => {
                 Some("AccessibilityTreePayloadsForDocument")
             }
             Self::AccessibilityNodePayloadForDocument => {
                 Some("AccessibilityNodePayloadForDocument")
             }
-            Self::AccessibilityTreePayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityTreePayloadsForBackendNodeId")
+            Self::AccessibilityTreePayloadsForNode { .. } => {
+                Some("AccessibilityTreePayloadsForNode")
             }
-            Self::AccessibilityNodePayloadForBackendNodeId { .. } => {
-                Some("AccessibilityNodePayloadForBackendNodeId")
+            Self::AccessibilityNodePayloadForNode { .. } => Some("AccessibilityNodePayloadForNode"),
+            Self::AccessibilityNodeAndAncestorPayloadsForNode { .. } => {
+                Some("AccessibilityNodeAndAncestorPayloadsForNode")
             }
-            Self::AccessibilityNodeAndAncestorPayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityNodeAndAncestorPayloadsForBackendNodeId")
+            Self::AccessibilityChildNodePayloadsForNode { .. } => {
+                Some("AccessibilityChildNodePayloadsForNode")
             }
-            Self::AccessibilityChildNodePayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityChildNodePayloadsForBackendNodeId")
-            }
-            Self::AccessibilityPartialTreePayloadsForBackendNodeId { .. } => {
-                Some("AccessibilityPartialTreePayloadsForBackendNodeId")
+            Self::AccessibilityPartialTreePayloadsForNode { .. } => {
+                Some("AccessibilityPartialTreePayloadsForNode")
             }
             Self::AccessibilityTreePayloadsForChildFrame { .. } => {
                 Some("AccessibilityTreePayloadsForChildFrame")
@@ -5639,28 +5736,24 @@ impl RendererPageCommand {
                 Some("AccessibilityNodePayloadForChildFrame")
             }
             Self::OuterHtmlForDocument { .. } => Some("OuterHtmlForDocument"),
-            Self::OuterHtmlForBackendNodeId { .. } => Some("OuterHtmlForBackendNodeId"),
+            Self::OuterHtmlForNode { .. } => Some("OuterHtmlForNode"),
             Self::RenderPageDump { .. } => Some("RenderPageDump"),
             Self::SerializeDocument => Some("SerializeDocument"),
             Self::LayoutMetrics => Some("LayoutMetrics"),
             Self::PublishLayout => Some("PublishLayout"),
+            Self::PrintToPdf(_) => Some("PrintToPdf"),
             Self::CaptureScreenshot(_) => Some("CaptureScreenshot"),
             Self::CaptureScreencastFrame(_) => Some("CaptureScreencastFrame"),
-            Self::ScrollBackendNodeIntoViewIfNeeded { .. } => {
-                Some("ScrollBackendNodeIntoViewIfNeeded")
-            }
+            Self::ScrollNodeIntoViewIfNeeded { .. } => Some("ScrollNodeIntoViewIfNeeded"),
             Self::ClientRectForBackendNodeId { .. } => Some("ClientRectForBackendNodeId"),
-            Self::DocumentGeometryForBackendNodeId { .. } => {
-                Some("DocumentGeometryForBackendNodeId")
-            }
+            Self::DocumentGeometryForNode { .. } => Some("DocumentGeometryForNode"),
             Self::DocumentHitTest { .. } => Some("DocumentHitTest"),
             Self::NodeHasGeometryForBackendNodeId { .. } => Some("NodeHasGeometryForBackendNodeId"),
-            Self::RemoveDocumentBackendNodeId { .. } => Some("RemoveDocumentBackendNodeId"),
+            Self::RemoveDocumentNode { .. } => Some("RemoveDocumentNode"),
             Self::EditDocumentNode { .. } => Some("EditDocumentNode"),
             Self::TriggerAutofill(_) => Some("TriggerAutofill"),
-            Self::ComputedStylePropertiesForBackendNodeId { .. } => {
-                Some("ComputedStylePropertiesForBackendNodeId")
-            }
+            Self::WebMcp { .. } => Some("WebMCP"),
+            Self::ComputedStyleProperties { .. } => Some("ComputedStyleProperties"),
             Self::SetFileInputFilesForBackendNodeId { .. } => {
                 Some("SetFileInputFilesForBackendNodeId")
             }
@@ -5935,38 +6028,8 @@ impl RendererRuntimeEvaluationResult {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RendererCapturedScreenshot {
-    pub mime_type: String,
-    pub width: u32,
-    pub height: u32,
-    pub bytes: Arc<[u8]>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RendererCaptureScreenshotReply {
-    Captured(RendererCapturedScreenshot),
-    LayoutDisabled,
-    NoDocument,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RendererCapturedScreencastFrame {
-    /// Native viewport dimensions before the encoded frame is fitted to limits.
-    pub viewport_size: (u32, u32),
-    pub image: RendererCapturedScreenshot,
-    pub visual_state: RendererVisualStateToken,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RendererCaptureScreencastFrameReply {
-    Captured(RendererCapturedScreencastFrame),
-    Unchanged,
-    LayoutDisabled,
-    NoDocument,
-}
-
 pub enum RendererPageReply {
+    WebMcp(std::result::Result<Option<u64>, moli_page_types::RendererWebMcpError>),
     NativeCommandReady(Box<RendererNativeCommandReadyResponse>),
     NativeCommandPublished,
     ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),
@@ -6001,6 +6064,7 @@ pub enum RendererPageReply {
     DocumentNodeAttributesResolution(RendererDocumentNodeAttributesResolution),
     DocumentNodeTextResolution(RendererDocumentNodeTextResolution),
     DocumentNodePropertyResolution(RendererDocumentNodePropertyResolution),
+    OptionalAccessibilityNodes(Option<Vec<moli_dom::accessibility::AccessibilityNode>>),
     OptionalAccessibilityPayloads(Option<Vec<Value>>),
     OptionalAccessibilityPayload(Option<Value>),
     OptionalAccessibilityPayloadsForObjectId(Option<RendererAccessibilityPayloadsForObjectId>),
@@ -6046,6 +6110,7 @@ pub enum RendererPageReply {
     Usize(usize),
     CookieFacadeSnapshot(Box<RendererPageCookieFacadeSnapshotReply>),
     LayoutMetrics(RendererLayoutMetrics),
+    PrintToPdf(RendererPrintToPdfReply),
     CaptureScreenshot(RendererCaptureScreenshotReply),
     CaptureScreencastFrame(RendererCaptureScreencastFrameReply),
     Unit,
@@ -6122,6 +6187,7 @@ impl RendererPageTable {
             vm_creation_id,
             view_generation,
             page_state: Arc::new(RendererPageState {
+                snapshot_revision: Default::default(),
                 requested_url,
                 navigation_initiator_url: None,
                 navigation_redirected: false,
@@ -6129,11 +6195,13 @@ impl RendererPageTable {
                 navigation_redirect_chain: Vec::new(),
                 final_url,
                 document_title,
+                document_activity: Default::default(),
                 status,
                 headers: Vec::new(),
                 script_execution: Arc::new(ScriptExecutionReport::default()),
                 idle_override: None,
                 service_worker_client_id: 0,
+                document_isolate_identity: 0,
                 dedicated_worker_running_worker_isolate_count: 0,
                 performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
             }),
@@ -6187,6 +6255,12 @@ impl RendererPageTable {
 
     pub(crate) fn record(&self, page_id: PageId) -> Option<RendererPageRecord> {
         self.entry(page_id).and_then(|entry| entry.active_record())
+    }
+
+    pub(super) fn active_vm_creation_id(&self, page_id: PageId) -> Option<u64> {
+        self.entry(page_id)
+            .filter(RendererPageEntry::is_active)
+            .map(|entry| entry.vm_creation_id())
     }
 
     pub(crate) fn len(&self) -> usize {

@@ -699,7 +699,7 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
     let response_url = Url::parse("https://response-clone-pending-stream.test/data.json")
         .expect("response URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -710,10 +710,14 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -760,7 +764,7 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
     )
     .expect("pending fetch clone fan-out should evaluate");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -800,7 +804,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
     let response_url = Url::parse("https://pending-fetch-pipe-through.test/stream.txt")
         .expect("response URL should parse");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -811,10 +815,14 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -857,7 +865,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
     )
     .expect("pending fetch pipeThrough setup should evaluate");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -882,7 +890,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
         .expect("first pending pipeThrough result should evaluate");
     assert_eq!(first, r#"["chunk:O"]"#);
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -917,7 +925,7 @@ fn materialize_response_object_preserves_redirected_slot() {
         .expect("document URL should parse");
     let final_url = Url::parse("https://response-materialize-redirected.test/final.txt")
         .expect("final URL should parse");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
 
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
@@ -928,11 +936,15 @@ fn materialize_response_object_preserves_redirected_slot() {
             let response = crate::network_host::build_fetch_response_object_for_request_mode(
                 scope,
                 &document_url,
-                moli_fetch::RequestMode::Cors,
+                crate::network_host::FetchResponseRequest {
+                    method: "GET",
+                    mode: moli_fetch::RequestMode::Cors,
+                },
                 moli_fetch::Response::from_head_and_text_body(
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 200,
+                        status_text: None,
                         headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -968,7 +980,8 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
             "https://cross-response-materialize-filtered.test/redirect-start?x=%23#hidden",
         )
         .expect("final URL should parse");
-        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+        let context_ptr: *const v8::Global<v8::Context> =
+            &vm.page_default_runtime.context as *const _;
 
         vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
@@ -981,10 +994,11 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
                 let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest { method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 302,
+                            status_text: None,
                         headers: vec![("location".to_owned(), b"target.html".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -1065,7 +1079,8 @@ fn filtered_response_materialization_preserves_urls_across_clone_and_cache() {
             expected_url
         );
 
-        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+        let context_ptr: *const v8::Global<v8::Context> =
+            &vm.page_default_runtime.context as *const _;
         vm.renderer_document_isolate
             .with_entered_renderer_document_isolate(move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1117,7 +1132,7 @@ fn materialize_response_object_rejects_locked_response_body() {
         .expect("locked response setup should evaluate");
     assert_eq!(state, "true|false");
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
     vm.renderer_document_isolate
         .with_entered_renderer_document_isolate(move |isolate| {
             let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -1384,4 +1399,120 @@ fn initializer_pairs_use_inner_iterators_and_convert_extra_elements() {
 })()
 "#).unwrap();
     assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_initializer_unions_convert_platform_objects_without_iterators_as_records() {
+    let mut vm = new_storage_test_vm("https://initializer-record.test/");
+    let result = vm.eval(r#"
+(() => {
+  for (const Constructor of [Headers, URLSearchParams]) {
+    const url = new URL('https://initializer-record.test/path?query=value');
+    Object.defineProperty(url, Symbol.toPrimitive, {value() {
+      throw new Error('URL object must use record conversion');
+    }});
+    if (Array.from(new Constructor(url)).length !== 0) throw new Error('empty URL record');
+    url['x-record'] = 'record';
+    if (JSON.stringify(Array.from(new Constructor(url))) !== '[["x-record","record"]]') {
+      throw new Error(Constructor.name + ' must use own URL properties');
+    }
+    for (const factory of [() => new Headers(), () => new URLSearchParams(), () => new FormData()]) {
+      for (const value of [undefined, null]) {
+        const input = factory();
+        let iteratorReads = 0;
+        Object.defineProperty(input, Symbol.iterator, {enumerable: true, get() {
+          iteratorReads++;
+          return value;
+        }});
+        let caught;
+        try { new Constructor(input); } catch (error) { caught = error; }
+        if (!(caught instanceof TypeError) || iteratorReads !== 1) {
+          throw new Error(Constructor.name + ' must reject the enumerable Symbol key before reading its value');
+        }
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
+    use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
+
+    let vm = new_storage_test_vm("https://null-response.test/");
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_runtime.context as *const _;
+    let host = vm._context_host.clone();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(move |isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let document_url = Url::parse("https://null-response.test/").unwrap();
+            for (method, status) in [
+                ("HEAD", 200), ("HEAD", 302), ("CONNECT", 200),
+                ("GET", 101), ("GET", 103), ("GET", 204), ("GET", 205), ("GET", 304),
+            ] {
+                for opaque in [false, true] {
+                    for source in ["response", "bytes", "subresource", "stream", "preload"] {
+                        let request = FetchResponseRequest {
+                            method,
+                            mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
+                        };
+                        let head = moli_fetch::ResponseHead {
+                            status_text: None,
+                            final_url: Url::parse("https://cross-null-response.test/data").unwrap(),
+                            status,
+                            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
+                            request_cookie_report: None,
+                            cookie_set_reports: Vec::new(),
+                            redirected: false,
+                            redirect_chain: Vec::new(),
+                            from_cache: false,
+                            negotiated_http_version: None,
+                        };
+                        let id = crate::network_host::new_network_body_source_id();
+                        let response = match source {
+                            "response" => crate::network_host::build_fetch_response_object_for_request_mode(
+                                scope, &document_url, request,
+                                moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
+                            ),
+                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
+                                scope, &document_url, request, head,
+                                moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
+                                opaque.then_some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+                            ),
+                            "subresource" => crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode(
+                                scope, &document_url, request, head,
+                                crate::protocol_types::SubresourceResponseBody::from_bytes(b"discard me".to_vec()),
+                            ),
+                            "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            _ => unreachable!(),
+                        };
+                        assert!(response.get(scope, v8str(scope, "body").into()).unwrap().is_null(),
+                            "{method}/{status}/{opaque}/{source}");
+                        assert!(!host.borrow().pending_network_body_sources.contains_key(&id));
+                        crate::network_host::enqueue_pending_network_body_chunk(scope, id, b"late bytes".to_vec());
+                        crate::network_host::error_pending_network_body_stream(scope, id, "late error".to_owned());
+                        crate::network_host::close_pending_network_body_stream(scope, id);
+                        match crate::network_host::materialize_response_object_body(scope, response, "null body") {
+                            MaterializedResponseBody::Ready(bytes) => assert!(bytes.is_empty()),
+                            _ => panic!("null internal body must materialize immediately: {method}/{status}/{opaque}/{source}"),
+                        }
+                        assert!(host.borrow().pending_network_body_sources.is_empty());
+                        assert!(host.borrow().pending_network_body_clones.is_empty());
+                    }
+                }
+            }
+            Ok(())
+        })
+        .expect("null response body checks should complete");
 }

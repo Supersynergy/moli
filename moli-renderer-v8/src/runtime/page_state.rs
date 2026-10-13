@@ -1,5 +1,26 @@
 use super::*;
 
+/// Orders successful Page VM captures within one renderer owner.
+///
+/// The first component orders replacement VMs, while every successful capture
+/// advances the second component, including nested captures.
+/// Callers must establish common renderer ownership before comparing revisions;
+/// creation IDs from different renderer owners do not define an ordering.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RendererPageStateRevision {
+    vm_creation_id: u64,
+    capture_sequence: u64,
+}
+
+impl RendererPageStateRevision {
+    pub(crate) fn new(vm_creation_id: u64, capture_sequence: u64) -> Self {
+        Self {
+            vm_creation_id,
+            capture_sequence,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RendererPageRecord {
     pub requested_url: Url,
@@ -9,6 +30,7 @@ pub struct RendererPageRecord {
 
 #[derive(Debug, Clone)]
 pub struct RendererPageState {
+    pub snapshot_revision: RendererPageStateRevision,
     pub requested_url: Url,
     pub navigation_initiator_url: Option<Url>,
     pub navigation_redirected: bool,
@@ -16,11 +38,13 @@ pub struct RendererPageState {
     pub navigation_redirect_chain: Vec<crate::protocol_types::NavigationRedirect>,
     pub final_url: Url,
     pub document_title: String,
+    pub document_activity: moli_page_types::DocumentActivity,
     pub status: u16,
     pub headers: Vec<(String, Vec<u8>)>,
     pub script_execution: Arc<ScriptExecutionReport>,
     pub idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub service_worker_client_id: u64,
+    pub document_isolate_identity: usize,
     pub dedicated_worker_running_worker_isolate_count: usize,
     pub performance_metric_snapshot: RendererPerformanceMetricSnapshot,
 }
@@ -46,6 +70,7 @@ impl RendererPageState {
         }
 
         Arc::new(Self {
+            snapshot_revision: state_capture.snapshot_revision,
             requested_url,
             navigation_initiator_url,
             navigation_redirected,
@@ -53,11 +78,13 @@ impl RendererPageState {
             navigation_redirect_chain,
             final_url: state_capture.final_url,
             document_title: state_capture.document_title,
+            document_activity: state_capture.document_activity,
             status,
             headers,
             script_execution: state_capture.report,
             idle_override: state_capture.idle_override,
             service_worker_client_id: state_capture.service_worker_client_id,
+            document_isolate_identity: state_capture.document_isolate_identity,
             dedicated_worker_running_worker_isolate_count: state_capture
                 .dedicated_worker_running_worker_isolate_count,
             performance_metric_snapshot: state_capture.performance_metric_snapshot,

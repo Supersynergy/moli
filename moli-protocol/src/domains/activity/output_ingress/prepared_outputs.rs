@@ -70,11 +70,18 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         source_residence: moli_core::RendererOutputResidenceIdentity,
-        source_renderer_agent: moli_core::page::RendererDevToolsAgentToken,
         observation: &RendererProtocolObservation,
     ) -> Self {
         let mut prepared = Self::empty();
         match observation {
+            RendererProtocolObservation::WebMcp(observation) => {
+                crate::domains::web_mcp::append_observation(
+                    conn,
+                    owner,
+                    observation,
+                    &mut prepared,
+                );
+            }
             RendererProtocolObservation::MainDocumentCommit(commit) => {
                 crate::domains::page::append_renderer_main_document_commit_to_output_sink(
                     commit.clone(),
@@ -102,14 +109,12 @@ impl PreparedProtocolOutputs {
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::DomMutations(batch) => {
-                crate::domains::dom::DomPreparedOutputs::
-                    from_renderer_dom_mutation_event_batches_for_stream(
-                        conn,
-                        owner,
-                        source_renderer_agent,
-                        std::slice::from_ref(batch),
-                    )
-                    .append_to_output_sink(&mut prepared);
+                crate::domains::dom::DomPreparedOutputs::from_renderer_dom_mutation_event_batches(
+                    conn,
+                    owner,
+                    std::slice::from_ref(batch),
+                )
+                .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
                 let worker_output = match source_residence {
@@ -221,6 +226,23 @@ impl PreparedProtocolOutputs {
                     conn, owner, dialog,
                 )
                 .append_to_javascript_dialog_output_sink(&mut prepared);
+            }
+            RendererOwnerAction::CloseAuxiliaryWindow(window) => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_auxiliary_window_close(
+                    conn, owner, window,
+                )
+                .append_to_auxiliary_window_close_output_sink(&mut prepared);
+            }
+            RendererOwnerAction::NavigateAuxiliaryWindow {
+                window,
+                url,
+                kind,
+                document_response,
+            } => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_auxiliary_window_navigation(
+                    conn, owner, window, url, kind, document_response,
+                )
+                .append_to_auxiliary_window_navigation_output_sink(&mut prepared);
             }
             RendererOwnerAction::Popup(activation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_popup_activation(
@@ -459,7 +481,7 @@ impl PreparedProtocolOutputs {
             slot.project_async(
                 conn,
                 &mut ProtocolOutputProjectionContext::new(owner, command_context),
-                Some(&mut self.payloads),
+                &mut self.payloads,
             )
             .await;
             if let Some(started) = trace_started {

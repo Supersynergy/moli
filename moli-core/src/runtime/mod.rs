@@ -40,15 +40,16 @@ pub use fetch_deadline::{FetchDeadline, FetchReadinessTimeout, FetchTimeoutPhase
 pub use moli_renderer_v8::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
-    RendererDocumentReplacement, RendererLifecycleDecider, RendererLifecycleDecision,
-    RendererLifecycleSnapshot, RendererPageReservationToken, RendererReservedServiceWorkerClient,
-    RendererServiceWorkerMainResourceFetch, RendererSharedWorkerRuntimeDiagnostics,
+    RendererDocumentPreparationTarget, RendererLifecycleDecider, RendererLifecycleDecision,
+    RendererLifecycleSnapshot, RendererPageReplacementTarget, RendererPageReservationToken,
+    RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
+    RendererSharedWorkerRuntimeDiagnostics,
 };
 pub use navigation_engine::{
-    BuiltDocumentPage, CommittedDocumentResourceSource, NavigationEngine,
-    NavigationPageStorageHandles, NavigationResourceStorageHandles, NavigationRuntimeConfig,
-    PendingBuiltDocumentPage, PreparedDocumentPage, PreparedDocumentPageCommitConfiguration,
-    PreparedDocumentPageCommitPermit,
+    BuiltDocumentPage, CommittedDocumentPageReplacement, CommittedDocumentResourceSource,
+    NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
+    NavigationRuntimeConfig, PendingBuiltDocumentPage, PreparedDocumentPage,
+    PreparedDocumentPageCommitConfiguration, PreparedDocumentPageCommitPermit,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -58,6 +59,13 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 pub enum RawDocumentFetchPolicy {
     /// Read the response body and return [`FetchedDocument::Raw`].
     Materialize,
+    /// Return response metadata with an empty body and cancel the download.
+    /// Callers can use the metadata to select an error without reading a body
+    /// that their output format cannot consume.
+    MetadataOnly,
+    /// Read the body only for statuses below the threshold. Otherwise return
+    /// response metadata with an empty body and cancel the download.
+    MaterializeBelowStatus(u16),
     /// Require a renderable Page, rejecting raw responses from their headers.
     RequirePage,
 }
@@ -74,10 +82,14 @@ impl fmt::Display for RawDocumentPageRequired {
 
 impl std::error::Error for RawDocumentPageRequired {}
 
-fn ensure_raw_document_materialization_allowed(policy: RawDocumentFetchPolicy) -> Result<()> {
-    match policy {
-        RawDocumentFetchPolicy::Materialize => Ok(()),
-        RawDocumentFetchPolicy::RequirePage => Err(anyhow::Error::new(RawDocumentPageRequired)),
+impl RawDocumentFetchPolicy {
+    fn should_materialize_body(self, status: u16) -> Result<bool> {
+        match self {
+            Self::Materialize => Ok(true),
+            Self::MetadataOnly => Ok(false),
+            Self::MaterializeBelowStatus(threshold) => Ok(status < threshold),
+            Self::RequirePage => Err(anyhow::Error::new(RawDocumentPageRequired)),
+        }
     }
 }
 
@@ -283,7 +295,7 @@ impl Browser {
             JsRuntime::initialize_with_browser_context_owner_access(&browser_context_access)?;
         js_runtime
             .renderer_owner_handle()
-            .configure_layout_policy(config.layout_policy())?;
+            .configure_layout_configuration(config.layout_configuration())?;
         let lifetime_owner = Rc::new(BrowserLifetimeOwner {
             js_runtime: Some(js_runtime.clone()),
             browser_context_owner,
@@ -562,9 +574,12 @@ impl Browser {
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
             if response_headers_indicate_raw_document(&response.headers) {
-                ensure_raw_document_materialization_allowed(raw_document_policy)?;
-                let raw_response =
-                    RawResponse::from_head_and_body(response.head(), response.clone_body_bytes());
+                let body = if raw_document_policy.should_materialize_body(response.status)? {
+                    response.clone_body_bytes()
+                } else {
+                    Vec::new()
+                };
+                let raw_response = RawResponse::from_head_and_body(response.head(), body);
                 return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
                     raw_response,
                 ))));
@@ -608,7 +623,12 @@ impl Browser {
             )
             .await?;
         if response_headers_indicate_raw_document(&response.headers) {
-            ensure_raw_document_materialization_allowed(raw_document_policy)?;
+            if !raw_document_policy.should_materialize_body(response.status)? {
+                let raw_response = RawResponse::from_head_and_body(response.head(), Vec::new());
+                return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
+                    raw_response,
+                ))));
+            }
             // Binary/download-like main resources have no DOM lifecycle
             // milestones, but materializing a RawDocument still consumes the
             // caller-owned absolute fetch-readiness budget.
@@ -1170,7 +1190,9 @@ impl Browser {
             None,
             stage,
         );
-        create_page_request.script_execution_disabled = self.config.script_execution_disabled();
+        create_page_request
+            .document_settings
+            .script_execution_disabled = self.config.script_execution_disabled();
         create_page_request.wpt_extensions_enabled = self.config.wpt_extensions_enabled();
         create_page_request.reply_boundary = reply_boundary;
         create_page_request.lifecycle_decider = lifecycle_decider;
@@ -1309,7 +1331,10 @@ impl Browser {
                     indexed_db_manager: Some(self.partition.weak_indexed_db_manager()),
                     storage_bucket_store: Some(self.partition.storage_bucket_store()),
                     document_start_scripts,
-                    script_execution_disabled: self.config.script_execution_disabled(),
+                    document_settings: moli_page_types::DocumentSettings {
+                        script_execution_disabled: self.config.script_execution_disabled(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             )

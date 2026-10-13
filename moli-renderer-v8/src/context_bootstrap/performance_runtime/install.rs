@@ -129,7 +129,7 @@ struct EventCountsObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
 struct PerformancePrototypeMethodsDeclaration {
     #[webapi(method, length = 0, callback = performance_now_callback)]
     now: (),
@@ -160,7 +160,7 @@ struct PerformancePrototypeMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Performance, enumerable)]
+#[webapi(interface = web_api_interfaces::Performance, enumerable, receiver)]
 struct PerformancePrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = super::memory::performance_memory_getter)]
     memory: (),
@@ -439,10 +439,10 @@ pub(super) fn apply_pending_window_performance_state<'s>(
 pub(crate) fn finalize_performance_observer_realm_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     constructor: v8::Local<'s, v8::Object>,
-) {
+) -> anyhow::Result<()> {
     PerformanceObserverConstructorDeclaration::new(PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES)
         .initialize(scope, constructor)
-        .expect("PerformanceObserver constructor declaration should initialize");
+        .map_err(|error| anyhow::anyhow!("failed to finalize PerformanceObserver: {error}"))
 }
 
 fn performance_navigation_timing_type(navigation_type: &str) -> &'static str {
@@ -1042,10 +1042,6 @@ fn performance_attribute_getter_callback<'s>(
         return;
     };
     if let Some(subobject) = super::lazy_subobjects::PerformanceSubobject::from_slot(slot) {
-        if performance_slot_value(scope, args.this(), PERFORMANCE_TIME_ORIGIN_SLOT).is_none() {
-            rv.set_undefined();
-            return;
-        }
         match super::lazy_subobjects::ensure_performance_subobject(scope, args.this(), subobject) {
             Ok(value) => rv.set(value),
             Err(error) => throw_type_error(scope, &error.to_string()),

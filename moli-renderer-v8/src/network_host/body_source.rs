@@ -1,10 +1,11 @@
 use super::*;
 use crate::context_bootstrap::{
-    close_stream, enqueue_byte_chunk, error_stream, readable_stream_has_pipe_owner,
+    close_stream, enqueue_byte_chunk, error_stream, readable_stream_error,
+    readable_stream_has_pipe_owner,
 };
 use crate::protocol_types::SubresourceResponseBody;
 use crate::types::NetworkBodySourceId;
-use crate::util::{get_private_value, set_private_value};
+use crate::util::{RealmObjectHandle, get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::worker::get_worker_state;
 use std::collections::{HashMap, HashSet};
@@ -244,7 +245,7 @@ enum PendingBodyMaterializationKind {
 }
 
 pub(crate) struct PendingBodyMaterialization {
-    resolver: v8::Global<v8::PromiseResolver>,
+    resolver: RealmObjectHandle,
     kind: PendingBodyMaterializationKind,
 }
 
@@ -261,8 +262,45 @@ pub(crate) struct PendingNetworkBodySourceState {
     pull_requested: bool,
     closed: bool,
     error: Option<String>,
-    error_reason: Option<v8::Global<v8::Value>>,
     materializations: Vec<PendingBodyMaterialization>,
+}
+
+impl PendingNetworkBodySourceState {
+    fn error_reason<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        self.error.as_ref()?;
+        // The stream owns the original rejection value, including undefined.
+        // This native lookup must not keep that value or its realm alive.
+        let stream = self.stream.to_local(scope)?;
+        readable_stream_error(scope, stream)
+    }
+}
+
+pub(crate) fn retain_pending_network_body_state_in_retired_realm(
+    scope: &mut v8::PinScope<'_, '_>,
+    include_shared_default_world: bool,
+) {
+    let context = scope.get_current_context();
+    let Some(host) = context_host_mut(scope) else {
+        return;
+    };
+    // Retained Responses keep their buffered bytes. Pending body-method
+    // resolvers must not in turn root the retired realm through native state.
+    for state in host.pending_network_body_sources.values_mut() {
+        for materialization in &mut state.materializations {
+            if include_shared_default_world
+                || materialization
+                    .resolver
+                    .to_local(scope)
+                    .and_then(|resolver| resolver.get_creation_context(scope))
+                    == Some(context)
+            {
+                materialization.resolver.retain_in_realm(scope);
+            }
+        }
+    }
 }
 
 enum PendingBodyRejection {
@@ -562,7 +600,6 @@ fn pending_network_body_source_and_stream<'s>(
                 pull_requested: false,
                 closed: false,
                 error: None,
-                error_reason: None,
                 materializations: Vec::new(),
             },
         );
@@ -580,7 +617,6 @@ fn pending_network_body_source_and_stream<'s>(
                     pull_requested: false,
                     closed: false,
                     error: None,
-                    error_reason: None,
                     materializations: Vec::new(),
                 },
             );
@@ -907,7 +943,6 @@ fn error_pending_network_body_stream_with_clone_ids<'s>(
         }
         state.closed = true;
         state.error = Some(error_text.to_owned());
-        state.error_reason = Some(v8::Global::new(scope, reason));
         if let Some(stream) = state.stream.to_local(scope) {
             error_stream(scope, stream, reason);
         }
@@ -926,7 +961,6 @@ fn error_pending_network_body_stream_with_clone_ids<'s>(
             }
             clone.closed = true;
             clone.error = Some(error_text.to_owned());
-            clone.error_reason = Some(v8::Global::new(scope, reason));
             if let Some(stream) = clone.stream.to_local(scope) {
                 error_stream(scope, stream, reason);
             }
@@ -1200,9 +1234,8 @@ fn clone_pending_network_body_source_in_maps(
         outcome.close_now = original.closed;
         outcome.error_now = original.error.clone();
         outcome.error_reason_now = original
-            .error_reason
-            .as_ref()
-            .map(|reason| v8::Global::new(scope, v8::Local::new(scope, reason)));
+            .error_reason(scope)
+            .map(|reason| v8::Global::new(scope, reason));
         if let Some(clone) = sources.get_mut(&clone_id) {
             append_pending_body_state_bytes(scope, clone, &snapshot);
         }
@@ -1510,14 +1543,8 @@ fn inspect_pending_body_source_for_materialization<'s>(
         if let Some(error_text) = state.error.clone() {
             *rejected = Some(
                 state
-                    .error_reason
-                    .as_ref()
-                    .map(|reason| {
-                        PendingBodyRejection::Reason(v8::Global::new(
-                            scope,
-                            v8::Local::new(scope, reason),
-                        ))
-                    })
+                    .error_reason(scope)
+                    .map(|reason| PendingBodyRejection::Reason(v8::Global::new(scope, reason)))
                     .unwrap_or(PendingBodyRejection::Message(error_text)),
             );
             sources.remove(&id);
@@ -1526,7 +1553,7 @@ fn inspect_pending_body_source_for_materialization<'s>(
             sources.remove(&id);
         } else {
             state.materializations.push(PendingBodyMaterialization {
-                resolver: v8::Global::new(scope, resolver),
+                resolver: RealmObjectHandle::new(scope, resolver.into()),
                 kind,
             });
         }
@@ -1770,7 +1797,11 @@ fn resolve_pending_body_materializations(
     let mut bytes: Vec<u8> = take_pending_network_body_source_bytes(scope, id).unwrap_or_default();
     let materialization_count = materializations.len();
     for (index, materialization) in materializations.into_iter().enumerate() {
-        let resolver = v8::Local::new(scope, &materialization.resolver);
+        let Some(resolver) = materialization.resolver.to_local(scope) else {
+            continue;
+        };
+        // The private handle is populated only from a PromiseResolver.
+        let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
         // Most body sources have exactly one pending materialization. Move the
         // completed buffer into that consumer and clone only when fan-out is
         // actually needed.
@@ -1808,7 +1839,11 @@ fn reject_pending_body_materializations_with_reason<'s>(
     reason: v8::Local<'s, v8::Value>,
 ) {
     for materialization in materializations {
-        let resolver = v8::Local::new(scope, &materialization.resolver);
+        let Some(resolver) = materialization.resolver.to_local(scope) else {
+            continue;
+        };
+        // The private handle is populated only from a PromiseResolver.
+        let resolver = unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(resolver) };
         let _ = resolver.reject(scope, reason);
     }
 }

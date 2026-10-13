@@ -1,16 +1,19 @@
-use parley::{Affinity, Cursor, PositionedLayoutItem, Selection};
+use parley::{
+    Affinity, PositionedLayoutItem,
+    editing::{Cursor, Selection},
+};
 
 use super::{PaintProjectionMetrics, cull::rects_intersect};
 use crate::{
     LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
-    inline::{InlineFormattingContext, InlineObjectRole, InlinePaintBounds, InlineSelection},
+    inline::{InlineFormattingContext, InlinePaintBounds, InlineSelection},
 };
 
 const SELECTION_COLOR: PaintColor = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
 // These expansion ratios and the 0.3 px cap follow Blitz's AnyRender text
-// painter at d788124a. Moli records them only when Fontique/Parley asks
-// for faux bold and the computed font-synthesis-weight permits it.
+// painter at d788124a. Moli combines the matched face's synthesis metadata with
+// the computed CSS weight threshold and font-synthesis-weight permission.
 const SYNTHETIC_EMBOLDEN_X_EM: f32 = 0.015_125;
 const SYNTHETIC_EMBOLDEN_Y_EM: f32 = 0.012_1;
 const MAX_SYNTHETIC_EMBOLDEN_PX: f32 = 0.3;
@@ -113,8 +116,12 @@ fn project_text_phase<N>(
         );
     }
 
-    let mut active_inline_boxes = Vec::new();
+    let text: Option<std::sync::Arc<str>> = (snapshot.retain_text_semantics
+        && phase == TextPaintPhase::Foreground)
+        .then(|| std::sync::Arc::from(context.text.as_str()));
     for (line_index, line) in text_layout.lines().enumerate() {
+        let mut mapped_run = None;
+        let mut cluster_ranges = Vec::new().into_iter();
         metrics.text_line_count = metrics.text_line_count.saturating_add(1);
         let line_is_culled =
             local_cull.is_some_and(|cull| {
@@ -136,41 +143,37 @@ fn project_text_phase<N>(
             });
         if line_is_culled {
             metrics.culled_text_line_count = metrics.culled_text_line_count.saturating_add(1);
-            // A background-clip:text replay tracks structural inline start/end
-            // markers across lines. Even when a line's glyph ink is culled,
-            // retain that tiny state transition so a later visible line uses
-            // the correct InlineBox mask scope.
-            if mask_scope.is_some() {
-                for item in line.items() {
-                    if let PositionedLayoutItem::InlineBox(positioned) = item {
-                        update_active_inline_boxes(
-                            context,
-                            positioned.id,
-                            &mut active_inline_boxes,
-                        );
-                    }
-                }
-            }
             continue;
         }
         let line_placement = context.line_placements.get(line_index);
         for (item_index, item) in line.items().enumerate() {
             let glyph_run = match item {
-                PositionedLayoutItem::InlineBox(positioned) => {
-                    update_active_inline_boxes(context, positioned.id, &mut active_inline_boxes);
-                    continue;
-                }
+                PositionedLayoutItem::InlineBox(_) => continue,
                 PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run,
             };
+            let run = glyph_run.run();
+            if text.is_some() && mapped_run != Some(run.index()) {
+                cluster_ranges = glyph_cluster_ranges(run).into_iter();
+                mapped_run = Some(run.index());
+            }
+            // Advance even for masked/hidden style runs, so styled portions of
+            // the same Parley run keep their original cluster associations.
+            let clusters = cluster_ranges
+                .by_ref()
+                .take(if text.is_some() {
+                    glyph_run.glyphs().count()
+                } else {
+                    0
+                })
+                .collect();
             if let Some(TextClipMaskScope::InlineBox(target)) = mask_scope
-                && !active_inline_boxes.contains(&target)
+                && !context.style_is_within_box(usize::from(glyph_run.style_index()), target)
             {
                 continue;
             }
             if !glyph_run.style().brush.paint {
                 continue;
             }
-            let run = glyph_run.run();
             let vertical_offset = line_placement
                 .map(|placement| placement.item_offset(item_index))
                 .unwrap_or_default();
@@ -185,9 +188,11 @@ fn project_text_phase<N>(
             if glyphs.is_empty() {
                 continue;
             }
-            let font = snapshot.intern_font(run.font());
+            let font = snapshot.intern_font(&run.font().font);
             let synthesis = run.synthesis();
-            let glyph_embolden = if glyph_run.style().brush.synthetic_bold && synthesis.embolden() {
+            let glyph_embolden = if glyph_run.style().brush.synthetic_bold
+                && synthesis.embolden_with_threshold(0.0)
+            {
                 let font_size = run.font_size().max(0.0);
                 crate::PaintPoint::new(
                     (SYNTHETIC_EMBOLDEN_X_EM * font_size).min(MAX_SYNTHETIC_EMBOLDEN_PX),
@@ -199,7 +204,11 @@ fn project_text_phase<N>(
             let owned_run = PaintGlyphRun {
                 font,
                 font_size: run.font_size(),
-                normalized_coords: run.normalized_coords().to_vec(),
+                normalized_coords: run
+                    .normalized_coords()
+                    .iter()
+                    .map(|coord| coord.to_bits())
+                    .collect(),
                 color: if phase == TextPaintPhase::ClipMask {
                     PaintColor::BLACK
                 } else {
@@ -208,6 +217,10 @@ fn project_text_phase<N>(
                 glyph_skew_radians: synthesis.skew().map(f32::to_radians),
                 glyph_embolden,
                 glyphs,
+                text: text.as_ref().map(|text| crate::PaintTextSemantics {
+                    text: text.clone(),
+                    clusters,
+                }),
                 transform,
             };
             let brush = &glyph_run.style().brush;
@@ -222,7 +235,7 @@ fn project_text_phase<N>(
                 }
             }
 
-            let metrics = run.metrics();
+            let metrics = run.font_metrics();
             let baseline = origin_y + glyph_run.baseline() + vertical_offset;
             let x = origin_x + glyph_run.offset();
             let width = glyph_run.advance().max(0.0);
@@ -277,19 +290,28 @@ fn project_text_phase<N>(
     }
 }
 
-fn update_active_inline_boxes(
-    context: &InlineFormattingContext,
-    object_id: u64,
-    active: &mut Vec<LayoutBoxId>,
-) {
-    let Some(object) = context.object(object_id) else {
-        return;
-    };
-    active.clear();
-    active.extend(object.ancestors.iter().copied());
-    if object.role == InlineObjectRole::StartEdge {
-        active.push(object.box_id);
+fn glyph_cluster_ranges(
+    run: &parley::Run<'_, crate::stylo_to_parley::TextBrush>,
+) -> Vec<std::ops::Range<usize>> {
+    // Join ligature continuations in logical order first: in RTL their
+    // visual order puts the continuation *before* the glyph-bearing cluster.
+    let mut atoms: Vec<(std::ops::Range<usize>, usize)> = Vec::new();
+    for cluster in run.clusters() {
+        if cluster.is_ligature_continuation() {
+            if let Some((range, _)) = atoms.last_mut() {
+                range.end = cluster.text_range().end;
+            }
+        } else {
+            atoms.push((cluster.text_range(), cluster.glyphs().count()));
+        }
     }
+    if run.is_rtl() {
+        atoms.reverse();
+    }
+    atoms
+        .into_iter()
+        .flat_map(|(range, count)| std::iter::repeat_n(range, count))
+        .collect()
 }
 
 fn project_selection(

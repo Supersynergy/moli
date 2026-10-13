@@ -73,6 +73,7 @@ pub(super) fn service_worker_network_fallback_request_for_job(
     let mut request = job
         .request
         .clone()
+        .with_use_cors_preflight(job.metadata.use_cors_preflight)
         .with_browser_request_metadata(service_worker_fetch_browser_metadata(
             job.network_context.resource_type,
         ))
@@ -102,6 +103,7 @@ fn service_worker_fetch_stream_response_head(
     response_head: &MaterializedServiceWorkerFetchResponseHead,
 ) -> moli_fetch::ResponseHead {
     moli_fetch::ResponseHead {
+        status_text: Some(response_head.status_text.clone()),
         final_url: response_head
             .final_url
             .clone()
@@ -600,6 +602,7 @@ impl ServiceWorkerRuntimeService {
         let response_filter = service_worker_fetch_response_filter(&response);
         let navigation_response = crate::protocol_types::NavigationResponse::from_head_and_body(
             moli_fetch::ResponseHead {
+                status_text: Some(response.status_text.clone()),
                 final_url,
                 status: response.status,
                 headers: response.headers,
@@ -1286,6 +1289,49 @@ mod tests {
     }
 
     #[test]
+    fn xhr_upload_listener_preflight_survives_service_worker_network_fallback() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(211);
+        let completion_queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        insert_active_fetch_job(
+            &service,
+            event_id,
+            ServiceWorkerVersionId(1),
+            &RendererServiceWorkerRunIdentity::fresh(),
+            311,
+            completion_queue.sender(),
+        );
+        let mut job = service
+            .inner
+            .state
+            .lock()
+            .pending_fetch_jobs
+            .remove(&event_id)
+            .unwrap();
+        job.network_context.resource_type = crate::types::SubresourceResourceType::Xhr;
+        job.metadata.use_cors_preflight = true;
+        let request = service_worker_network_fallback_request_for_job(&job);
+        assert!(request.use_cors_preflight());
+        let request_origin = moli_url::WebOrigin::from_url(&job.network_context.document_url);
+        let request_url = url("https://other.test/upload");
+        let preflight_headers = crate::network_host::cors_preflight_request_headers(
+            !request_origin.same_origin(&moli_url::WebOrigin::from_url(&request_url)),
+            &request_url,
+            "POST",
+            &[],
+            request.use_cors_preflight(),
+        )
+        .expect("upload listener should force the fallback's simple POST through OPTIONS");
+        assert_eq!(
+            preflight_headers,
+            vec![(
+                "Access-Control-Request-Method".to_owned(),
+                "POST".to_owned()
+            )]
+        );
+    }
+
+    #[test]
     fn streaming_fetch_events_project_to_subresource_stream_queue() {
         let service = new_service_worker_runtime_service();
         let event_id = ServiceWorkerEventId(211);
@@ -1316,6 +1362,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         });
@@ -1400,6 +1447,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         });
@@ -2961,6 +3009,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });
@@ -3028,6 +3077,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });
@@ -3092,6 +3142,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });

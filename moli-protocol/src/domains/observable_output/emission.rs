@@ -35,10 +35,10 @@ async fn project_observable_output_async(
     step: ObservableOutputProjectionStep,
     conn: &mut CdpConnection,
     context: &mut ProtocolOutputProjectionContext<'_>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     let owner = context.owner().clone();
-    if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::observable_mut) {
+    if let Some(slot) = prepared_outputs.observable_mut() {
         slot.emit_activity_background_events_async(
             step,
             conn,
@@ -54,7 +54,7 @@ macro_rules! observable_projector {
         pub(in crate::domains) async fn $name(
             conn: &mut CdpConnection,
             context: &mut ProtocolOutputProjectionContext<'_>,
-            prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+            prepared_outputs: &mut ProtocolOutputPayloads,
         ) {
             project_observable_output_async(
                 ObservableOutputProjectionStep::$step,

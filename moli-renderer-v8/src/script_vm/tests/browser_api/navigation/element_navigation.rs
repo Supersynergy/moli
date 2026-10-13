@@ -1,5 +1,568 @@
 use super::*;
 
+#[test]
+fn anchor_navigation_fires_once_when_click_is_borrowed_from_child_realm() {
+    for target in ["", "_sElF", "_ToP", "_PARENT"] {
+        for use_child_realm in [true, false] {
+            for cancel_top in [false, true] {
+                let mut vm = new_parsed_test_vm(
+                    "https://anchor-navigation-target.test/source",
+                    "<!doctype html><body></body>",
+                );
+                let description = format!(
+                    "target={target:?} child_realm={use_child_realm} cancel_top={cancel_top}"
+                );
+                let result = vm
+                    .eval(&format!(
+                        r#"
+                        (() => {{
+                            const seen = [];
+                            const frame = document.createElement('iframe');
+                            document.body.appendChild(frame);
+                            frame.srcdoc = '<body></body>';
+                            frame.contentWindow.navigation.onnavigate = event => {{
+                                seen.push('child');
+                                event.preventDefault();
+                            }};
+                            const anchor = document.createElement('a');
+                            anchor.href = 'https://anchor-navigation-target.test/destination';
+                            anchor.target = {target:?};
+                            document.body.appendChild(anchor);
+                            navigation.onnavigate = event => {{
+                                seen.push([
+                                    'top',
+                                    event.target === navigation,
+                                    event.currentTarget === navigation,
+                                    event.sourceElement === anchor,
+                                    event.destination.url
+                                ]);
+                                event.signal.onabort = () => seen.push('top-abort');
+                                if ({cancel_top}) event.preventDefault();
+                            }};
+                            navigation.onnavigateerror = () => seen.push('top-error');
+                            const realm = {use_child_realm} ? frame.contentWindow : window;
+                            if ({use_child_realm} && realm.HTMLElement === HTMLElement)
+                                throw new Error('click must use the child realm');
+                            realm.HTMLElement.prototype.click.call(anchor);
+                            return JSON.stringify(seen);
+                        }})()
+                        "#,
+                    ))
+                    .expect(&description);
+                let expected_url = "https://anchor-navigation-target.test/destination";
+                let mut expected = vec![serde_json::json!(["top", true, true, true, expected_url])];
+                if cancel_top {
+                    expected.extend([
+                        serde_json::json!("top-abort"),
+                        serde_json::json!("top-error"),
+                    ]);
+                }
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                    serde_json::json!(expected),
+                    "{description}"
+                );
+                let pending = vm.take_pending_location_navigation_with_seed();
+                if cancel_top {
+                    assert!(pending.is_none(), "{description}");
+                } else {
+                    assert_eq!(
+                        pending.expect(&description).url.as_str(),
+                        expected_url,
+                        "{description}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn child_navigation_to_top_fires_once_and_honors_cancel_or_intercept() {
+    for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
+        for api in ["click", "open"] {
+            for use_child_realm in [true, false] {
+                for action in ["allow", "cancel", "intercept"] {
+                    let mut vm = new_parsed_test_vm(
+                        "https://anchor-navigation-target.test/source",
+                        "<!doctype html><body></body>",
+                    );
+                    let description = format!(
+                        "depth={depth} target={target} api={api} child_realm={use_child_realm} action={action}"
+                    );
+                    let result = vm
+                    .eval(&format!(
+                        r#"
+                        (() => {{
+                            const seen = globalThis.__lmTargetNavigationLog = [];
+                            const from = navigation.currentEntry;
+                            let source = document;
+                            for (let i = 0; i < {depth}; ++i) {{
+                                const frame = source.createElement('iframe');
+                                source.body.appendChild(frame);
+                                frame.srcdoc = '<body></body>';
+                                source = frame.contentDocument;
+                                frame.contentWindow.navigation.onnavigate = event => {{
+                                    seen.push('child:' + i);
+                                    event.preventDefault();
+                                }};
+                            }}
+                            const anchor = source.createElement('a');
+                            anchor.href = 'https://anchor-navigation-target.test/destination';
+                            anchor.target = {target:?};
+                            source.body.appendChild(anchor);
+                            const initialHistoryLength = history.length;
+                            navigation.onnavigate = event => {{
+                                seen.push([
+                                    'top',
+                                    event instanceof NavigateEvent,
+                                    event.target === navigation,
+                                    event.currentTarget === navigation,
+                                    event.sourceElement === ({api:?} === 'click' ? anchor : null),
+                                    event.canIntercept,
+                                    event.destination.url
+                                ]);
+                                event.signal.onabort = () => seen.push('top-abort');
+                                if ({action:?} === 'cancel') event.preventDefault();
+                                if ({action:?} === 'intercept') event.intercept({{
+                                    handler() {{
+                                        seen.push([
+                                            'handler',
+                                            location.href,
+                                            navigation.currentEntry.url,
+                                            navigation.transition instanceof NavigationTransition,
+                                            navigation.transition.from === from,
+                                            navigation.transition.navigationType,
+                                            history.length === initialHistoryLength + 1
+                                        ]);
+                                        return Promise.resolve().then(() => seen.push('handler-complete'));
+                                    }}
+                                }});
+                            }};
+                            navigation.onnavigateerror = () => seen.push('top-error');
+                            navigation.onnavigatesuccess = () => seen.push('top-success');
+                            const realm = {use_child_realm} ? source.defaultView : window;
+                            if ({api:?} === 'click') realm.HTMLElement.prototype.click.call(anchor);
+                            else realm.open.call(source.defaultView, anchor.href, anchor.target);
+                            return JSON.stringify(seen);
+                        }})()
+                        "#,
+                    ))
+                    .expect(&description);
+                    let expected_url = "https://anchor-navigation-target.test/destination";
+                    let mut expected = vec![serde_json::json!([
+                        "top",
+                        true,
+                        true,
+                        true,
+                        true,
+                        true,
+                        expected_url
+                    ])];
+                    if action == "cancel" {
+                        expected.extend([
+                            serde_json::json!("top-abort"),
+                            serde_json::json!("top-error"),
+                        ]);
+                    } else if action == "intercept" {
+                        expected.push(serde_json::json!([
+                            "handler",
+                            expected_url,
+                            expected_url,
+                            true,
+                            true,
+                            "push",
+                            true
+                        ]));
+                    }
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                        serde_json::json!(expected),
+                        "{description}"
+                    );
+                    if action == "intercept" {
+                        expected.extend([
+                            serde_json::json!("handler-complete"),
+                            serde_json::json!("top-success"),
+                        ]);
+                    }
+                    if action != "allow" {
+                        let settled = vm
+                            .eval(
+                                "JSON.stringify({ log: globalThis.__lmTargetNavigationLog, \
+                                 href: location.href, entryUrl: navigation.currentEntry.url, \
+                                 transition: navigation.transition })",
+                            )
+                            .expect(&description);
+                        let committed_url = if action == "intercept" {
+                            expected_url
+                        } else {
+                            "https://anchor-navigation-target.test/source"
+                        };
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(&settled).unwrap(),
+                            serde_json::json!({
+                                "log": expected,
+                                "href": committed_url,
+                                "entryUrl": committed_url,
+                                "transition": null
+                            }),
+                            "{description}"
+                        );
+                    }
+                    let pending = vm.take_pending_location_navigation_with_seed();
+                    if action == "allow" {
+                        assert_eq!(
+                            pending.expect(&description).url.as_str(),
+                            expected_url,
+                            "{description}"
+                        );
+                    } else {
+                        assert!(pending.is_none(), "{description}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hyperlink_top_navigation_checks_source_document_sandbox_across_realms() {
+    for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
+        for source_is_child in [true, false] {
+            for allow_top_navigation in [false, true] {
+                for use_child_realm in [true, false] {
+                    for intercept in [false, true] {
+                        let mut vm = new_parsed_test_vm(
+                            "https://anchor-navigation-sandbox.test/source",
+                            "<!doctype html><body></body>",
+                        );
+                        let description = format!(
+                            "depth={depth} target={target} source_is_child={source_is_child} \
+                             allow_top_navigation={allow_top_navigation} \
+                             child_realm={use_child_realm} intercept={intercept}"
+                        );
+                        vm.eval(&format!(
+                            r#"
+                            (() => {{
+                                const log = [];
+                                let childDocument = document;
+                                for (let i = 0; i < {depth}; ++i) {{
+                                    const frame = childDocument.createElement('iframe');
+                                    frame.sandbox = 'allow-scripts allow-same-origin' +
+                                        ({allow_top_navigation} ? ' allow-top-navigation' : '');
+                                    frame.srcdoc = '<body></body>';
+                                    childDocument.body.appendChild(frame);
+                                    childDocument = frame.contentDocument;
+                                    frame.contentWindow.navigation.onnavigate = () => log.push('child');
+                                }}
+                                const source = {source_is_child} ? childDocument : document;
+                                const anchor = source.createElement('a');
+                                anchor.href = 'https://anchor-navigation-sandbox.test/destination';
+                                anchor.target = {target:?};
+                                source.body.appendChild(anchor);
+                                const from = navigation.currentEntry;
+                                const initialHistoryLength = history.length;
+                                navigation.onnavigate = event => {{
+                                    log.push('navigate');
+                                    if ({intercept}) event.intercept({{
+                                        handler() {{
+                                            log.push([
+                                                'handler',
+                                                location.href,
+                                                navigation.currentEntry.url,
+                                                navigation.transition instanceof NavigationTransition,
+                                                navigation.transition.from === from,
+                                                navigation.transition.navigationType
+                                            ]);
+                                            return Promise.resolve().then(() => log.push('handler-complete'));
+                                        }}
+                                    }});
+                                }};
+                                navigation.oncurrententrychange = () => log.push('currententrychange');
+                                navigation.onnavigatesuccess = () => log.push('success');
+                                navigation.onnavigateerror = () => log.push('error');
+                                globalThis.__lmSandboxLinkSnapshot = () => ({{
+                                    log,
+                                    href: location.href,
+                                    entryUrl: navigation.currentEntry.url,
+                                    entryUnchanged: navigation.currentEntry === from,
+                                    historyDelta: history.length - initialHistoryLength,
+                                    transition: navigation.transition
+                                }});
+                                const realm = {use_child_realm} ? childDocument.defaultView : window;
+                                realm.HTMLElement.prototype.click.call(anchor);
+                            }})()
+                            "#,
+                        ))
+                        .expect(&description);
+                        let allowed = !source_is_child || allow_top_navigation;
+                        let committed = allowed && intercept;
+                        let expected_url = "https://anchor-navigation-sandbox.test/destination";
+                        let mut expected_log = Vec::new();
+                        if allowed {
+                            expected_log.push(serde_json::json!("navigate"));
+                        }
+                        if committed {
+                            expected_log.extend([
+                                serde_json::json!("currententrychange"),
+                                serde_json::json!([
+                                    "handler",
+                                    expected_url,
+                                    expected_url,
+                                    true,
+                                    true,
+                                    "push"
+                                ]),
+                                serde_json::json!("handler-complete"),
+                                serde_json::json!("success"),
+                            ]);
+                        }
+                        let committed_url = if committed {
+                            expected_url
+                        } else {
+                            "https://anchor-navigation-sandbox.test/source"
+                        };
+                        let result = vm
+                            .eval("JSON.stringify(__lmSandboxLinkSnapshot())")
+                            .expect(&description);
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                            serde_json::json!({
+                                "log": expected_log,
+                                "href": committed_url,
+                                "entryUrl": committed_url,
+                                "entryUnchanged": !committed,
+                                "historyDelta": if committed { 1 } else { 0 },
+                                "transition": null
+                            }),
+                            "{description}"
+                        );
+                        let pending = vm.take_pending_location_navigation_with_seed();
+                        if allowed && !intercept {
+                            assert_eq!(
+                                pending.expect(&description).url.as_str(),
+                                expected_url,
+                                "{description}"
+                            );
+                        } else {
+                            assert!(pending.is_none(), "{description}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn form_navigation_events_use_resolved_top_window_across_realms() {
+    for (depth, target) in [(1, "_top"), (1, "_PARENT"), (2, "_ToP")] {
+        for method in ["get", "post"] {
+            for api in ["submit", "requestSubmit"] {
+                for use_child_realm in [true, false] {
+                    for cancel_top in [true, false] {
+                        let mut vm = new_parsed_test_vm(
+                            "https://form-navigation-target.test/source",
+                            "<!doctype html><body></body>",
+                        );
+                        let description = format!(
+                            "depth={depth} target={target} method={method} api={api} \
+                             child_realm={use_child_realm} cancel_top={cancel_top}"
+                        );
+                        let result = vm
+                            .eval(&format!(
+                                r#"
+                                (() => {{
+                                    const seen = [];
+                                    let source = document;
+                                    for (let i = 0; i < {depth}; ++i) {{
+                                        const frame = source.createElement('iframe');
+                                        source.body.appendChild(frame);
+                                        frame.srcdoc = '<body></body>';
+                                        source = frame.contentDocument;
+                                        frame.contentWindow.navigation.onnavigate = event => {{
+                                            seen.push('child:' + i);
+                                            event.preventDefault();
+                                        }};
+                                        frame.contentWindow.navigation.onnavigateerror = () => seen.push('child-error');
+                                    }}
+                                    const form = source.createElement('form');
+                                    form.target = {target:?};
+                                    form.method = {method:?};
+                                    form.action = 'https://form-navigation-target.test/submitted';
+                                    form.innerHTML = '<input name="value" value="b">';
+                                    source.body.appendChild(form);
+                                    navigation.onnavigate = event => {{
+                                        seen.push([
+                                            'top',
+                                            event.target === navigation,
+                                            event.currentTarget === navigation,
+                                            event.sourceElement === form,
+                                            event.cancelable,
+                                            event.navigationType,
+                                            event.destination.url,
+                                            {method:?} === 'get' ? event.formData === null : event.formData.get('value') === 'b',
+                                            event instanceof NavigateEvent,
+                                            {method:?} === 'get' || event.formData instanceof FormData,
+                                            {method:?} === 'get' || !(event.formData instanceof source.defaultView.FormData)
+                                        ]);
+                                        event.signal.onabort = () => seen.push('top-abort');
+                                        if ({cancel_top}) event.preventDefault();
+                                    }};
+                                    navigation.onnavigateerror = () => seen.push('top-error');
+                                    const realm = {use_child_realm} ? source.defaultView : window;
+                                    if ({use_child_realm} && realm.HTMLFormElement === HTMLFormElement)
+                                        throw new Error('submission must use the child realm');
+                                    realm.HTMLFormElement.prototype[{api:?}].call(form);
+                                    return JSON.stringify(seen);
+                                }})()
+                                "#,
+                            ))
+                            .expect(&description);
+                        let expected_url = if method == "get" {
+                            "https://form-navigation-target.test/submitted?value=b"
+                        } else {
+                            "https://form-navigation-target.test/submitted"
+                        };
+                        let mut expected = vec![serde_json::json!([
+                            "top",
+                            true,
+                            true,
+                            true,
+                            true,
+                            "replace",
+                            expected_url,
+                            true,
+                            true,
+                            true,
+                            true
+                        ])];
+                        if cancel_top {
+                            expected.extend([
+                                serde_json::json!("top-abort"),
+                                serde_json::json!("top-error"),
+                            ]);
+                        }
+                        assert_eq!(
+                            serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+                            serde_json::json!(expected),
+                            "{description}"
+                        );
+                        let pending = vm.take_pending_location_navigation_with_seed();
+                        if cancel_top {
+                            assert!(pending.is_none(), "{description}");
+                        } else {
+                            let pending = pending.expect(&description);
+                            assert_eq!(pending.url.as_str(), expected_url, "{description}");
+                            assert_eq!(
+                                pending.request_method,
+                                method.to_ascii_uppercase(),
+                                "{description}"
+                            );
+                            assert_eq!(
+                                pending.request_body.as_deref(),
+                                (method == "post").then_some(b"value=b".as_slice()),
+                                "{description}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn post_form_navigation_uses_target_intrinsic_form_data_constructor() {
+    for (depth, target) in [(1, "_top"), (1, "_self"), (2, "_parent"), (1, "receiver")] {
+        for api in ["submit", "requestSubmit"] {
+            for use_child_realm in [true, false] {
+                let mut vm = new_parsed_test_vm(
+                    "https://form-navigation-target.test/source",
+                    "<!doctype html><body></body>",
+                );
+                let description = format!(
+                    "depth={depth} target={target} api={api} child_realm={use_child_realm}"
+                );
+                let result = vm
+                .eval(&format!(
+                    r#"
+                    (() => {{
+                        const seen = [];
+                        let source = document;
+                        for (let i = 0; i < {depth}; ++i) {{
+                            const frame = source.createElement('iframe');
+                            source.body.appendChild(frame);
+                            frame.srcdoc = '<body></body>';
+                            source = frame.contentDocument;
+                        }}
+                        const child = source.defaultView;
+                        let targetWindow = {target:?} === '_self' ? child : child.parent;
+                        if ({target:?} === 'receiver') {{
+                            const receiver = document.createElement('iframe');
+                            receiver.name = 'receiver';
+                            document.body.appendChild(receiver);
+                            receiver.srcdoc = '<body></body>';
+                            targetWindow = receiver.contentWindow;
+                        }}
+                        const TargetFormData = targetWindow.FormData;
+                        const ChildFormData = child.FormData;
+                        const form = child.document.createElement('form');
+                        form.method = 'post';
+                        form.target = {target:?};
+                        form.action = 'https://form-navigation-target.test/submitted';
+                        form.innerHTML = '<input name="value" value="b">';
+                        child.document.body.appendChild(form);
+                        let constructorReads = 0;
+                        form.onformdata = event => {{
+                            event.formData.append('added', 'from-event');
+                            Object.defineProperty(targetWindow, 'FormData', {{
+                                configurable: true,
+                                get() {{
+                                    ++constructorReads;
+                                    throw new Error('navigation must use the intrinsic FormData');
+                                }}
+                            }});
+                        }};
+                        targetWindow.navigation.onnavigate = event => {{
+                            seen.push([
+                                event instanceof targetWindow.NavigateEvent,
+                                event.formData instanceof TargetFormData,
+                                (event.formData instanceof ChildFormData) === (targetWindow === child),
+                                event.formData.get('value'),
+                                event.formData.get('added')
+                            ]);
+                            if (targetWindow !== window) event.preventDefault();
+                        }};
+                        const realm = {use_child_realm} ? child : window;
+                        realm.HTMLFormElement.prototype[{api:?}].call(form);
+                        return JSON.stringify([seen, constructorReads]);
+                    }})()
+                    "#,
+                ))
+                .expect(&description);
+                assert_eq!(
+                    result, r#"[[[true,true,true,"b","from-event"]],0]"#,
+                    "{description}"
+                );
+                let pending = vm.take_pending_location_navigation_with_seed();
+                if target == "_top" {
+                    let pending = pending.expect(&description);
+                    assert_eq!(pending.request_method, "POST", "{description}");
+                    assert_eq!(
+                        pending.request_body.as_deref(),
+                        Some(b"value=b&added=from-event".as_slice()),
+                        "{description}"
+                    );
+                } else {
+                    assert!(pending.is_none(), "{description}");
+                }
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn named_element_navigation_prefers_its_source_frame_over_duplicate_names() {
     for action in ["anchor", "submit", "requestSubmit"] {

@@ -27,10 +27,17 @@ impl ScriptVm {
     pub(crate) fn navigate_top_level_same_document_from_browser(
         &mut self,
         url: &str,
+        replace_current: bool,
     ) -> Result<bool> {
         let url = url.to_owned();
         self.with_default_context_scope(|scope, _host_ptr| {
-            Ok(crate::context_bootstrap::navigate_top_level_same_document_from_browser(scope, url))
+            Ok(
+                crate::context_bootstrap::navigate_top_level_same_document_from_browser(
+                    scope,
+                    url,
+                    replace_current,
+                ),
+            )
         })
     }
 
@@ -82,7 +89,6 @@ impl ScriptVm {
         &mut self,
         construction: &moli_dom::native::ParserConstruction,
         document_handle: DomHandle,
-        document_has_body: bool,
         local_name: &str,
         namespace: &str,
         prefix: Option<&str>,
@@ -90,13 +96,13 @@ impl ScriptVm {
         intended_parent: Option<DomHandle>,
     ) -> Result<Option<DomHandle>> {
         let context_host = self._context_host.clone();
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_runtime.context;
         let document_runtime = &mut self.document_runtime;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                // SAFETY: `context_ptr` points to `self.page_default_context`, which is kept
+                // SAFETY: `context_ptr` points to `self.page_default_runtime.context`, which is kept
                 // alive for the duration of this non-escaping closure while the document
                 // isolate is exclusively borrowed.
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
@@ -107,7 +113,6 @@ impl ScriptVm {
                         scope,
                         host_ptr,
                         document_handle,
-                        document_has_body,
                         local_name,
                         namespace,
                         prefix,
@@ -130,6 +135,14 @@ impl ScriptVm {
     pub(crate) fn run_pending_parser_post_step_runtime_work_in_default_context(
         &mut self,
     ) -> Result<()> {
+        // Entering V8 allocates per-thread isolate state. Most character tokens
+        // have no post-step work, so check before constructing the scope.
+        if !self
+            .document_runtime
+            .has_pending_parser_post_step_runtime_work()
+        {
+            return Ok(());
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }.run_pending_parser_post_step_runtime_work(scope, host_ptr);
             Ok(())
@@ -250,7 +263,7 @@ impl ScriptVm {
     }
 
     pub(super) fn top_level_context_ptrs(&self) -> Vec<*const v8::Global<v8::Context>> {
-        let mut contexts = vec![&self.page_default_context as *const _];
+        let mut contexts = vec![&self.page_default_runtime.context as *const _];
         contexts.extend(
             self.page_isolated_world_contexts
                 .contexts()
@@ -266,7 +279,7 @@ impl ScriptVm {
         let mut contexts = Vec::with_capacity(
             1 + self.page_isolated_world_contexts.len() + self.child_frame_realm_store.len(),
         );
-        contexts.push(&self.page_default_context as *const _);
+        contexts.push(&self.page_default_runtime.context as *const _);
         contexts.extend(
             self.page_isolated_world_contexts
                 .contexts()

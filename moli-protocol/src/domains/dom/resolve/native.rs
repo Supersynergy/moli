@@ -1,9 +1,5 @@
 use super::*;
-use crate::domains::native::{
-    self, NativeCommandStep,
-    NodeLookupExecution::{NestedMain, OwnerTurn},
-    with_backend_node as with_backend,
-};
+use crate::domains::native::{self, NativeCommandStep, with_backend_node as with_backend};
 use moli_core::page::RendererDomSearchResultsResolution;
 use moli_core::{
     RendererNativeOperation as Operation, RendererNativeOperationStep as Step,
@@ -160,29 +156,27 @@ fn prepare(
                 ),
                 Some(reference) => {
                     let frontend = matches!(reference, DevToolsDomNodeReference::FrontendNodeId(_));
-                    with_backend(
-                        session.clone(),
-                        reference,
-                        NestedMain,
-                        move |root_backend_node_id| {
-                            let command = if frontend {
-                                Command::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
-                                inspector_session_id: session, include_whitespace: whitespace, root_backend_node_id, selector, multiple,
-                            }
-                            } else {
-                                Command::DocumentQuerySelectorForBackendNodeId {
-                                    inspector_session_id: session,
-                                    include_whitespace: whitespace,
-                                    root_backend_node_id,
-                                    selector,
-                                    multiple,
-                                }
-                            };
-                            Operation::new(command, move |reply| {
-                                project_query(reply, multiple, top_frame)
-                            })
-                        },
-                    )
+                    let root = reference.into_renderer_reference(session.clone());
+                    let command = if frontend {
+                        Command::DocumentQuerySelectorWithChildNodeSnapshotEventsForNode {
+                            inspector_session_id: session,
+                            include_whitespace: whitespace,
+                            root,
+                            selector,
+                            multiple,
+                        }
+                    } else {
+                        Command::DocumentQuerySelectorForNode {
+                            inspector_session_id: session,
+                            include_whitespace: whitespace,
+                            root,
+                            selector,
+                            multiple,
+                        }
+                    };
+                    Operation::new(command, move |reply| {
+                        project_query(reply, multiple, top_frame)
+                    })
                 }
             })
         }
@@ -193,41 +187,38 @@ fn prepare(
             } else {
                 params.depth
             };
-            Ok(with_backend(
-                session.clone(),
+            let frontend = matches!(
                 params.reference,
-                NestedMain,
-                move |backend_node_id| {
-                    Operation::new(
-                        Command::DocumentChildNodeSnapshotEventsForBackendNodeId {
-                            inspector_session_id: session,
-                            include_whitespace: whitespace,
-                            backend_node_id,
-                            depth,
-                            pierce: params.pierce,
-                        },
-                        move |reply| match reply {
-                            Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(Some(
-                                mut snapshots,
-                            ))) => {
-                                // requestChildNodes publishes the requested parent's
-                                // snapshot; querySelector may publish several ancestors.
-                                snapshots.events.truncate(1);
-                                let mut response = Response::success(json!({}));
-                                response.notifications =
-                                    child_notifications(snapshots, top_frame.as_deref());
-                                response
-                            }
-                            Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(None)) => {
-                                Response::error(-32000, "InvalidNode")
-                            }
-                            Err(error) => Response::error(
-                                -32000,
-                                format!("Could not capture child node snapshots: {error}"),
-                            ),
-                            _ => unreachable!("DOM child nodes reply"),
-                        },
-                    )
+                DevToolsDomNodeReference::FrontendNodeId(_)
+            );
+            Ok(Operation::new(
+                Command::DocumentChildNodeSnapshotEventsForNode {
+                    reference: params.reference.into_renderer_reference(session.clone()),
+                    inspector_session_id: session,
+                    include_whitespace: whitespace,
+                    depth,
+                    pierce: params.pierce,
+                },
+                move |reply| match reply {
+                    Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(Some(mut snapshots))) => {
+                        snapshots.events.truncate(1);
+                        let mut response = Response::success(json!({}));
+                        response.notifications =
+                            child_notifications(snapshots, top_frame.as_deref());
+                        response
+                    }
+                    Ok(Reply::OptionalDocumentChildNodeSnapshotEvents(None)) => {
+                        if frontend {
+                            node_not_found()
+                        } else {
+                            Response::error(-32000, "InvalidNode")
+                        }
+                    }
+                    Err(error) => Response::error(
+                        -32000,
+                        format!("Could not capture child node snapshots: {error}"),
+                    ),
+                    _ => unreachable!("DOM child nodes reply"),
                 },
             ))
         }
@@ -281,22 +272,15 @@ fn prepare(
                     params.reference.backend_node_id,
                 )
                 .ok_or_else(StartError::node_not_found)?;
-                Ok(with_backend(
-                    session.clone(),
-                    reference,
-                    NestedMain,
-                    move |backend_node_id| {
-                        Operation::new(
-                            Command::DocumentNodeSnapshotForBackendNodeIdInInspectorSession {
-                                inspector_session_id: session,
-                                include_whitespace: whitespace,
-                                backend_node_id,
-                                depth: params.depth,
-                                pierce: params.pierce,
-                            },
-                            project,
-                        )
+                Ok(Operation::new(
+                    Command::DocumentNodeSnapshotForNodeInInspectorSession {
+                        reference: reference.into_renderer_reference(session.clone()),
+                        inspector_session_id: session,
+                        include_whitespace: whitespace,
+                        depth: params.depth,
+                        pierce: params.pierce,
                     },
+                    project,
                 ))
             }
         }
@@ -345,19 +329,12 @@ fn prepare(
                 params.reference.node_id,
                 params.reference.backend_node_id,
             ) {
-                Ok(with_backend(
-                    session,
-                    reference,
-                    NestedMain,
-                    move |backend_node_id| {
-                        Operation::new(
-                            Command::OuterHtmlForBackendNodeId {
-                                backend_node_id,
-                                include_shadow_dom: params.include_shadow_dom,
-                            },
-                            project,
-                        )
+                Ok(Operation::new(
+                    Command::OuterHtmlForNode {
+                        reference: reference.into_renderer_reference(session),
+                        include_shadow_dom: params.include_shadow_dom,
                     },
+                    project,
                 ))
             } else {
                 Ok(Operation::new(
@@ -404,16 +381,11 @@ fn prepare(
                 let reference =
                     devtools_node_reference_from_ids(params.node_id, params.backend_node_id)
                         .ok_or_else(StartError::node_not_found)?;
-                Ok(with_backend(
-                    session,
-                    reference,
-                    NestedMain,
-                    move |backend_node_id| {
-                        Operation::new(
-                            Command::DocumentGeometryForBackendNodeId { backend_node_id },
-                            project,
-                        )
+                Ok(Operation::new(
+                    Command::DocumentGeometryForNode {
+                        reference: reference.into_renderer_reference(session),
                     },
+                    project,
                 ))
             }
         }

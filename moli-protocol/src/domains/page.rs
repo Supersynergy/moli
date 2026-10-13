@@ -127,22 +127,6 @@ fn missing_page_target_error_message(
     }
 }
 
-/// Builds a letter-sized raster PDF using the same defaults as
-/// `Page.printToPDF`.
-pub fn build_default_raster_pdf(
-    jpeg: &[u8],
-    image_width: u32,
-    image_height: u32,
-) -> anyhow::Result<Vec<u8>> {
-    pdf::build_raster_pdf(
-        jpeg,
-        image_width,
-        image_height,
-        &pdf::RasterPdfOptions::default(),
-    )
-    .map_err(|error| anyhow::anyhow!(error.message().to_owned()))
-}
-
 use child_frame_activity::PagePreparedChildFrameDocumentActivity;
 pub(crate) use child_frame_activity::{
     PagePreparedChildFrameActivity, PagePreparedChildFrameTreeEvent,
@@ -247,7 +231,6 @@ enum PendingPageCommandKind {
     },
     PrintToPdf {
         pending: PendingPageCommand,
-        options: pdf::RasterPdfOptions,
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::PendingNavigateLoadCommand>),
@@ -315,7 +298,6 @@ enum CompletedPageCommandKind {
     },
     PrintToPdf {
         completed: Box<Result<CompletedPageCommand, String>>,
-        options: pdf::RasterPdfOptions,
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
     Navigate(Box<navigation::CompletedNavigateLoadCommand>),
@@ -464,11 +446,9 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::PrintToPdf {
                 pending,
-                options,
                 transfer_mode,
             } => CompletedPageCommandKind::PrintToPdf {
                 completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
-                options,
                 transfer_mode,
             },
             PendingPageCommandKind::Navigate(pending) => {
@@ -528,27 +508,13 @@ pub(crate) fn command_output_plan(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Co
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PageOutputProjectionStep {
-    Download,
-    FileChooser,
-    JavascriptDialog,
-    WindowOpen,
-    Popup,
-    DocumentTitleChanged,
-    DocumentLifecycle,
-    ChildFrameActivity,
-    SameDocumentNavigation,
-    SessionHistoryUpdate,
-    TopLevelLocationNavigation,
-    TopLevelHistoryTraversal,
-}
-
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct PagePreparedOutputs {
     javascript_dialogs: Vec<javascript_dialog::PreparedJavaScriptDialog>,
     window_open_events: Vec<popup::PagePreparedWindowOpenEvent>,
     popup_activations: Vec<popup::PagePreparedPopupActivation>,
+    auxiliary_window_closes: Vec<(String, moli_core::page::RendererAuxiliaryWindow)>,
+    auxiliary_window_navigations: Vec<prepared_navigation::PagePreparedAuxiliaryWindowNavigation>,
     document_title_changes: Vec<RendererDocumentTitleChanged>,
     document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
     child_frame_activities: Vec<PagePreparedChildFrameActivity>,
@@ -660,6 +626,10 @@ async fn bring_session_route_to_front_async(
         .and_then(|bc| bc.active_target_identity())
         .is_some_and(|(active_target_id, _)| active_target_id == target_id);
     if target_is_active {
+        conn.select_browser_focus_for_target(&target_id);
+        conn.apply_browser_document_activity_async()
+            .await
+            .map_err(|error| error.to_string())?;
         return Ok(Vec::new());
     }
 
@@ -1268,10 +1238,10 @@ fn page_screencast_subscription_status_for_owner(
 pub(in crate::domains) async fn emit_popup_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(popups) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_popup_activations)
     {
         popup::emit_prepared(conn, out, popups).await;
@@ -1286,10 +1256,10 @@ pub(in crate::domains) async fn emit_popup_activity_background_events_async(
 pub(in crate::domains) fn publish_prepared_top_level_location_navigation_owner_action(
     conn: &mut CdpConnection,
     command_owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(navigation) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_top_level_location_navigation)
     {
         let (owner, navigation) = navigation.into_parts();
@@ -1305,10 +1275,10 @@ pub(in crate::domains) async fn emit_top_level_history_traversal_activity_backgr
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(traversal) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_top_level_history_traversal)
     {
         traverse_session_owner_history_from_renderer_background_events_async(
@@ -1351,6 +1321,25 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
         navigation.request_body(),
         navigation.request_headers(),
         navigation.browser_navigation_kind(),
+        navigation.web_mcp_invocation(),
+        Some(match navigation.browser_navigation_kind() {
+            moli_fetch::BrowserNavigationRequestKind::Reload => {
+                moli_core::page::RendererAuxiliaryNavigationKind::Reload
+            }
+            moli_fetch::BrowserNavigationRequestKind::Navigate => {
+                match navigation.history_mutation() {
+                    moli_page_types::NavigationHistoryMutation::Push => {
+                        moli_core::page::RendererAuxiliaryNavigationKind::Assign
+                    }
+                    moli_page_types::NavigationHistoryMutation::Replace => {
+                        moli_core::page::RendererAuxiliaryNavigationKind::Replace
+                    }
+                }
+            }
+        }),
+        None,
+        navigation.initial_document_environment().cloned(),
+        navigation.navigation_initiator().cloned(),
     )
     .await;
 }
@@ -1361,6 +1350,20 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
     owner: &CommandOwnerScope,
     url: &str,
 ) {
+    let pending_navigation = conn
+        .target_owner_identity_for_owner(owner)
+        .and_then(|(context_id, target_id)| {
+            let target_id = target_id?;
+            conn.browser_context_by_id_mut(&context_id)?
+                .page_target_mut(&target_id)?
+                .owner_state
+                .pending_popup_navigation
+                .take()
+        })
+        .filter(|pending| pending.url == url);
+    let (document_response, navigation_initiator) = pending_navigation
+        .map(|pending| (pending.response, pending.initiator))
+        .unwrap_or_default();
     navigate_command_owner_from_renderer_request_background_events_async(
         conn,
         out,
@@ -1370,11 +1373,16 @@ pub(crate) async fn navigate_command_owner_from_renderer_background_events_async
         None,
         &[],
         moli_fetch::BrowserNavigationRequestKind::Navigate,
+        None,
+        None,
+        document_response,
+        None,
+        navigation_initiator,
     )
     .await;
 }
 
-async fn navigate_command_owner_from_renderer_request_background_events_async(
+pub(in crate::domains) async fn navigate_command_owner_from_renderer_request_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: CommandOwnerScope,
@@ -1383,6 +1391,11 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
+    auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
+    document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
+    initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
+    navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) {
     let start = navigation::start_session_owner_navigation_from_renderer(
         conn,
@@ -1392,6 +1405,11 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
         request_body,
         request_headers,
         browser_navigation_kind,
+        web_mcp_invocation,
+        auxiliary_navigation,
+        document_response,
+        initial_document_environment,
+        navigation_initiator,
     );
     let step =
         navigation::finish_started_navigation_command_for_parts(conn, None, owner, start, &[]);
@@ -1422,9 +1440,15 @@ async fn complete_renderer_navigation_step_background_events_async(
                 return;
             }
             PageCommandTaskStep::Pending(pending) => {
-                step =
-                    complete_pending_page_command(conn, pending.wait().await, &mut command_context)
-                        .await;
+                // Navigation futures carry the response and renderer setup.
+                // Keep them out of each enclosing target-navigation future.
+                let completed = Box::pin(pending.wait()).await;
+                step = Box::pin(complete_pending_page_command(
+                    conn,
+                    completed,
+                    &mut command_context,
+                ))
+                .await;
             }
         }
     }
@@ -1467,10 +1491,10 @@ pub(in crate::domains) async fn emit_same_document_navigation_activity_backgroun
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner: &CommandOwnerScope,
-    prepared_outputs: Option<&mut ProtocolOutputPayloads>,
+    prepared_outputs: &mut ProtocolOutputPayloads,
 ) {
     if let Some(navigations) = prepared_outputs
-        .and_then(ProtocolOutputPayloads::page_mut)
+        .page_mut()
         .and_then(PagePreparedOutputSlot::take_same_document_navigations)
     {
         navigation::emit_same_document_navigation_background_events_async(
@@ -2285,7 +2309,6 @@ pub(crate) async fn complete_pending_page_command(
         }
         CompletedPageCommandKind::PrintToPdf {
             completed,
-            options,
             transfer_mode,
         } => {
             let completion = match *completed {
@@ -2305,15 +2328,20 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let image = match page.finish_capture_screenshot(completion) {
-                Ok(RendererCaptureScreenshotReply::Captured(image)) => image,
-                Ok(RendererCaptureScreenshotReply::LayoutDisabled) => {
+            let pdf = match page.finish_print_to_pdf(completion) {
+                Ok(moli_core::page::RendererPrintToPdfReply::Printed(bytes)) => bytes,
+                Ok(moli_core::page::RendererPrintToPdfReply::Failed(message)) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000, message,
+                    ));
+                }
+                Ok(moli_core::page::RendererPrintToPdfReply::LayoutDisabled) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
                         PRINT_TO_PDF_LAYOUT_DISABLED_MESSAGE,
                     ));
                 }
-                Ok(RendererCaptureScreenshotReply::NoDocument) => {
+                Ok(moli_core::page::RendererPrintToPdfReply::NoDocument) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
                         "NoDocumentLoaded",
@@ -2323,26 +2351,6 @@ pub(crate) async fn complete_pending_page_command(
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
                         format!("Failed to capture PDF content: {error}"),
-                    ));
-                }
-            };
-            if image.mime_type != "image/jpeg" {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "Printing failed: renderer returned a non-JPEG raster",
-                ));
-            }
-            let pdf = match pdf::build_raster_pdf(
-                image.bytes.as_ref(),
-                image.width,
-                image.height,
-                &options,
-            ) {
-                Ok(pdf) => pdf,
-                Err(error) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        error.code(),
-                        error.message(),
                     ));
                 }
             };

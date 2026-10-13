@@ -197,8 +197,9 @@ pub(crate) fn error_stream<'s>(
     if readable_stream_is_byte_stream(scope, stream) {
         reset_byte_stream_pending_pull_intos(scope, stream);
     }
-    let error_entry = v8::Array::new(scope, 1);
-    let _ = error_entry.set_index(scope, 0, reason);
+    // Initialize an own element directly, without consulting author-modified
+    // Array.prototype indices. This also preserves an undefined rejection value.
+    let error_entry = v8::Array::new_with_elements(scope, &[reason]);
     set_stream_slot_value(
         scope,
         stream,
@@ -317,7 +318,7 @@ fn readable_stream_pull_state<'s>(
         .unwrap_or(READABLE_STREAM_PULL_STATE_STARTED)
 }
 
-pub(in crate::context_bootstrap) fn readable_stream_error<'s>(
+pub(crate) fn readable_stream_error<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
@@ -568,7 +569,7 @@ fn reject_readable_stream_closed_promises<'s>(
     );
 }
 
-pub(in crate::context_bootstrap) fn readable_stream_locked<'s>(
+pub(crate) fn readable_stream_locked<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     stream: v8::Local<'s, v8::Object>,
 ) -> bool {

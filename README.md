@@ -33,6 +33,15 @@
   </a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/daily" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+  <a href="https://trendshift.io/repositories/128243?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-128243" target="_blank" rel="noopener noreferrer">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/128243/weekly?language=Rust" alt="lexmount%2Fmoli | Trendshift" width="250" height="55" />
+  </a>
+</p>
+
 Moli is a production-ready headless browser for AI agents. Its on-demand layout
 and rendering design combines a complete browser runtime with a lightweight
 resource footprint.
@@ -130,6 +139,20 @@ moli fetch --layout --dump screenshot_full https://example.com > full-page.png
 moli fetch --layout --dump pdf https://example.com > page.pdf
 ```
 
+To export a page after an explicit interaction, combine `--eval` (or
+`--eval-file`) with `--dump`. The expression runs after page readiness;
+promises are awaited, and any pending navigation is followed before export.
+Its return value is discarded without serialization. An exception fails the
+command without emitting a dump.
+
+```bash
+moli fetch --eval 'document.querySelector("button.show-details").click()' \
+  --dump markdown https://example.com
+```
+
+Only the supplied expression performs interactions. Without `--dump`,
+`--eval` retains its expression-value output behavior.
+
 Run `fetch --help` for the complete option list, including output formats,
 page-load/response waits, profiles, proxy settings, resource policies, and
 tracing options.
@@ -162,6 +185,9 @@ console.log(await page.locator("body").innerText());
 
 await browser.close();
 ```
+
+The [WebMCP playground](moli-playground/webmcp/README.md) includes a CLI to list
+and call any site's native WebMCP tools, plus booking, restaurant, and pizza demos.
 
 ## Why Moli
 
@@ -356,7 +382,7 @@ Its current intentional boundaries include:
   paint architecture.
 - It does not pursue pixel-for-pixel parity with Chrome or provide
   high-fidelity Canvas/WebGL/media playback.
-- `--layout` supports software screenshots and raster-backed CDP PDF
+- `--layout` supports software screenshots and native CDP/CLI PDF with embedded fonts
   generation, but not every Chrome screenshot or print mode is implemented.
 
 Unsupported protocol paths return explicit errors — Moli never pretends that a

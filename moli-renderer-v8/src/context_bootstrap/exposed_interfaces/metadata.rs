@@ -19,6 +19,12 @@ pub(in crate::context_bootstrap) const STORAGE_INTERFACE_NAMES: &[&str] = &[
 ];
 
 pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = &[
+    "DOMRectReadOnly",
+    "DOMRect",
+    "DOMPointReadOnly",
+    "DOMPoint",
+    "DOMMatrixReadOnly",
+    "DOMMatrix",
     "EventTarget",
     "Event",
     "CustomEvent",
@@ -28,11 +34,14 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "SecurityPolicyViolationEvent",
     "CloseEvent",
     "Worker",
+    "WebTransportBidirectionalStream",
+    "WebTransportDatagramDuplexStream",
     "WebSocket",
     "AbortSignal",
     "AbortController",
     "Headers",
     "Request",
+    "ReportBody",
     "Response",
     "ProgressEvent",
     "XMLHttpRequestEventTarget",
@@ -46,18 +55,24 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "CryptoKey",
     "MediaCapabilities",
     "NavigatorUAData",
+    "Lock",
+    "LockManager",
     "WorkerNavigator",
     "MessageChannel",
     "MessagePort",
     "BroadcastChannel",
     "Notification",
     "ImageData",
+    "EncodedVideoChunk",
     "ImageBitmap",
+    "ImageBitmapRenderingContext",
     "CanvasGradient",
     "CanvasPattern",
     "TextMetrics",
     "OffscreenCanvas",
     "OffscreenCanvasRenderingContext2D",
+    "VideoDecoder",
+    "VideoEncoder",
     "WebGLRenderingContext",
     "WebGL2RenderingContext",
     "WebGLObject",
@@ -92,6 +107,27 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
 ];
 
 const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
+    "AuthenticatorAssertionResponse",
+    "AuthenticatorAttestationResponse",
+    "AuthenticatorResponse",
+    "PublicKeyCredential",
+    "Credential",
+    "CredentialsContainer",
+    "MIDIPort",
+    "MIDIAccess",
+    "MIDIInput",
+    "MIDIOutput",
+    "MIDIInputMap",
+    "MIDIOutputMap",
+    "ModelContext",
+    "ToolActivatedEvent",
+    "ToolCancelEvent",
+    "WebTransportBidirectionalStream",
+    "WebTransportDatagramDuplexStream",
+    "MediaKeySession",
+    "MediaKeyStatusMap",
+    "MediaKeySystemAccess",
+    "MediaKeys",
     "MediaDeviceInfo",
     "InputDeviceInfo",
     "DeviceMotionEvent",
@@ -101,6 +137,9 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "MediaDevices",
     "SubtleCrypto",
     "CryptoKey",
+    "PaymentResponse",
+    "Lock",
+    "LockManager",
     "IdleDetector",
     "Worklet",
     "AudioWorklet",
@@ -108,6 +147,8 @@ const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
     "ClipboardItem",
     "Cache",
     "CacheStorage",
+    "VideoDecoder",
+    "VideoEncoder",
 ];
 const WORKER_ONLY_INTERFACE_NAMES: &[&str] = &["WorkerNavigator", "WorkerLocation"];
 const WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &[
@@ -233,6 +274,7 @@ impl ExposureSet {
     const SERVICE_WORKER: u8 = 1 << 3;
 
     const WINDOW_ONLY: Self = Self(Self::WINDOW);
+    const WINDOW_AND_DEDICATED_WORKER: Self = Self(Self::WINDOW | Self::DEDICATED_WORKER);
     const ALL_REALMS: Self =
         Self(Self::WINDOW | Self::DEDICATED_WORKER | Self::SHARED_WORKER | Self::SERVICE_WORKER);
     const WORKERS: Self = Self(Self::DEDICATED_WORKER | Self::SHARED_WORKER | Self::SERVICE_WORKER);
@@ -391,12 +433,14 @@ pub(super) fn installation_for_spec(spec: ConstructorSpec) -> GlobalInstallation
 fn exposure_for_name(name: &str) -> ExposureSet {
     match name {
         "FileSystemSyncAccessHandle" => ExposureSet::DEDICATED_WORKER_ONLY,
+        "EncodedVideoChunk" => ExposureSet::WINDOW_AND_DEDICATED_WORKER,
         _ if WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::WINDOW_DEDICATED_AND_SHARED_WORKER
         }
         _ if DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES.contains(&name) => {
             ExposureSet::DEDICATED_AND_SHARED_WORKER
         }
+        "VideoDecoder" | "VideoEncoder" => ExposureSet::WINDOW_AND_DEDICATED_WORKER,
         _ if WORKER_ONLY_INTERFACE_NAMES.contains(&name) => ExposureSet::WORKERS,
         _ if STORAGE_INTERFACE_NAMES.contains(&name)
             || WORKER_SHARED_INTERFACE_NAMES.contains(&name)
@@ -486,6 +530,32 @@ mod tests {
     }
 
     #[test]
+    fn shell_encoded_video_chunk_uses_the_expected_exposure_and_lazy_policy() {
+        let table = ExposedInterfaceMetadataTable::from_constructor_specs(
+            &crate::context_bootstrap::specs::constructor_specs(),
+        )
+        .expect("shell exposure metadata");
+        for name in ["EncodedVideoChunk"] {
+            let metadata = table.metadata_by_name(name).expect("interface metadata");
+            assert_eq!(metadata.installation, GlobalInstallation::Lazy, "{name}");
+            for (realm, expected) in [
+                (RealmKind::Window, true),
+                (RealmKind::DedicatedWorker, true),
+                (RealmKind::SharedWorker, false),
+                (RealmKind::ServiceWorker, false),
+            ] {
+                assert_eq!(metadata.is_exposed(realm, true), expected, "{name}");
+                assert_eq!(metadata.is_exposed(realm, false), expected, "{name}");
+                assert_eq!(
+                    metadata.is_supported_by(TemplateBuildProfile::for_realm(realm)),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn storage_policy_matches_window_and_worker_exposure() {
         let table = ExposedInterfaceMetadataTable::from_constructor_specs(&[
             spec("StorageManager", None),
@@ -506,6 +576,32 @@ mod tests {
         assert!(!sync.is_exposed(RealmKind::Window, true));
         assert!(sync.is_exposed(RealmKind::DedicatedWorker, true));
         assert!(!sync.is_exposed(RealmKind::SharedWorker, true));
+    }
+
+    #[test]
+    fn shell_video_codecs_uses_the_expected_exposure_and_lazy_policy() {
+        let table = ExposedInterfaceMetadataTable::from_constructor_specs(
+            &crate::context_bootstrap::specs::constructor_specs(),
+        )
+        .expect("shell exposure metadata");
+        for name in ["VideoDecoder", "VideoEncoder"] {
+            let metadata = table.metadata_by_name(name).expect("interface metadata");
+            assert_eq!(metadata.installation, GlobalInstallation::Lazy, "{name}");
+            for (realm, expected) in [
+                (RealmKind::Window, true),
+                (RealmKind::DedicatedWorker, true),
+                (RealmKind::SharedWorker, false),
+                (RealmKind::ServiceWorker, false),
+            ] {
+                assert_eq!(metadata.is_exposed(realm, true), expected, "{name}");
+                assert!(!metadata.is_exposed(realm, false), "{name}");
+                assert_eq!(
+                    metadata.is_supported_by(TemplateBuildProfile::for_realm(realm)),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -552,6 +648,32 @@ mod tests {
         assert!(worker_location.is_exposed(RealmKind::DedicatedWorker, true));
         assert!(worker_location.is_exposed(RealmKind::SharedWorker, true));
         assert!(worker_location.is_exposed(RealmKind::ServiceWorker, true));
+    }
+
+    #[test]
+    fn shell_media_recorder_uses_the_expected_exposure_and_lazy_policy() {
+        let table = ExposedInterfaceMetadataTable::from_constructor_specs(
+            &crate::context_bootstrap::specs::constructor_specs(),
+        )
+        .expect("shell exposure metadata");
+        for name in ["MediaRecorder"] {
+            let metadata = table.metadata_by_name(name).expect("interface metadata");
+            assert_eq!(metadata.installation, GlobalInstallation::Lazy, "{name}");
+            for (realm, expected) in [
+                (RealmKind::Window, true),
+                (RealmKind::DedicatedWorker, false),
+                (RealmKind::SharedWorker, false),
+                (RealmKind::ServiceWorker, false),
+            ] {
+                assert_eq!(metadata.is_exposed(realm, true), expected, "{name}");
+                assert_eq!(metadata.is_exposed(realm, false), expected, "{name}");
+                assert_eq!(
+                    metadata.is_supported_by(TemplateBuildProfile::for_realm(realm)),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -658,6 +780,32 @@ mod tests {
         assert_eq!(dom_error.installation, GlobalInstallation::NotExposed);
         assert!(!dom_error.is_exposed(RealmKind::Window, true));
         assert!(dom_error.is_supported_by(TemplateBuildProfile::Window));
+    }
+
+    #[test]
+    fn shell_speech_events_uses_the_expected_exposure_and_lazy_policy() {
+        let table = ExposedInterfaceMetadataTable::from_constructor_specs(
+            &crate::context_bootstrap::specs::constructor_specs(),
+        )
+        .expect("shell exposure metadata");
+        for name in ["SpeechSynthesisEvent", "SpeechSynthesisErrorEvent"] {
+            let metadata = table.metadata_by_name(name).expect("interface metadata");
+            assert_eq!(metadata.installation, GlobalInstallation::Lazy, "{name}");
+            for (realm, expected) in [
+                (RealmKind::Window, true),
+                (RealmKind::DedicatedWorker, false),
+                (RealmKind::SharedWorker, false),
+                (RealmKind::ServiceWorker, false),
+            ] {
+                assert_eq!(metadata.is_exposed(realm, true), expected, "{name}");
+                assert_eq!(metadata.is_exposed(realm, false), expected, "{name}");
+                assert_eq!(
+                    metadata.is_supported_by(TemplateBuildProfile::for_realm(realm)),
+                    expected,
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]

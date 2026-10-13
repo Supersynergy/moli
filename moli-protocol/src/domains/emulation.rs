@@ -95,9 +95,10 @@ enum PendingEmulationPageOperation {
     SetNetworkConditions,
     SetIdleOverride,
     SetNavigatorOverrides,
+    SetNavigatorAndDocumentActivity,
     SetEmulatedMedia,
+    SetScrollbarsHidden,
     SetViewportSurface,
-    SetDocumentActivity,
     SetUserAgentLoader,
     ReplaceBrowserResourceRuntime,
 }
@@ -107,10 +108,11 @@ impl PendingEmulationPageOperation {
         match self {
             Self::SetExtraHttpHeaders
             | Self::SetNavigatorOverrides
+            | Self::SetNavigatorAndDocumentActivity
             | Self::SetNetworkConditions
             | Self::SetEmulatedMedia
+            | Self::SetScrollbarsHidden
             | Self::SetViewportSurface
-            | Self::SetDocumentActivity
             | Self::SetUserAgentLoader
             | Self::ReplaceBrowserResourceRuntime => true,
             // Chromium owns this state on RenderFrameHostImpl::IdleManager.
@@ -219,6 +221,9 @@ pub(crate) fn try_start_emulation_command_dispatch(
         }
         Some(EmulationAction::SetScriptExecutionDisabled) => {
             Some(start_script_execution_disabled_command(conn, cmd))
+        }
+        Some(EmulationAction::SetScrollbarsHidden) => {
+            Some(start_scrollbars_hidden_command(conn, cmd))
         }
         Some(EmulationAction::SetGeolocationOverride) => {
             Some(start_geolocation_override_command(conn, cmd))
@@ -838,6 +843,64 @@ fn default_background_color_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> 
         // Paint is demand-driven; each capture samples the target's current base color.
         Ok(()) => CommandOutputPlan::success(),
         Err(error) => CommandOutputPlan::error(-31998, error),
+    }
+}
+
+fn start_scrollbars_hidden_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    let params: params::SetScrollbarsHiddenParams = match cmd.get_params() {
+        Ok(Some(params)) => params,
+        _ => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32602,
+                "InvalidParams",
+            ));
+        }
+    };
+    if !conn.layout_policy().uses_real_layout() {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32000,
+            "Emulation.setScrollbarsHidden requires --layout",
+        ));
+    }
+    let mut changed = false;
+    if let Err(message) =
+        page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+            changed = state.set_scrollbars_hidden(params.hidden);
+        })
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, message));
+    }
+    if !changed {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::success());
+    }
+    if let Some(step) = native_configuration::try_start(
+        conn,
+        cmd,
+        native_configuration::unit(moli_core::RendererPageCommand::SetScrollbarsHidden(
+            params.hidden,
+        )),
+        PendingEmulationPageOperation::SetScrollbarsHidden,
+    ) {
+        return step;
+    }
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::success());
+    };
+    match page.start_set_scrollbars_hidden(params.hidden) {
+        Ok(pending) => EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
+            cmd.id,
+            owner_scope,
+            PendingEmulationPageOperation::SetScrollbarsHidden,
+            pending,
+            None,
+        )),
+        Err(error) => {
+            EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
+        }
     }
 }
 
@@ -2598,6 +2661,14 @@ pub(crate) async fn dispose_page_session_async(
                     .await,
             );
         }
+        if delta.scrollbars_hidden {
+            record_emulation_disposal_result(
+                &mut first_error,
+                "scrollbar visibility",
+                page.set_scrollbars_hidden_async(load_inputs.scrollbars_hidden)
+                    .await,
+            );
+        }
         if delta.network_conditions {
             record_emulation_disposal_result(
                 &mut first_error,
@@ -2854,26 +2925,15 @@ fn start_surface_override_page_command(
     navigator_overrides: moli_page_types::NavigatorOverrides,
     document_activity: moli_page_types::DocumentActivity,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let native_update = page
-        .start_set_navigator_overrides(&navigator_overrides)
+    let pending = page
+        .start_set_navigator_and_document_activity(navigator_overrides, document_activity)
         .map_err(|error| error.to_string())?;
-    let activity_update = page
-        .start_set_document_activity(document_activity)
-        .map_err(|error| error.to_string())?;
-    Ok(vec![
-        PendingEmulationPageCommand {
-            target: target.clone(),
-            operation: PendingEmulationPageOperation::SetNavigatorOverrides,
-            pending: native_update,
-            runtime_response_rx: None,
-        },
-        PendingEmulationPageCommand {
-            target,
-            operation: PendingEmulationPageOperation::SetDocumentActivity,
-            pending: activity_update,
-            runtime_response_rx: None,
-        },
-    ])
+    Ok(vec![PendingEmulationPageCommand {
+        target,
+        operation: PendingEmulationPageOperation::SetNavigatorAndDocumentActivity,
+        pending,
+        runtime_response_rx: None,
+    }])
 }
 
 fn finish_pending_emulation_page_command(
@@ -2943,17 +3003,19 @@ fn finish_emulation_page_operation(
         PendingEmulationPageOperation::SetIdleOverride => page
             .finish_set_idle_override(completion)
             .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetNavigatorOverrides => page
+        // Both operations acknowledge the captured policy with a unit reply.
+        PendingEmulationPageOperation::SetNavigatorOverrides
+        | PendingEmulationPageOperation::SetNavigatorAndDocumentActivity => page
             .finish_set_navigator_overrides(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetEmulatedMedia => page
             .finish_set_emulated_media(completion)
             .map_err(|error| error.to_string()),
+        PendingEmulationPageOperation::SetScrollbarsHidden => page
+            .finish_set_scrollbars_hidden(completion)
+            .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetViewportSurface => page
             .finish_set_viewport_surface(completion)
-            .map_err(|error| error.to_string()),
-        PendingEmulationPageOperation::SetDocumentActivity => page
-            .finish_set_document_activity(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::ReplaceBrowserResourceRuntime => page
             .finish_replace_browser_resource_runtime(completion)

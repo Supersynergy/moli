@@ -94,11 +94,13 @@ use moli_page_types::LayoutPolicy;
 use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
 
+mod document_response;
 mod lifecycle_decision;
 mod owner_commands;
 mod owner_loop;
 mod page_commands;
 mod page_creation;
+mod page_replacement;
 mod page_turn_completion;
 mod scheduler;
 
@@ -106,19 +108,14 @@ use self::lifecycle_decision::PendingLifecycleNavigation;
 
 #[derive(Debug, Clone)]
 pub struct RendererPreparedDocumentCommitConfiguration {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
     pub runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
-    pub script_execution_disabled: bool,
-    pub bypass_content_security_policy: bool,
-    pub emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    pub idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    pub navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    pub document_activity: moli_page_types::DocumentActivity,
+    pub document_settings: moli_page_types::DocumentSettings,
     pub browser_resource_runtime: crate::network::BrowserResourceRuntime,
     pub navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub network_offline: bool,
@@ -131,6 +128,7 @@ pub struct RendererPreparedDocumentCommitConfiguration {
 
 #[derive(Debug)]
 pub struct RendererCreateHtmlPageRequest {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     /// Exact owner-local Page identity reserved before this request is queued.
     ///
     /// Parser/resource output produced while the Page is still being built
@@ -157,20 +155,14 @@ pub struct RendererCreateHtmlPageRequest {
     pub runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
-    pub script_execution_disabled: bool,
-    pub bypass_content_security_policy: bool,
+    pub document_settings: moli_page_types::DocumentSettings,
     pub network_offline: bool,
     pub blocked_url_patterns: Vec<String>,
     pub indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    pub idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    pub navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    pub document_activity: moli_page_types::DocumentActivity,
     pub fetch_subresource_interception_enabled: bool,
     pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-    pub layout_policy: LayoutPolicy,
+    pub layout_configuration: moli_page_types::LayoutConfiguration,
     pub wpt_extensions_enabled: bool,
     pub stage: PageVmInitStage,
     pub reply_boundary: crate::RendererReplyBoundary,
@@ -185,6 +177,7 @@ pub struct RendererCreateHtmlPageRequest {
 }
 
 pub struct RendererCreateStreamingRawPageRequest {
+    pub web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     pub(super) document_replacement:
         Option<Arc<super::document_replacement::RendererDocumentReplacementScope>>,
     pub root_frame_id: Option<String>,
@@ -207,20 +200,14 @@ pub struct RendererCreateStreamingRawPageRequest {
     pub runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
-    pub script_execution_disabled: bool,
-    pub bypass_content_security_policy: bool,
+    pub document_settings: moli_page_types::DocumentSettings,
     pub network_offline: bool,
     pub blocked_url_patterns: Vec<String>,
     pub indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
-    pub emulated_media: crate::protocol_types::EmulatedMediaOverrides,
-    pub idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    pub navigator_overrides: moli_page_types::NavigatorOverrides,
-    pub viewport_surface: Option<crate::protocol_types::ViewportSurface>,
-    pub document_activity: moli_page_types::DocumentActivity,
     pub fetch_subresource_interception_enabled: bool,
     pub fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
-    pub layout_policy: LayoutPolicy,
+    pub layout_configuration: moli_page_types::LayoutConfiguration,
     pub wpt_extensions_enabled: bool,
     pub stage: PageVmInitStage,
     pub reply_boundary: crate::RendererReplyBoundary,
@@ -231,7 +218,18 @@ pub struct RendererCreateStreamingRawPageRequest {
 }
 
 pub enum RendererOwnerCommand {
+    ReleaseCapturedDocumentEnvironment {
+        id: u64,
+    },
     CreateHtmlPage(RendererCreateHtmlPageRequest),
+    CancelPendingAuxiliaryPage {
+        reservation: RendererPageReservationToken,
+    },
+    ReserveLivePageReplacement(RendererPageReplacementReservationRequest),
+    CancelLivePageReplacementReservation {
+        token: RendererPageToken,
+        reservation_nonce: u64,
+    },
     PrepareStreamingRawDocument {
         token: RendererPageReservationToken,
         request: RendererCreateStreamingRawPageRequest,
@@ -241,6 +239,9 @@ pub enum RendererOwnerCommand {
         configuration: RendererPreparedDocumentCommitConfiguration,
     },
     CommitPreparedRendererDocument {
+        permit: RendererDocumentCommitPermit,
+    },
+    CommitPreparedPageReplacement {
         permit: RendererDocumentCommitPermit,
     },
     CancelPreparedRendererDocument {
@@ -296,7 +297,11 @@ pub enum RendererOwnerCommand {
 }
 
 pub enum RendererOwnerReply {
+    CapturedDocumentEnvironmentReleased,
     PageCreated(Box<RendererAttachedPage>),
+    PendingAuxiliaryPageCanceled,
+    PageReplacementCommitted(Box<RendererPageReplacementCommit>),
+    LivePageReplacementReserved(RendererPageReservationToken),
     PreparedRendererDocumentStored {
         renderer_devtools_agent_token: RendererDevToolsAgentToken,
     },
@@ -328,6 +333,10 @@ enum RenderRuntimeDispatchOutcome {
     },
     PageCreatedAndContinueNavigation {
         page: Box<RendererAttachedPage>,
+        continuation: RenderRuntimePageCreationContinuation,
+    },
+    PageReplacementCommittedAndContinueNavigation {
+        replacement: Box<RendererPageReplacementCommit>,
         continuation: RenderRuntimePageCreationContinuation,
     },
     BackgroundComplete(Result<()>),
@@ -651,10 +660,13 @@ impl RendererPostResponseOwnerWork {
     }
 }
 
-fn checked_live_page_wait_deadline(timeout_ms: u64, operation: &str) -> Result<Instant> {
+fn checked_live_page_wait_deadline(
+    now: Instant,
+    timeout_ms: u64,
+    operation: &str,
+) -> Result<Instant> {
     let timeout = std::time::Duration::from_millis(timeout_ms);
-    Instant::now()
-        .checked_add(timeout)
+    now.checked_add(timeout)
         .ok_or_else(|| anyhow!("{operation} timeout is too large"))
 }
 
@@ -716,7 +728,7 @@ enum RenderRuntimeTurn {
         scope_id: PageVmRuntimeCommandOutputScopeId,
         reply: Box<RendererPageReply>,
         should_follow_pending_navigation: bool,
-        turn_records: Vec<PendingRendererOutputRecord>,
+        command_output_cursor: Option<RendererOutputCursor>,
         capture_policy: super::RendererPageStateCapturePolicy,
     },
     ResumeLivePageDocumentLifecycleAfterReply {
@@ -785,6 +797,7 @@ enum RenderRuntimeTurn {
     },
     ContinueLivePagePendingLocationNavigationPhaseOne {
         token: RendererPageToken,
+        vm_creation_id: u64,
         follow_count: usize,
         completion: LivePagePendingNavigationCompletion,
     },
@@ -846,10 +859,21 @@ impl RenderRuntimeTurn {
             Self::WaitLifecycleNavigation(wait) => wait.token() == token,
             Self::ContinueLivePageNavigationPostParseLifecycle {
                 token: observer_token,
-                completion: LivePagePendingNavigationCompletion::CompletePageCreation { .. },
+                completion:
+                    LivePagePendingNavigationCompletion::CompletePageCreation { .. }
+                    | LivePagePendingNavigationCompletion::CompletePageReplacement { .. },
                 ..
             } => *observer_token == token,
             _ => false,
+        }
+    }
+
+    fn phase_one_vm_creation_id(&self) -> Option<u64> {
+        match self {
+            Self::ContinueLivePagePendingLocationNavigationPhaseOne { vm_creation_id, .. } => {
+                Some(*vm_creation_id)
+            }
+            _ => None,
         }
     }
 
@@ -884,6 +908,7 @@ impl RenderRuntimeTurn {
             }
             Self::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token,
+                vm_creation_id,
                 follow_count,
                 completion,
             } => {
@@ -891,6 +916,7 @@ impl RenderRuntimeTurn {
                 (
                     Self::ContinueLivePagePendingLocationNavigationPhaseOne {
                         token,
+                        vm_creation_id,
                         follow_count,
                         completion,
                     },
@@ -1017,12 +1043,13 @@ pub(super) struct RendererOwnerState {
     pub(super) next_page_id: Arc<AtomicU64>,
     pub(super) page_wake_tx: mpsc::UnboundedSender<RendererOwnerWake>,
     pub(super) render_runtime_admission: std::sync::OnceLock<RenderRuntimeHandle>,
+    pub(super) runtime_handle: std::sync::OnceLock<super::page::RendererProducerShutdownHandle>,
     pub(super) inspector_io_wake_tx: mpsc::UnboundedSender<RendererInspectorIoOwnerWake>,
     pub(super) browser_context_runtime: RendererBrowserContextRuntime,
     pub(super) devtools_target_shutdown_registry:
         crate::devtools::target::RendererDevToolsTargetShutdownRegistry,
     pub(super) owner_local_host_id: RendererOwnerLocalHostId,
-    layout_policy: Mutex<RendererOwnerLayoutPolicyState>,
+    layout_configuration: Mutex<Option<moli_page_types::LayoutConfiguration>>,
     context_shutdown_notify: tokio::sync::Notify,
     #[cfg(test)]
     command_dispatch_gate: Mutex<Option<RendererCommandDispatchGateForTesting>>,
@@ -1030,11 +1057,6 @@ pub(super) struct RendererOwnerState {
     publish_next_command_output_before_settlement: std::sync::atomic::AtomicBool,
     #[cfg(debug_assertions)]
     pub(super) owner_local_thread_id: Mutex<Option<ThreadId>>,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct RendererOwnerLayoutPolicyState {
-    policy: Option<LayoutPolicy>,
 }
 
 #[cfg(test)]
@@ -1205,7 +1227,7 @@ mod tests {
     #[test]
     fn live_page_wait_deadline_does_not_convert_huge_timeout_to_now() {
         let before = Instant::now();
-        let result = checked_live_page_wait_deadline(u64::MAX, "selector");
+        let result = checked_live_page_wait_deadline(before, u64::MAX, "selector");
 
         match result {
             Ok(deadline) => assert!(
@@ -1218,10 +1240,15 @@ mod tests {
 
     #[test]
     fn live_page_wait_deadline_accepts_regular_timeout() {
-        let deadline = checked_live_page_wait_deadline(1, "selector")
+        let now = Instant::now();
+        let deadline = checked_live_page_wait_deadline(now, 1, "selector")
             .expect("small timeout should fit in Instant range");
 
-        assert!(deadline > Instant::now());
+        assert!(deadline > now);
+        assert_eq!(
+            deadline.duration_since(now),
+            std::time::Duration::from_millis(1)
+        );
     }
 
     #[test]
@@ -1270,6 +1297,7 @@ mod tests {
             reply_tx: None,
             turn: RenderRuntimeTurn::ContinueLivePagePendingLocationNavigationPhaseOne {
                 token: parser_token,
+                vm_creation_id: 1,
                 follow_count: 0,
                 completion: LivePagePendingNavigationCompletion::Background,
             },

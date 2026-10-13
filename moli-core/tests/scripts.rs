@@ -748,6 +748,11 @@ async fn alternate_stylesheet_does_not_block_parser_blocking_script() -> Result<
         diagnostic_global(&page, "blockingStylesheetAlternateSawDcl"),
         Some(&JsValueSnapshot::Bool(false))
     );
+    assert_eq!(
+        diagnostic_global(&page, "blockingStylesheetAlternateLoaded"),
+        Some(&JsValueSnapshot::Bool(true)),
+        "the probe must release the stylesheet response before Window load"
+    );
 
     server.shutdown().await;
     Ok(())
@@ -1983,6 +1988,11 @@ async fn runtime_owned_inline_module_runs_while_parser_defer_is_blocked() -> Res
             "ready:loading,after-append,module:interactive,module-microtask,defer,dcl:interactive,window-load:complete"
                 .to_owned()
         ))
+    );
+    assert_eq!(
+        diagnostic_global(&page, "runtimeModuleBlockedDeferStyleLoaded"),
+        Some(&JsValueSnapshot::Bool(true)),
+        "the module microtask must release a successful stylesheet response"
     );
 
     server.shutdown().await;
@@ -5373,7 +5383,7 @@ async fn module_wasm_js_cycle_reports_guard_without_crashing() -> Result<()> {
         .await?;
     assert_eq!(
         diagnostic_global(&page, "moduleWasmJsCycleConstructor"),
-        Some(&JsValueSnapshot::String("Error".to_owned())),
+        Some(&JsValueSnapshot::String("TypeError".to_owned())),
         "message: {:?}",
         diagnostic_global(&page, "moduleWasmJsCycleMessage")
     );

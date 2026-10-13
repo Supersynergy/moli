@@ -36,7 +36,8 @@ use super::super::{
     update_focus,
 };
 use super::targets::{
-    SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
+    SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
+    form_navigation_target_document, named_iframe_target_handle_for_navigation,
     navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
     navigate_target_browsing_context,
 };
@@ -1963,22 +1964,6 @@ fn anchor_click_default_action(
         }
         return None;
     }
-    if target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current) {
-        let source_element = node_wrapper_from_handle(scope, handle);
-        let can_intercept = url::Url::parse(&resolved)
-            .is_ok_and(|url| moli_url::same_origin(runtime.document_url(), &url));
-        if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
-            scope,
-            &resolved,
-            "push",
-            source_element,
-            can_intercept,
-            user_initiated,
-            None,
-        ) {
-            return None;
-        }
-    }
     let source_element = node_wrapper_from_handle(scope, handle);
     if click_listener_changed_named_child_navigation(
         scope,
@@ -1997,6 +1982,7 @@ fn anchor_click_default_action(
         target_name.as_deref(),
         &resolved,
         source_element,
+        user_initiated,
         popup_disposition,
     );
     None
@@ -2048,10 +2034,10 @@ fn hyperlink_navigation_policy(
         InputNavigationPolicy::NewBackgroundSurface => {
             HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Background)
         }
-        InputNavigationPolicy::NewWindow | InputNavigationPolicy::NewForegroundSurface => {
-            // The renderer target model has no separate window chrome. Preserve
-            // Chromium's selected-surface behavior by folding a new window into a
-            // foreground popup Page target.
+        InputNavigationPolicy::NewWindow => {
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::NewWindow)
+        }
+        InputNavigationPolicy::NewForegroundSurface => {
             HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
         }
     }
@@ -2138,7 +2124,11 @@ fn navigation_owner_window_for_handle<'s>(
         .node(handle)
         .and_then(Node::owner_document)?;
     if document_handle == runtime.document_handle() {
-        return Some(scope.get_current_context().global(scope));
+        return browsing_context_window_for_dispatch_scope(
+            scope,
+            runtime_ptr,
+            crate::native_bridge::OwnerDispatchScope::Top,
+        );
     }
     if let Some(popup_id) = runtime.lightweight_popup_id_for_document_handle(document_handle) {
         return runtime.lightweight_popup_window(scope, popup_id);
@@ -2339,27 +2329,44 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             && !has_noopener
             && (has_opener || special_target != Some(SpecialBrowsingContextTarget::Blank))
     };
-    if target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current) {
+    let target_document = {
         let runtime = unsafe { &*runtime_ptr };
-        let document_handle = runtime
+        runtime
             .dom_host()
-            .node(form_handle)
-            .and_then(Node::owner_document);
-        if let Some(document_handle) = document_handle
-            && document_handle != runtime.document_handle()
-            && let Some(child_handle) =
+            .owner_document_handle(form_handle)
+            .and_then(|source| form_navigation_target_document(runtime, source, target_name))
+    };
+    if let Some(document_handle) = target_document {
+        let runtime = unsafe { &*runtime_ptr };
+        if document_handle != runtime.document_handle() {
+            let Some(child_handle) =
                 runtime.child_browsing_context_handle_by_document_handle(scope, document_handle)
-        {
+            else {
+                return false;
+            };
             let runtime = unsafe { &mut *runtime_ptr };
-            return runtime.navigate_child_browsing_context_to_url(
-                scope,
-                child_handle,
-                resolved_url,
-            );
+            let navigated =
+                runtime.navigate_child_browsing_context_to_url(scope, child_handle, resolved_url);
+            if navigated {
+                crate::context_bootstrap::web_mcp::bind_child_navigation(
+                    runtime,
+                    form_handle,
+                    child_handle,
+                );
+            }
+            return navigated;
         }
+        let Some(window) = browsing_context_window_for_dispatch_scope(
+            scope,
+            runtime_ptr,
+            crate::native_bridge::OwnerDispatchScope::Top,
+        ) else {
+            return false;
+        };
         let source_element = node_wrapper_from_handle(scope, form_handle);
         if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
             scope,
+            window,
             resolved_url,
             "replace",
             source_element,
@@ -2373,6 +2380,10 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
             return false;
         };
         unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+        crate::context_bootstrap::web_mcp::bind_root_navigation(
+            unsafe { &mut *runtime_ptr },
+            form_handle,
+        );
         return true;
     }
     navigate_target_browsing_context(
@@ -2440,7 +2451,7 @@ mod hyperlink_popup_disposition_tests {
                 SHIFT,
                 Some(CurrentInputEvent::mouse("mouseup", 0, SHIFT)),
             ),
-            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
+            HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::NewWindow)
         );
         assert_eq!(
             hyperlink_navigation_policy(

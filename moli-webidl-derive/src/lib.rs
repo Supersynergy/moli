@@ -11,6 +11,16 @@ use syn::{DeriveInput, parse_macro_input};
 /// and returns a Rust struct. Field attributes control required arguments,
 /// explicit indexes, defaults, nullable values, variadic tails, custom
 /// converters, and hand-written parser hooks.
+/// `#[webidl(interface = Type)]` validates a V8 object using `Type::NAME` and
+/// `Type::is_instance`, with an optional `brand_check = path` override. It
+/// composes with optional/nullable fields and variadic object arguments.
+/// Non-optional interface fields without a default convert at their field
+/// position; `required` additionally enables the initial arity check.
+/// `#[webidl(dictionary)]` delegates to a dictionary derive. Missing/nullish
+/// values parse an empty dictionary; optional fields skip missing/undefined.
+/// `#[webidl(sequence)]` converts one iterable to `Vec<T>`, using inferred or
+/// explicit item conversion, including `interface` and `brand_check` metadata.
+/// `sequence, converter = "dictionary"` converts each item as a dictionary.
 #[proc_macro_derive(WebIdlArgs, attributes(webidl))]
 pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_args(parse_macro_input!(input as DeriveInput)) {
@@ -27,6 +37,17 @@ pub fn derive_webidl_args(input: TokenStream) -> TokenStream {
 /// `nullable`, legacy nullish handling, explicit converters, and hand-written
 /// member parser hooks. Unnamed fields use `camelCase` member names by default,
 /// matching common WebIDL dictionary spelling.
+/// Members are read and converted in lexicographical order of their final
+/// JavaScript names, including `name` and `rename_all` overrides. Rust raw
+/// identifiers such as `r#type` refer to the member `type`.
+/// One `#[webidl(inherit)]` field delegates to its `WebIdlDictionary` type on
+/// the same object before all own members, without reading a property for the
+/// field. Inheritance cannot be combined with member/conversion attributes.
+/// Object members support `interface = Type` and an optional `brand_check = path`
+/// using the same native identity conversion as positional arguments.
+/// Nested members support `dictionary`: null parses an empty dictionary while
+/// `Option<T>` skips missing/undefined and `nullable` also skips null.
+/// Iterable members support `sequence` with `Vec<T>` or `Option<Vec<T>>`.
 #[proc_macro_derive(WebIdlDictionary, attributes(webidl))]
 pub fn derive_webidl_dictionary(input: TokenStream) -> TokenStream {
     match expand::expand_webidl_dictionary(parse_macro_input!(input as DeriveInput)) {

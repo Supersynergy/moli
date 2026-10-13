@@ -4,6 +4,8 @@
 //! owner/page handles, the native bridge, script and module execution, Web API
 //! bootstrap, and the renderer-side `ResourceRequestClient` wrapper used by the facade crate.
 
+#![recursion_limit = "256"]
+
 #[path = "planning.rs"]
 mod script_planning;
 mod stylesheet_blocking;
@@ -207,7 +209,8 @@ pub use context_bootstrap::{
 };
 pub(crate) use context_bootstrap::{
     construct_form_data_entries_for_form, form_data_entries_multipart_body_with_prefix,
-    form_data_entries_to_string_pairs, form_data_object_from_entries, snapshot_form_data_value,
+    form_data_entries_to_string_pairs, form_data_object_from_entries_for_window,
+    snapshot_form_data_value,
 };
 pub use document_cookie_owner::{
     DocumentCookieBackendConnectionState, DocumentCookieBrowserContextSnapshot,
@@ -221,19 +224,21 @@ pub use host::{
 };
 pub use local_executor::is_on_js_local_executor;
 pub use native_bridge::element::ClientRect as RendererClientRect;
-pub use runtime::RendererRuntimeInspectorMessageResponseOrder;
 pub use runtime::{
     CompletedWorkerRuntimeInspectorCommandDispatch, DetachedParserScriptFetchContinuation,
     DevToolsSessionKey, ExternalRawDocumentBodyStream, JsRuntime, JsRuntimeOwner, PageId,
     PendingHtmlPage, PendingWorkerRuntimeInspectorSessionResponse, PreparedRendererDocument,
     RendererAccessibilityPayloadsForObjectId, RendererActivityDiagnostics,
     RendererAgentAttachmentId, RendererAutofillAddressField, RendererAutofillCreditCard,
-    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest, RendererBrowserContextRuntime,
-    RendererBrowserContextRuntimeId, RendererBrowserContextRuntimeOwner,
-    RendererBrowserContextRuntimeOwnerAccess, RendererCaptureScreencastFrameReply,
+    RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
+    RendererAuxiliaryDocumentResponse, RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow,
+    RendererBrowserContextRuntime, RendererBrowserContextRuntimeId,
+    RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
+    RendererBrowsingContextGroup, RendererBrowsingContextName, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererCapturedScreencastFrame, RendererCapturedScreenshot,
-    RendererCdpCall, RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererCountEntry,
+    RendererCaptureScreenshotRequest, RendererCapturedDocumentEnvironment,
+    RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCdpCall,
+    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererCountEntry,
     RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
     RendererDevToolsAgentToken, RendererDevToolsMainCommandEnvelope, RendererDocumentBoxModel,
     RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
@@ -246,8 +251,9 @@ pub use runtime::{
     RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
     RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
     RendererDocumentNodeReference, RendererDocumentNodeTextResolution, RendererDocumentOptions,
-    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
-    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDocumentReplacement,
+    RendererDocumentPreparationTarget, RendererDocumentQuerySelectorNode,
+    RendererDocumentQuerySelectorResolution,
+    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDocumentTerminationReason,
     RendererDocumentTitleChanged, RendererDocumentToken, RendererDomAttributeMutation,
@@ -270,16 +276,16 @@ pub use runtime::{
     RendererLayoutMetrics, RendererLifecycleDecider, RendererLifecycleDecision,
     RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleSnapshot,
     RendererLifecycleStartReason, RendererLifecycleTerminationStamp, RendererMainDocumentCommit,
-    RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
+    RendererMainDocumentResource, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
     RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics,
     RendererNativeCommandReadyResponse, RendererNativeCommandResponseGuard,
     RendererNativeCommandTerminal, RendererNativeOperation, RendererNativeOperationStep,
     RendererNativeProtocolError, RendererNativeProtocolNotification,
-    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererOutputCursor,
-    RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
-    RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
-    RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
-    RendererOutputStreamIdentity, RendererOutputTransportDiagnostics,
+    RendererNativeProtocolResponse, RendererNativeProtocolStateUpdate, RendererNavigationInitiator,
+    RendererOutputCursor, RendererOutputFence, RendererOutputFenceLeaseId, RendererOutputItem,
+    RendererOutputPublication, RendererOutputPublicationOrdering, RendererOutputRecord,
+    RendererOutputResidenceIdentity, RendererOutputStreamCloseReason, RendererOutputStreamControl,
+    RendererOutputStreamEpoch, RendererOutputStreamIdentity, RendererOutputTransportDiagnostics,
     RendererOutputTransportMessage, RendererOutputTransportReceiver,
     RendererOutputTransportSendError, RendererOutputTransportSender, RendererOwnerAction,
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerLocalHostId, RendererOwnerReply,
@@ -288,16 +294,20 @@ pub use runtime::{
     RendererPageCookieFacadeSnapshotReply, RendererPageCreationArtifacts,
     RendererPageCreationDiagnostics, RendererPageCreationPhase, RendererPageCreationProgress,
     RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPageHandle, RendererPageReply,
-    RendererPageReservationToken, RendererPageState, RendererPageTestingHandle, RendererPageView,
+    RendererPageDumpStripOptions, RendererPageHandle, RendererPageReplacementCommit,
+    RendererPageReplacementError, RendererPageReplacementFailureDisposition,
+    RendererPageReplacementReservationRequest, RendererPageReplacementTarget, RendererPageReply,
+    RendererPageReservationToken, RendererPageState, RendererPageStateRevision,
+    RendererPageTestingHandle, RendererPageView, RendererPdfOptions, RendererPendingAuxiliaryPage,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
     RendererPopupActivationSource, RendererPopupDisposition,
-    RendererPreparedDocumentCommitConfiguration, RendererProtocolObservation,
-    RendererReservedServiceWorkerClient, RendererResourceTextSearchOutcome,
+    RendererPreparedDocumentCommitConfiguration, RendererPrintToPdfReply,
+    RendererPrintToPdfRequest, RendererProtocolObservation, RendererReservedServiceWorkerClient,
+    RendererResourceContentBody, RendererResourceSearchRequest, RendererResourceTextSearchOutcome,
     RendererRuntimeCommandCausalIdentity, RendererRuntimeCommandOutput,
     RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorIoCommandClaim,
@@ -324,6 +334,7 @@ pub use runtime::{
 pub use runtime::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
 };
+pub use runtime::{RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder};
 pub use service_worker_runtime::{
     SharedServiceWorkerResourceStore, new_shared_json_service_worker_resource_store,
     new_shared_service_worker_resource_store,

@@ -30,7 +30,7 @@ use style::{
     values::{
         AtomIdent, resolved,
         specified::{
-            box_::{DisplayInside, DisplayOutside},
+            box_::{ContentVisibility, Display, DisplayInside, DisplayOutside},
             text::TextTransformCase,
         },
     },
@@ -145,7 +145,7 @@ impl StyloAnonymousBoxKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ComputedRenderedStyleFacts {
     pub(crate) display: ComputedDisplayKind,
-    pub(crate) content_visibility_applicable: bool,
+    pub(crate) hides_contents: bool,
     pub(crate) visibility_visible: bool,
     pub(crate) opacity_zero: bool,
     pub(crate) text_transform: ComputedTextTransformKind,
@@ -186,20 +186,8 @@ impl StyloComputedStyleSnapshot {
 
     pub(crate) fn rendered_style_facts(&self) -> ComputedRenderedStyleFacts {
         let display = self.primary.clone_display();
-        let content_visibility_applicable = !display.is_none()
-            && !display.is_contents()
-            && !display.is_inline_flow()
-            && display.outside() != DisplayOutside::TableCaption
-            && !matches!(
-                display.inside(),
-                DisplayInside::Table
-                    | DisplayInside::TableRowGroup
-                    | DisplayInside::TableColumn
-                    | DisplayInside::TableColumnGroup
-                    | DisplayInside::TableHeaderGroup
-                    | DisplayInside::TableFooterGroup
-                    | DisplayInside::TableRow
-            );
+        let hides_contents = content_visibility_applies(display)
+            && self.primary.clone_content_visibility() == ContentVisibility::Hidden;
         let display = if display.is_none() {
             ComputedDisplayKind::None
         } else if display.is_contents() {
@@ -265,12 +253,26 @@ impl StyloComputedStyleSnapshot {
         };
         ComputedRenderedStyleFacts {
             display,
-            content_visibility_applicable,
+            hides_contents,
             visibility_visible: self.primary.clone_visibility() == ComputedVisibility::Visible,
             opacity_zero: self.primary.clone_opacity() == 0.0,
             text_transform,
             white_space_collapse,
             text_wrap_mode,
+        }
+    }
+
+    pub(crate) fn accessibility_style(&self) -> moli_dom::accessibility::AccessibilityStyle {
+        let display = self.primary.clone_display();
+        moli_dom::accessibility::AccessibilityStyle {
+            display_none: display.is_none(),
+            visibility_visible: self.primary.clone_visibility() == ComputedVisibility::Visible,
+            hides_contents: content_visibility_applies(display)
+                && self.primary.clone_content_visibility() == ContentVisibility::Hidden,
+            block_level: matches!(
+                display.outside(),
+                DisplayOutside::Block | DisplayOutside::TableCaption
+            ),
         }
     }
 
@@ -293,6 +295,23 @@ impl StyloComputedStyleSnapshot {
     pub(crate) fn custom_property_names(&self) -> Vec<String> {
         computed_custom_property_names_for_style(&self.primary)
     }
+}
+
+fn content_visibility_applies(display: Display) -> bool {
+    !display.is_none()
+        && !display.is_contents()
+        && !display.is_inline_flow()
+        && display.outside() != DisplayOutside::TableCaption
+        && !matches!(
+            display.inside(),
+            DisplayInside::Table
+                | DisplayInside::TableRowGroup
+                | DisplayInside::TableColumn
+                | DisplayInside::TableColumnGroup
+                | DisplayInside::TableHeaderGroup
+                | DisplayInside::TableFooterGroup
+                | DisplayInside::TableRow
+        )
 }
 
 pub(super) fn retained_current_element_state(

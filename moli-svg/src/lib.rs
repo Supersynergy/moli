@@ -6,12 +6,13 @@ mod path;
 mod transform;
 
 pub use geometry::{
-    SvgGeometryBox, SvgGeometryElement, SvgGeometryPoint, SvgGeometrySegment,
+    SvgFillRule, SvgGeometryBox, SvgGeometryElement, SvgGeometryPoint, SvgGeometrySegment,
     bounding_box_for_element, bounding_box_for_segments, bounding_box_for_transformed_element,
-    is_point_in_fill, point_at_length, segments_for_element,
+    is_point_in_fill, is_point_in_fill_with_rule, point_at_length, segments_for_element,
 };
 pub use length::{
     SvgLength, SvgLengthUnit, parse_length, parse_length_list, parse_number, parse_number_list,
+    parse_point_list,
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
 pub use transform::{
@@ -26,18 +27,166 @@ mod tests {
         SvgMatrixComponents, SvgTransform, SvgTransformKind, bounding_box_for_element,
         bounding_box_for_segments, bounding_box_for_transformed_element,
         consolidate_transform_matrices, is_point_in_fill, parse_length, parse_length_list,
-        parse_number, parse_number_list, parse_transform_attribute, point_at_length,
-        segments_for_element, serialize_number, serialize_transform_list,
+        parse_number, parse_number_list, parse_point_list, parse_transform_attribute,
+        point_at_length, segments_for_element, serialize_number, serialize_transform_list,
     };
+
+    #[test]
+    fn length_units_are_ascii_case_insensitive_in_scalars_and_lists() {
+        assert_eq!(parse_length(" 1pX ").unwrap().serialize(), "1px");
+        assert_eq!(parse_length("2EM").unwrap().unit, crate::SvgLengthUnit::Ems);
+        let values = parse_length_list("1pX, 2EM 3cM").unwrap();
+        assert_eq!(
+            values
+                .iter()
+                .map(|value| value.serialize())
+                .collect::<Vec<_>>(),
+            ["1px", "2em", "3cm"]
+        );
+        assert!(parse_length("1PXjunk").is_none());
+        assert!(parse_length_list("1PX 2not-a-unit").is_none());
+    }
 
     fn path_segments(raw: &str) -> Vec<SvgGeometrySegment> {
         segments_for_element(SvgGeometryElement::Path { d: raw.to_owned() })
+    }
+
+    #[test]
+    fn point_list_parser_rejects_invalid_tokens_and_truncates_incomplete_pairs() {
+        assert_eq!(
+            parse_point_list("0,0 100,0 100,100 0,100"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+        );
+        assert_eq!(
+            parse_point_list("0,0 100,0 20"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0)])
+        );
+        assert_eq!(
+            parse_point_list("0,0 100,0 20,"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0)])
+        );
+        assert_eq!(parse_point_list("0,0 100,0 INVALID"), None);
     }
 
     fn polyline_segments(raw: &str) -> Vec<SvgGeometrySegment> {
         segments_for_element(SvgGeometryElement::Polyline {
             points: raw.to_owned(),
         })
+    }
+
+    #[test]
+    fn degenerate_shapes_keep_distance_paths_without_rendered_bounds() {
+        for (element, length, endpoint) in [
+            (
+                SvgGeometryElement::Rect {
+                    x: 7.0,
+                    y: 9.0,
+                    width: 0.0,
+                    height: 10.0,
+                    rx: 0.0,
+                    ry: 0.0,
+                },
+                20.0,
+                SvgGeometryPoint::new(7.0, 9.0),
+            ),
+            (
+                SvgGeometryElement::Rect {
+                    x: 7.0,
+                    y: 9.0,
+                    width: 10.0,
+                    height: 0.0,
+                    rx: 0.0,
+                    ry: 0.0,
+                },
+                20.0,
+                SvgGeometryPoint::new(7.0, 9.0),
+            ),
+            (
+                SvgGeometryElement::Ellipse {
+                    cx: 7.0,
+                    cy: 9.0,
+                    rx: 0.0,
+                    ry: 10.0,
+                },
+                40.0,
+                SvgGeometryPoint::new(7.0, 9.0),
+            ),
+            (
+                SvgGeometryElement::Ellipse {
+                    cx: 7.0,
+                    cy: 9.0,
+                    rx: 10.0,
+                    ry: 0.0,
+                },
+                40.0,
+                SvgGeometryPoint::new(17.0, 9.0),
+            ),
+        ] {
+            assert!(bounding_box_for_element(&element).is_none());
+            let segments = segments_for_element(element);
+            assert_near(
+                segments.iter().map(SvgGeometrySegment::length).sum(),
+                length,
+                1e-6,
+            );
+            let point = point_at_length(&segments, 300.0);
+            assert_close(point.x, endpoint.x);
+            assert_close(point.y, endpoint.y);
+        }
+        for element in [
+            SvgGeometryElement::Rect {
+                x: 7.0,
+                y: 9.0,
+                width: 0.0,
+                height: 0.0,
+                rx: 0.0,
+                ry: 0.0,
+            },
+            SvgGeometryElement::Ellipse {
+                cx: 7.0,
+                cy: 9.0,
+                rx: 0.0,
+                ry: 0.0,
+            },
+            SvgGeometryElement::Circle {
+                cx: 7.0,
+                cy: 9.0,
+                r: 0.0,
+            },
+            SvgGeometryElement::Path { d: String::new() },
+        ] {
+            assert!(segments_for_element(element).is_empty());
+        }
+        for (rx, ry, points) in [
+            (
+                0.0,
+                10.0,
+                [(7.0, 9.0), (7.0, 19.0), (7.0, 9.0), (7.0, -1.0), (7.0, 9.0)],
+            ),
+            (
+                10.0,
+                0.0,
+                [
+                    (17.0, 9.0),
+                    (7.0, 9.0),
+                    (-3.0, 9.0),
+                    (7.0, 9.0),
+                    (17.0, 9.0),
+                ],
+            ),
+        ] {
+            let segments = segments_for_element(SvgGeometryElement::Ellipse {
+                cx: 7.0,
+                cy: 9.0,
+                rx,
+                ry,
+            });
+            for (distance, (x, y)) in [0.0, 10.0, 20.0, 30.0, 40.0].into_iter().zip(points) {
+                let point = point_at_length(&segments, distance);
+                assert_close(point.x, x);
+                assert_close(point.y, y);
+            }
+        }
     }
 
     fn assert_close(actual: f64, expected: f64) {
@@ -392,6 +541,7 @@ mod tests {
         assert_close(length.value, 1.5);
         assert_eq!(length.unit, SvgLengthUnit::Ems);
         assert_eq!(length.serialize(), "1.5em");
+        assert_eq!(parse_length("1pX").unwrap().unit, SvgLengthUnit::Px);
         assert_eq!(serialize_number(3.0), "3");
         assert_eq!(serialize_number(3.25), "3.25");
         assert!(parse_length("1 px").is_none());
@@ -402,6 +552,18 @@ mod tests {
         assert_eq!(lengths[3].unit, SvgLengthUnit::Number);
         assert_close(lengths[4].value, -5.0);
         assert!(parse_length_list("1px nope 2px").is_none());
+
+        let modern = parse_length_list("10cap, 2rlh 3vw-4q").unwrap();
+        assert_eq!(modern.len(), 4);
+        assert_eq!(modern[0].unit, SvgLengthUnit::Cap);
+        assert_eq!(modern[1].unit, SvgLengthUnit::Rlh);
+        assert_eq!(modern[2].unit, SvgLengthUnit::Vw);
+        assert_close(modern[3].value, -4.0);
+        assert_eq!(modern[3].unit, SvgLengthUnit::Q);
+        assert_eq!(modern[0].serialize(), "10cap");
+        assert_eq!(parse_length_list(" 10cap ").unwrap().len(), 1);
+        assert!(parse_length_list("10cap,").is_none());
+        assert!(parse_length_list("10cap nope").is_none());
 
         assert_close(parse_number(" .5 ").unwrap(), 0.5);
         assert_eq!(

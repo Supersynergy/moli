@@ -63,10 +63,14 @@ pub(crate) struct PendingLocationNavigation {
     pub(crate) request_body: Option<Vec<u8>>,
     pub(crate) request_headers: Vec<(String, String)>,
     pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
+    pub(crate) navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
+    pub(crate) initial_document_environment:
+        Option<crate::runtime::RendererCapturedDocumentEnvironment>,
     pub(crate) entry_seed: Option<NavigationHistoryEntrySeed>,
     pub(crate) reserved_service_worker_client: Option<PendingReservedServiceWorkerClient>,
     pub(crate) service_worker_client_navigate:
         Option<crate::types::ServiceWorkerClientNavigateContinuation>,
+    pub(crate) web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,9 +186,12 @@ impl JsContextHost {
                 request_body,
                 request_headers,
                 browser_navigation_kind,
+                navigation_initiator: None,
+                initial_document_environment: None,
                 entry_seed,
                 reserved_service_worker_client,
                 service_worker_client_navigate: None,
+                web_mcp_invocation: None,
             },
         )));
         self.handoff_ordinary_page_turn_navigation(handoff);
@@ -212,12 +219,28 @@ impl JsContextHost {
                 request_body: None,
                 request_headers: Vec::new(),
                 browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
+                navigation_initiator: None,
+                initial_document_environment: None,
                 entry_seed: None,
                 reserved_service_worker_client,
                 service_worker_client_navigate: Some(continuation),
+                web_mcp_invocation: None,
             },
         )));
         self.handoff_ordinary_page_turn_navigation(handoff);
+    }
+
+    pub(crate) fn set_pending_location_navigation_source(
+        &mut self,
+        initiator: crate::runtime::RendererNavigationInitiator,
+        environment: Option<crate::runtime::RendererCapturedDocumentEnvironment>,
+    ) {
+        if let Some(PendingTopLevelNavigation::Location(pending)) =
+            self.pending_top_level_navigation.as_mut()
+        {
+            pending.navigation_initiator = Some(initiator);
+            pending.initial_document_environment = environment;
+        }
     }
 
     pub(crate) fn has_pending_location_navigation(&self) -> bool {
@@ -225,6 +248,22 @@ impl JsContextHost {
             self.pending_top_level_navigation.as_ref(),
             Some(PendingTopLevelNavigation::Location(_))
         )
+    }
+
+    pub(crate) fn bind_pending_web_mcp_navigation(
+        &mut self,
+        id: moli_page_types::RendererWebMcpNavigation,
+    ) -> bool {
+        let Some(PendingTopLevelNavigation::Location(pending)) =
+            self.pending_top_level_navigation.as_mut()
+        else {
+            return false;
+        };
+        if pending.kind() != PendingLocationNavigationKind::Document {
+            return false;
+        }
+        pending.web_mcp_invocation = Some(id);
+        true
     }
 
     pub(crate) fn pending_location_navigation_kind(&self) -> Option<PendingLocationNavigationKind> {
@@ -326,6 +365,9 @@ impl JsContextHost {
             return;
         };
         let pending = *pending;
+        if let Some(id) = pending.web_mcp_invocation {
+            crate::context_bootstrap::web_mcp::fail_navigation(self, id);
+        }
         let Some(continuation) = pending.service_worker_client_navigate else {
             return;
         };

@@ -278,6 +278,10 @@ fn navigation_fixture() -> (
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     let navigation = NavigationDispatchState {
+        web_mcp_invocation: None,
+        navigation_initiator: None,
+        initial_document_environment: None,
+        auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: Some(1),
@@ -515,18 +519,22 @@ async fn background_claim_checks_dispatch_identity_and_owner_before_claiming() {
         .unwrap();
     for mismatch in [
         NavigationDispatchState {
+            web_mcp_invocation: None,
             frame_id: "other frame".into(),
             ..navigation.clone()
         },
         NavigationDispatchState {
+            web_mcp_invocation: None,
             loader_id: "other loader".into(),
             ..navigation.clone()
         },
         NavigationDispatchState {
+            web_mcp_invocation: None,
             owner: CommandOwnerScope::for_session("missing session"),
             ..navigation.clone()
         },
         NavigationDispatchState {
+            web_mcp_invocation: None,
             owner: CommandOwnerScope::for_session("SID-other"),
             ..navigation.clone()
         },
@@ -611,6 +619,7 @@ async fn background_claims_are_target_owned_in_inactive_browser_contexts() {
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(other);
     let other_navigation = NavigationDispatchState {
+        web_mcp_invocation: None,
         owner: CommandOwnerScope::for_session("SID-other"),
         frame_id: other_token.target_id.clone(),
         session_id: Some("SID-other".into()),

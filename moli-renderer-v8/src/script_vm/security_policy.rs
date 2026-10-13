@@ -42,7 +42,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let host_ptr: *mut JsContextHost = (*self._context_host).as_ptr();
                 self.document_runtime
@@ -91,7 +91,7 @@ impl ScriptVm {
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
-                let context = v8::Local::new(scope, &self.page_default_context);
+                let context = v8::Local::new(scope, &self.page_default_runtime.context);
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let host_ptr: *mut JsContextHost = (*self._context_host).as_ptr();
                 self.document_runtime
@@ -141,21 +141,35 @@ pub(super) unsafe extern "C" fn wasm_code_generation_check_callback(
     host.allows_wasm_code_generation_by_csp(scope)
 }
 
-pub(super) fn string_code_generation_check_callback<'s>(
+pub(crate) fn string_code_generation_check_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Value>,
     is_code_like: bool,
 ) -> v8::ModifyCodeGenerationFromStringsResult<'s> {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return code_generation_result(true, None);
-    };
-    if crate::context_bootstrap::consume_internal_javascript_url_eval(scope) {
-        return code_generation_result(true, None);
-    }
-    let trusted_types_requirements =
-        unsafe { &*host_ptr }.trusted_types_for_script_requirements(scope);
+    let worker_trusted_types_requirements =
+        crate::worker::worker_trusted_types_for_script_requirements(scope);
+    let (trusted_types_requirements, allow_trusted_types_eval, host_ptr) =
+        if let Some(requirements) = worker_trusted_types_requirements {
+            (
+                requirements,
+                crate::worker::worker_allows_trusted_types_eval(scope).unwrap_or(false),
+                None,
+            )
+        } else {
+            let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+                return code_generation_result(true, None);
+            };
+            if crate::context_bootstrap::consume_internal_javascript_url_eval(scope) {
+                return code_generation_result(true, None);
+            }
+            (
+                unsafe { &*host_ptr }.trusted_types_for_script_requirements(scope),
+                unsafe { &*host_ptr }.allows_trusted_types_eval(scope),
+                Some(host_ptr),
+            )
+        };
     let action = if trusted_types_requirements.requires_conversion() {
-        if unsafe { &*host_ptr }.allows_trusted_types_eval(scope) {
+        if allow_trusted_types_eval {
             // The keyword relaxes Trusted Types conversion, but it does not
             // override another CSP policy. The per-policy CSP gate still runs.
             if source.is_string() {
@@ -244,11 +258,20 @@ pub(super) fn string_code_generation_check_callback<'s>(
             source,
             modified_source: replacement,
         } => {
-            if !unsafe { &mut *host_ptr }.allows_eval_code_generation_by_csp(
-                scope,
-                allow_trusted_types_eval,
-                source.as_deref(),
-            ) {
+            let allowed = match host_ptr {
+                Some(host_ptr) => unsafe { &mut *host_ptr }.allows_eval_code_generation_by_csp(
+                    scope,
+                    allow_trusted_types_eval,
+                    source.as_deref(),
+                ),
+                None => crate::worker::worker_allows_eval_code_generation_by_csp(
+                    scope,
+                    allow_trusted_types_eval,
+                    source.as_deref(),
+                )
+                .unwrap_or(false),
+            };
+            if !allowed {
                 return code_generation_result(false, None);
             }
             let replacement = match replacement {

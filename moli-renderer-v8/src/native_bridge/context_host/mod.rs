@@ -127,6 +127,8 @@ pub(crate) use text_track_loads::{
 mod message_ports;
 mod messages;
 mod module_owner_tasks;
+mod mouse_click;
+pub(crate) use mouse_click::MouseReleaseFollowUp;
 mod navigation;
 mod navigator_overrides;
 mod opfs_tasks;
@@ -224,9 +226,10 @@ pub(crate) use selection_records::{
 };
 use websockets::WebSocketConnectionState;
 pub(crate) use window_execution_context::{
-    DetachedWindowFetchContext, WindowExecutionContextAccessPolicy, WindowExecutionContextBinding,
-    WindowExecutionContextIdentity, WindowExecutionContextOwner, WindowFetchContext,
-    WindowOperationReceiver, WindowOperationReceiverCaptureError, WindowTaskTarget,
+    DetachedWindowFetchContext, WindowEnvironmentSettings, WindowExecutionContextAccessPolicy,
+    WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
+    WindowFetchContext, WindowOperationReceiver, WindowOperationReceiverCaptureError,
+    WindowTaskTarget,
 };
 use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
@@ -236,10 +239,17 @@ use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
 
 pub(crate) struct PrebootstrappedChildDefaultContext {
+    pub(crate) frame_id: String,
     pub(crate) local_window_id: crate::frame_owner_model::LocalWindowId,
-    pub(crate) context: v8::Global<v8::Context>,
-    pub(crate) bridge_ref: JsContextHostBridgeRef,
-    pub(crate) runtime_observable_context_token: RuntimeObservableContextToken,
+    pub(crate) runtime: crate::script_vm::WindowRealmRuntime,
+}
+
+impl std::ops::Deref for PrebootstrappedChildDefaultContext {
+    type Target = crate::script_vm::WindowRealmRuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
 }
 
 pub(crate) type SharedPrebootstrappedChildDefaultContexts =
@@ -805,6 +815,7 @@ pub(crate) struct JsContextHost {
         super::history_traversal::PendingHistoryTraversalAdmissions,
     runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
+    scrollbars_hidden: bool,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,
@@ -817,6 +828,8 @@ pub(crate) struct JsContextHost {
     root_document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
     output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
     page_context_resources_closed: bool,
+    context_host_lifecycle: Rc<Cell<crate::util::ContextHostLifecycle>>,
+    deferred_context_host_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
     page_default_context: Option<v8::Weak<v8::Context>>,
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
     pub(super) bridge: NativeDomBridge,
@@ -856,7 +869,7 @@ pub(crate) struct JsContextHost {
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
-    document_domain_override: Option<String>,
+    document_domain_override: Rc<RefCell<Option<String>>>,
     next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,
@@ -878,6 +891,8 @@ pub(crate) struct JsContextHost {
     emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     document_activity: moli_page_types::DocumentActivity,
+    initial_empty_main_document: bool,
+    subframe_loading_disabled_documents: Rc<RefCell<HashMap<DomHandle, usize>>>,
     wpt_extensions_enabled: bool,
     network_offline: bool,
     navigator_overrides: moli_page_types::NavigatorOverrides,
@@ -922,6 +937,7 @@ pub(crate) struct JsContextHost {
     active_pointer_capture_ids: HashSet<i32>,
     pending_pointer_capture_targets: HashMap<i32, DomHandle>,
     pointer_capture_targets: HashMap<i32, DomHandle>,
+    mouse_input: mouse_click::MouseInputState,
     lazy_media_load_candidates: HashSet<DomHandle>,
     canvas_resources: canvas_resources::CanvasResourceStore,
     image_resources: image_resources::ImageResourceStore,
@@ -976,6 +992,9 @@ pub(crate) struct JsContextHost {
     next_child_window_event_registration_id: u64,
     event_callbacks: event_callbacks::EventCallbackRegistry,
     browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
+    browsing_context_name: crate::runtime::RendererBrowsingContextName,
+    auxiliary_window: Option<crate::runtime::RendererAuxiliaryWindow>,
+    page_script_environment: Option<crate::script_vm::WeakRendererPageScriptEnvironment>,
     top_level_navigation_handoff_tx:
         crate::page_task_queue::RendererTopLevelNavigationHandoffSender,
     service_worker_task_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
@@ -1025,14 +1044,12 @@ pub(crate) struct JsContextHost {
     pending_download_activations: Vec<RendererPendingDownloadActivation>,
     #[cfg(test)]
     pending_popup_activations: Vec<RendererPendingPopupActivation>,
-    next_lightweight_popup_id: u64,
     next_lightweight_popup_local_window_id: u64,
     next_lightweight_popup_document_id: u64,
     next_lightweight_popup_document_load_id: u64,
     next_lightweight_popup_classic_script_load_id: u64,
     lightweight_popup_browsing_contexts:
         HashMap<u64, popups::LightweightPopupBrowsingContextRecord>,
-    lightweight_popup_window_names: HashMap<String, u64>,
     lightweight_popup_document_handles: HashMap<DomHandle, u64>,
     pending_lightweight_popup_document_loads:
         HashMap<u64, popups::PendingLightweightPopupDocumentLoad>,
@@ -1096,6 +1113,8 @@ pub(crate) struct JsContextHost {
     stylo_computed_style_property_reads: Cell<u64>,
     #[cfg(test)]
     style_observation_environment_resolutions: Cell<u64>,
+    retained_document_runtime: Option<Box<DocumentRuntime>>,
+    published_document_host: bool,
 }
 
 struct PendingTextControlChangeCommit {
@@ -1250,15 +1269,66 @@ impl JsContextHost {
         self.app_manifest_link_change_epoch
     }
 
+    pub(crate) fn document_host_is_published(&self) -> bool {
+        self.published_document_host
+    }
+
+    pub(crate) fn publish_document_host(&mut self) {
+        self.published_document_host = true;
+    }
+
+    pub(crate) fn mark_page_context_detached(&self) {
+        if self.context_host_lifecycle.get() == crate::util::ContextHostLifecycle::Active {
+            self.context_host_lifecycle
+                .set(crate::util::ContextHostLifecycle::Detached);
+        }
+    }
+
+    pub(crate) fn context_host_lifecycle_handle(
+        &self,
+    ) -> Rc<Cell<crate::util::ContextHostLifecycle>> {
+        self.context_host_lifecycle.clone()
+    }
+
+    pub(crate) fn deferred_context_host_release_queue(
+        &self,
+    ) -> crate::script_vm::RendererDeferredContextHostReleaseQueue {
+        self.deferred_context_host_release_queue.clone()
+    }
+
+    pub(crate) fn adopt_retained_document_runtime(
+        &mut self,
+        document_runtime: Box<DocumentRuntime>,
+    ) {
+        assert!(
+            self.retained_document_runtime.is_none(),
+            "JsContextHost must adopt its DocumentRuntime at most once"
+        );
+        assert!(
+            std::ptr::eq(self.runtime.cast_const(), document_runtime.as_ref()),
+            "retained DocumentRuntime transfer must preserve the host raw pointer"
+        );
+        self.retained_document_runtime = Some(document_runtime);
+    }
+    pub(crate) fn bind_deferred_context_host_release_queue(
+        &mut self,
+        queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
+    ) {
+        self.deferred_context_host_release_queue = queue;
+    }
+
     pub(crate) fn close_page_context_resources_for_teardown(&mut self) {
+        self.mark_page_context_detached();
         if self.page_context_resources_closed {
             return;
         }
         self.page_context_resources_closed = true;
+        self.bridge.web_mcp.clear();
+        self.retire_all_window_execution_context_resources_for_teardown();
         self.pending_history_traversal_admissions.clear();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;
-        self.v8_finalizers.clear_for_context_teardown();
+
         self.clear_pending_top_level_navigation();
         self.unregister_all_service_worker_child_clients();
         self.unregister_all_service_worker_popup_clients();
@@ -1268,11 +1338,20 @@ impl JsContextHost {
         self.close_owned_broadcast_channels();
         self.close_owned_message_ports();
         self.shutdown_workers();
+        self.output_journal = None;
+        self.root_document_lifecycle = None;
+        self.child_default_context_bootstrap = None;
+        self.command_turn_output = None;
+        self.lightweight_popup_browsing_contexts.clear();
+        self.internal_inspector_value_references.clear();
     }
 }
 
 impl Drop for JsContextHost {
     fn drop(&mut self) {
         self.close_page_context_resources_for_teardown();
+        self.context_host_lifecycle
+            .set(crate::util::ContextHostLifecycle::Destroyed);
+        self.v8_finalizers.clear_for_context_teardown();
     }
 }

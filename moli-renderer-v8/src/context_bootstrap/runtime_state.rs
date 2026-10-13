@@ -16,6 +16,10 @@ use super::{
     web_storage::{
         install_storage_runtime_state, window_local_storage_getter, window_session_storage_getter,
     },
+    window_accessors::{
+        WINDOW_DOCUMENT_SLOT, window_document_getter_template, window_inner_width_getter,
+        window_length_getter, window_outer_height_getter,
+    },
     window_runtime::{build_legacy_storage_info_object, window_noop_callback},
     window_template::install_window_named_properties_object,
 };
@@ -32,8 +36,8 @@ use crate::{
     network_host,
     util::{
         callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
-        context_host_ptr_from_window_object, create_script_origin_with_base_url, get_private_value,
-        script_base_url_continuation_data, set_private_value, throw_type_error, v8_string, v8str,
+        create_script_origin_with_base_url, get_private_value, script_base_url_continuation_data,
+        set_private_value, throw_type_error, v8_string, v8str,
     },
     webidl,
     webidl_iterator::install_webidl_collection_iterator_intrinsics,
@@ -341,28 +345,28 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
     origin: (),
     #[webapi(
         accessor_property = "innerWidth",
-        getter = window_inner_width_replaceable_getter,
+        getter = window_inner_width_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.inner_width_name
     )]
     inner_width: (),
     #[webapi(
         accessor_property,
-        getter = window_length_replaceable_getter,
+        getter = window_length_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.length_name
     )]
     length: (),
     #[webapi(
         accessor_property,
-        getter = window_event_replaceable_getter,
+        getter = window_event_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.event_name
     )]
     event: (),
     #[webapi(
         accessor_property = "outerHeight",
-        getter = window_outer_height_replaceable_getter,
+        getter = window_outer_height_getter,
         setter = window_surface_replaceable_setter,
         setter_data = self.outer_height_name
     )]
@@ -458,7 +462,7 @@ struct ConsoleObjectDeclaration {
 struct WindowBootstrapGlobalSlotsDeclaration<'scope> {
     #[webapi(slot = WINDOW_CONSOLE_SLOT)]
     console: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = WINDOW_EVENT_SLOT, init = "undefined")]
+    #[webapi(slot = WINDOW_EVENT_SLOT, init = "undefined")]
     event: (),
     #[webapi(data_property = WINDOW_ONERROR_SLOT, init = "null")]
     on_error: (),
@@ -578,7 +582,7 @@ fn document_fullscreen_enabled_lenient_setter<'s>(
 ) {
 }
 
-fn define_replaceable_window_property(
+pub(in crate::context_bootstrap) fn define_replaceable_window_property(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
     name: &'static str,
@@ -611,58 +615,6 @@ fn window_origin_replaceable_getter<'s>(
         })
         .unwrap_or_else(|| v8str(scope, "null").into());
     rv.set(value);
-}
-
-fn window_inner_width_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let width = super::window_accessors::window_inner_surface_width(scope, args.this());
-    rv.set(v8::Number::new(scope, width).into());
-}
-
-fn window_outer_height_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let value = super::window_accessors::window_host_ptr(scope, args.this())
-        .and_then(|host_ptr| unsafe { &*host_ptr }.viewport_surface())
-        .map_or(
-            moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE.inner_height,
-            |surface| f64::from(surface.outer_height),
-        );
-    rv.set(v8::Number::new(scope, value).into());
-}
-
-fn window_length_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some(host_ptr) = context_host_ptr_from_window_object(scope, args.this())
-        .or_else(|| context_host_ptr_from_global_bridge(scope))
-    else {
-        rv.set(v8::Integer::new(scope, 0).into());
-        return;
-    };
-    let host = unsafe { &mut *host_ptr };
-    let count = child_context_handle_from_owner(scope, args.this())
-        .map(|handle| host.child_browsing_context_child_frame_count(handle))
-        .unwrap_or_else(|| host.child_browsing_context_count());
-    rv.set(v8::Number::new(scope, count as f64).into());
-}
-
-fn window_event_replaceable_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    rv.set(
-        global_hidden_value(scope, WINDOW_EVENT_SLOT)
-            .unwrap_or_else(|| v8::undefined(scope).into()),
-    );
 }
 
 fn window_scroll_x_replaceable_getter<'s>(
@@ -925,6 +877,14 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if child_context_handle_from_owner(scope, receiver).is_none()
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let host = unsafe { &*host_ptr };
+        let name = host.browsing_context_name().get();
+        rv.set(v8::String::new(scope, &name).unwrap().into());
+        return;
+    }
     let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
         .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
@@ -941,10 +901,16 @@ fn window_name_runtime_setter<'s>(
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    if let Some(handle) = child_context_handle_from_owner(scope, receiver)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &mut *host_ptr };
+        if let Some(handle) = child_context_handle_from_owner(scope, receiver) {
+            host.set_child_browsing_context_name(handle, next.clone());
+        } else {
+            if host.browsing_context_is_closed() {
+                return;
+            }
+            host.browsing_context_name().set(next.clone());
+        }
     }
     define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
 }
@@ -1254,36 +1220,6 @@ const WINDOW_SURFACE_REPLACEABLE_NAMES: &[&str] = &[
     "screenY",
 ];
 
-fn legacy_unforgeable_document_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let receiver = args.this();
-    let Some(host_ptr) = context_host_ptr_from_window_object(scope, receiver)
-        .or_else(|| context_host_ptr_from_global_bridge(scope))
-    else {
-        rv.set_null();
-        return;
-    };
-    if let Some(child_handle) = child_context_handle_from_owner(scope, receiver) {
-        match unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, child_handle)
-        {
-            Some(document) => rv.set(document.into()),
-            None => rv.set_null(),
-        }
-        return;
-    }
-    let handle = unsafe { &*host_ptr }.document_handle();
-    match unsafe { &mut *host_ptr }
-        .native_bridge_mut()
-        .wrap_handle(scope, host_ptr, handle)
-    {
-        Some(document) => rv.set(document.into()),
-        None => rv.set_null(),
-    }
-}
-
 fn child_context_handle_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -1561,8 +1497,11 @@ fn define_legacy_unforgeable_document_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let getter = v8::Function::builder(legacy_unforgeable_document_getter)
-        .build(scope)
+    let cache_property = crate::util::private_key(scope, WINDOW_DOCUMENT_SLOT)
+        .ok_or_else(|| anyhow!("failed to allocate Window.document cache key"))?;
+    let getter_template = window_document_getter_template(scope, Some(cache_property));
+    let getter = getter_template
+        .get_function(scope)
         .ok_or_else(|| anyhow!("failed to build document getter"))?;
     getter.set_name(v8str(scope, "get document"));
     define_get_set_property(
@@ -1785,6 +1724,7 @@ pub(crate) fn finish_context_bootstrap(
     document_runtime: &mut JsContextHost,
     secure_context_url: &url::Url,
 ) -> Result<()> {
+    super::window_accessors::initialize_cross_origin_window_cache(scope)?;
     super::exposed_interfaces::initialize_realm_interface_registry(
         scope,
         super::exposed_interfaces::RealmKind::Window,
@@ -1843,14 +1783,27 @@ pub(crate) fn finish_context_bootstrap(
         ("XPathExpression", "XPathExpression"),
         ("XPathResult", "XPathResult"),
         ("SVGLength", "SVGLength"),
+        ("SVGAngle", "SVGAngle"),
         ("SVGNumber", "SVGNumber"),
         ("SVGRect", "SVGRect"),
+        ("SVGAnimatedString", "SVGAnimatedString"),
         ("SVGAnimatedLength", "SVGAnimatedLength"),
+        ("SVGAnimatedAngle", "SVGAnimatedAngle"),
+        ("SVGAnimatedRect", "SVGAnimatedRect"),
+        ("SVGPreserveAspectRatio", "SVGPreserveAspectRatio"),
+        (
+            "SVGAnimatedPreserveAspectRatio",
+            "SVGAnimatedPreserveAspectRatio",
+        ),
         ("SVGLengthList", "SVGLengthList"),
         ("SVGAnimatedLengthList", "SVGAnimatedLengthList"),
         ("SVGAnimatedNumber", "SVGAnimatedNumber"),
+        ("SVGAnimatedInteger", "SVGAnimatedInteger"),
         ("SVGNumberList", "SVGNumberList"),
+        ("SVGPointList", "SVGPointList"),
+        ("SVGStringList", "SVGStringList"),
         ("SVGAnimatedNumberList", "SVGAnimatedNumberList"),
+        ("SVGAnimatedBoolean", "SVGAnimatedBoolean"),
         ("SVGAnimatedEnumeration", "SVGAnimatedEnumeration"),
         ("SVGUnitTypes", "SVGUnitTypes"),
         ("SVGAnimatedTransformList", "SVGAnimatedTransformList"),
@@ -2024,6 +1977,8 @@ pub(crate) fn finish_context_bootstrap(
         ("IntersectionObserver", "IntersectionObserver"),
         ("IntersectionObserverEntry", "IntersectionObserverEntry"),
         ("ResizeObserver", "ResizeObserver"),
+        ("ResizeObserverEntry", "ResizeObserverEntry"),
+        ("ResizeObserverSize", "ResizeObserverSize"),
         ("PerformanceObserver", "PerformanceObserver"),
         (
             "PerformanceObserverEntryList",
@@ -2093,21 +2048,19 @@ pub(crate) fn finish_context_bootstrap(
 
 pub(crate) fn set_interface_prototype_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    constructor: v8::Local<'s, v8::Function>,
+    prototype: v8::Local<'s, v8::Object>,
     public_constructor: v8::Local<'s, v8::Value>,
-) {
-    let Some(prototype) = constructor
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let _ = prototype.define_own_property(
+) -> Result<()> {
+    if prototype.define_own_property(
         scope,
         v8str(scope, "constructor").into(),
         public_constructor,
         v8::PropertyAttribute::DONT_ENUM,
-    );
+    ) != Some(true)
+    {
+        return Err(anyhow!("failed to set intrinsic prototype constructor"));
+    }
+    Ok(())
 }
 
 pub(crate) fn window_realm_secure_context_available<'s>(
@@ -2139,7 +2092,11 @@ fn install_window_runtime_state<'s>(
         global,
         runtime.document_url().as_str(),
     )?;
-    let origin = moli_url::origin_ascii_serialization(runtime.document_url());
+    let origin = if runtime.document_sandbox_policy().forces_opaque_origin {
+        "null".into()
+    } else {
+        moli_url::origin_ascii_serialization(runtime.document_url())
+    };
     set_window_origin_runtime_state(scope, global, &origin)?;
 
     let console = ConsoleObjectDeclaration::default()

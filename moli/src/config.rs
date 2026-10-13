@@ -31,6 +31,12 @@ impl AppConfig {
 
         match &cli.command {
             Commands::Fetch(args) => {
+                if (args.eval.is_some() || args.eval_file.is_some())
+                    && args.dump.is_none()
+                    && (args.with_base || args.with_frames || !args.strip_mode.is_empty())
+                {
+                    bail!("page output options with --eval or --eval-file require --dump");
+                }
                 if args.trace_network && args.dump != Some(DumpFormat::Json) {
                     bail!("--trace-network requires --dump json");
                 }
@@ -90,6 +96,10 @@ impl AppConfig {
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
+    if common.scrollbars && !common.layout {
+        bail!("--scrollbars requires --layout or MOLI_LAYOUT=true");
+    }
+
     if let Some(log_level) = common.log_level {
         config.log_filter = log_level.as_tracing_filter().to_owned();
     }
@@ -188,6 +198,9 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     } else {
         LayoutPolicy::Mock
     });
+    config
+        .browser
+        .set_scrollbars_hidden(common.layout && !common.scrollbars);
     config.fetch.cookie_files = common.cookie_file.clone();
     config.browser.fetch_mut().set_network_blocking(
         common.block_private_networks,

@@ -6,33 +6,8 @@
 //! they share one complete matrix implementation instead of depending on the
 //! backend's currently partial single-node filter coverage.
 
-use anyrender::{Filter, filters::FilterEffect};
+use crate::scene::backend_filter;
 use moli_layout::PaintFilter;
-
-pub(super) fn backend_filter(filter: &PaintFilter) -> Option<Filter> {
-    let effect = match *filter {
-        PaintFilter::Blur(radius) => FilterEffect::blur(finite_nonnegative(radius)),
-        PaintFilter::DropShadow {
-            offset,
-            blur_radius,
-            color,
-        } => FilterEffect::drop_shadow(
-            finite_or_zero(offset.x),
-            finite_or_zero(offset.y),
-            finite_nonnegative(blur_radius),
-            super::to_backend_color(color),
-        ),
-        PaintFilter::Brightness(_)
-        | PaintFilter::Contrast(_)
-        | PaintFilter::Grayscale(_)
-        | PaintFilter::HueRotate(_)
-        | PaintFilter::Invert(_)
-        | PaintFilter::Opacity(_)
-        | PaintFilter::Saturate(_)
-        | PaintFilter::Sepia(_) => return None,
-    };
-    Some(Filter::single(effect))
-}
 
 pub(super) fn is_software_color_filter(filter: &PaintFilter) -> bool {
     backend_filter(filter).is_none()
@@ -59,7 +34,7 @@ pub(super) fn apply_software_color_filter(rgba: &mut [u8], filter: &PaintFilter)
 }
 
 fn apply_color_matrix(rgba: &mut [u8], matrix: &[f32; 20]) {
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let input = [
             f32::from(pixel[0]) / 255.0,
             f32::from(pixel[1]) / 255.0,
@@ -90,8 +65,4 @@ fn rgb_linear_matrix(
 
 fn finite_or_zero(value: f32) -> f32 {
     if value.is_finite() { value } else { 0.0 }
-}
-
-fn finite_nonnegative(value: f32) -> f32 {
-    finite_or_zero(value).max(0.0)
 }

@@ -46,6 +46,30 @@ struct PhaseOneParserOwner<'a> {
     vm: &'a mut ScriptVm,
 }
 
+pub(in crate::runtime) fn rebind_main_document_parser_before_parsing(
+    parser: &mut DocumentParserSession,
+    vm: &mut ScriptVm,
+    scripting_enabled: bool,
+) {
+    let document_url = vm.document_runtime.document_url().clone();
+    let document_handle = vm.document_runtime.document_handle();
+    let content_type = vm
+        .document_runtime
+        .dom_host()
+        .document_content_type_for_handle(document_handle)
+        .unwrap_or("text/html")
+        .to_owned();
+    vm.with_dom_host_parse_step(|vm| {
+        parser.rebind_main_document_before_parsing(
+            document_url,
+            document_handle,
+            &mut PhaseOneParserOwner { vm },
+            scripting_enabled,
+            &content_type,
+        );
+    });
+}
+
 impl LiveDocumentParserOwner for PhaseOneParserOwner<'_> {}
 
 impl ParserMutationEffectConsumer for PhaseOneParserOwner<'_> {
@@ -369,14 +393,10 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
         &mut self,
         request: ParserElementCreationRequest<'_>,
     ) -> Option<NativeNodeId> {
-        let document_has_body = self
-            .document_body_handle_for_document(request.document_handle)
-            .is_some();
         self.vm
             .create_and_construct_parser_custom_element_direct_in_default_context(
                 request.construction,
                 request.document_handle,
-                document_has_body,
                 request.local_name,
                 request.namespace,
                 request.prefix,

@@ -322,6 +322,11 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_) => {
                 ProtocolNavigationDependency::ReplacesPendingLoad
             }
+            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action)
+                if action.replaces_pending_load() =>
+            {
+                ProtocolNavigationDependency::ReplacesPendingLoad
+            }
             ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => {
                 ProtocolNavigationDependency::Independent
             }
@@ -364,8 +369,7 @@ impl ProtocolSchedulerWork {
     pub fn is_root_frame_stopped_loading(&self) -> bool {
         matches!(
             &self.payload,
-            ProtocolSchedulerWorkPayload::ProtocolObservation(output)
-                if output.is_root_frame_stopped_loading()
+            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
         )
     }
 

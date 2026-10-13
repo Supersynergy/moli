@@ -106,6 +106,10 @@ jobs:
 
       - name: Install AWS-LC build dependencies
         run: |
+          set -eu
+          sed -i -E \
+            's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+            /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get install --yes --no-install-recommends cmake libclang-dev
 
@@ -356,6 +360,14 @@ jobs:
           revision: ${{ needs.resolve-refs.outputs.head_sha }}
       - name: Install replay tools
         run: |
+          set -eu
+          # Ubuntu runners may use legacy .list or DEB822 .sources files.
+          for apt_source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            [ -f "$apt_source" ] || continue
+            sudo sed -i -E \
+              's#https?://(([[:alnum:]-]+\.)?archive|security|ports)\.ubuntu\.com/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+              "$apt_source"
+          done
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends python3 iproute2 openssl util-linux
       - name: Download pinned WebMainBench corpus
@@ -434,6 +446,42 @@ jobs:
         with:
           name: cdp-smoke-diagnostics
           path: target/smoke/cdp-ci
+          if-no-files-found: warn
+          retention-days: 7
+
+  native-pdf:
+    name: Native PDF rendering and links
+    needs: [resolve-refs, build-release-head]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: rust:1.96.1-bookworm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-refs.outputs.head_sha }}
+      - name: Use HEAD release
+        uses: ./.github/actions/use-ci-release
+        with:
+          side: head
+          revision: ${{ needs.resolve-refs.outputs.head_sha }}
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.11.14
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: scripts/check-native-pdf.py.lock
+      - name: Check rendered pixels, text and link targets and regions
+        run: >-
+          uv run --locked --script scripts/check-native-pdf.py
+          --moli target/ci-bin/moli-release-head/moli
+          --output-dir target/native-pdf-ci
+      - name: Upload PDFs and reader evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-pdf-results
+          path: target/native-pdf-ci
           if-no-files-found: warn
           retention-days: 7
 

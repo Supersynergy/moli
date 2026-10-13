@@ -181,6 +181,7 @@ pub(crate) enum EmulationAction {
     SetAutomationOverride,
     SetEmitTouchEventsForMouse,
     SetScriptExecutionDisabled,
+    SetScrollbarsHidden,
     SetGeolocationOverride,
     ClearGeolocationOverride,
     SetIdleOverride,
@@ -479,4 +480,6 @@ pub(crate) enum WebAuthnAction {
 pub(crate) enum WebMcpAction {
     Enable,
     Disable,
+    InvokeTool,
+    CancelInvocation,
 }

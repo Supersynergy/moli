@@ -65,8 +65,74 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }) == Some(self.root)
     }
 
+    fn quirks_mode(&self) -> style::context::QuirksMode {
+        self.document
+            .and_then(|document| self.host().node(document))
+            .and_then(Node::as_document)
+            .map_or(style::context::QuirksMode::NoQuirks, |document| {
+                document.quirks_mode()
+            })
+    }
+
+    fn disables_viewport_user_scrolling(&self) -> bool {
+        if !self.root_is_document_element() {
+            return false;
+        }
+        self.document
+            .and_then(|document| {
+                self.runtime
+                    .child_browsing_context_host_for_document_handle(document)
+            })
+            .filter(|frame| {
+                self.host().is_html_element_named(*frame, "iframe")
+                    || self.host().is_html_element_named(*frame, "frame")
+            })
+            .and_then(|frame| self.host().get_attribute(frame, "scrolling"))
+            .is_some_and(|value| {
+                ["no", "off", "noscroll"]
+                    .iter()
+                    .any(|keyword| value.eq_ignore_ascii_case(keyword))
+            })
+    }
+
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
         native_flat_parent(self.host(), self.root, node)
+    }
+
+    fn hyperlink(&self, node: DomHandle) -> Option<moli_layout::LayoutHyperlink<DomHandle>> {
+        let host = self.host();
+        if !host.is_html_element_named(node, "a") {
+            return None;
+        }
+        let document = self.document?;
+        let href = host.get_attribute(node, "href")?;
+        let url = host
+            .document_base_url_for_handle(document)?
+            .join(&href)
+            .ok()?;
+        // JavaScript handlers have no equivalent in a static PDF.
+        if url.scheme() == "javascript" {
+            return None;
+        }
+        let mut without_fragment = url.clone();
+        without_fragment.set_fragment(None);
+        let mut document_url = host.document_url_for_handle(document)?.clone();
+        document_url.set_fragment(None);
+        let destination = if without_fragment == document_url {
+            let fragment = url.fragment().unwrap_or_default();
+            let decoded = percent_encoding::percent_decode_str(fragment).decode_utf8_lossy();
+            host.find_document_anchor(document, fragment)
+                .or_else(|| host.find_document_anchor(document, &decoded))
+                .or_else(|| {
+                    (decoded.is_empty() || decoded.eq_ignore_ascii_case("top")).then_some(self.root)
+                })
+        } else {
+            None
+        };
+        Some(moli_layout::LayoutHyperlink {
+            url: url.as_str().into(),
+            destination,
+        })
     }
 
     fn flat_children(&self, node: Self::NodeId) -> Self::ChildIter<'_> {
@@ -435,19 +501,22 @@ fn layout_element_semantics_for_source(
     element: &crate::dom::native::Element,
 ) -> LayoutElementSemantics {
     let mut semantics = layout_element_semantics(element);
+    let mut option_labels = Vec::new();
     let (selected_text, maximum_option_characters) = if element.is_html_select() {
         let options = host.select_option_elements(node);
         let option_text = |option| {
             host.node(option)
                 .and_then(Node::as_element)
-                .and_then(|option| option.attribute("label"))
-                .map(str::to_owned)
-                .or_else(|| host.text_content(option))
+                .map(|element| element.option_label(host.dom(), option))
                 .unwrap_or_default()
         };
-        let maximum = options
+        option_labels = options
             .iter()
-            .map(|option| option_text(*option).chars().count())
+            .map(|option| option_text(*option).into())
+            .collect::<Vec<std::sync::Arc<str>>>();
+        let maximum = option_labels
+            .iter()
+            .map(|label| label.chars().count())
             .max()
             .unwrap_or_default();
         let selected = host
@@ -466,6 +535,9 @@ fn layout_element_semantics_for_source(
         selected_text,
         maximum_option_characters,
     );
+    if let Some(data) = semantics.metadata.form_control.as_mut() {
+        data.option_labels = option_labels;
+    }
     semantics
 }
 
@@ -520,6 +592,7 @@ fn layout_element_metadata(
             metadata.form_control = Some(LayoutFormControlData {
                 value: value.into(),
                 placeholder: element.attribute("placeholder").unwrap_or("").into(),
+                option_labels: Vec::new(),
                 size: optional_positive_u16_attribute(element, "size", 1, 65_535),
                 columns: positive_u16_attribute(element, "cols", 20, 65_535),
                 rows: positive_u16_attribute(element, "rows", 2, 65_535),

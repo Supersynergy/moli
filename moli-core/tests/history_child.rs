@@ -4073,9 +4073,7 @@ async fn child_browsing_context_fragment_traversal_events_stay_window_local() ->
             "/compat/window-child-browsing-context-fragment-traversal-events-are-window-local",
         ))
         .await?;
-    browser
-        .wait_for_page_delay(&mut page, Duration::from_millis(250))
-        .await?;
+    wait_for_body_attribute(&browser, &mut page, "data-child-timeout-hash", "#one").await?;
 
     assert!(
         page.serialize_html_async()
@@ -4277,7 +4275,11 @@ async fn child_browsing_context_history_go_one_fragment_traversal_events_stay_wi
         ))
         .await?;
     browser
-        .wait_for_page_delay(&mut page, Duration::from_millis(250))
+        .wait_for_selector(
+            &mut page,
+            "body[data-child-traversal-complete='true']",
+            Duration::from_secs(5),
+        )
         .await?;
 
     assert!(

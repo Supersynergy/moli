@@ -66,6 +66,7 @@ pub(crate) enum RequestHttpVersion {
 pub struct StreamingHtmlResponseStart {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, Vec<u8>)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -81,6 +82,7 @@ impl StreamingHtmlResponseStart {
         ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
@@ -218,7 +220,7 @@ fn outgoing_request_header_bytes_for_url(
     }
 
     if !header_present(&outgoing, "referer")
-        && let Some(referer) = referrer_header_value_for_request(request, request_url)
+        && let Some(referer) = request.referrer_header_value(request_url)
     {
         outgoing.push(("Referer".to_owned(), referer.into_bytes()));
     }
@@ -508,28 +510,6 @@ fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
     } else {
         "same-site".to_owned()
     }
-}
-
-fn referrer_header_value_for_request(request: &Request, request_url: &Url) -> Option<String> {
-    if !request.infers_referrer_from_initiator() {
-        return None;
-    }
-    let referrer_url = request.cookie_context.initiator_url.as_ref()?;
-    let (referrer_policy, document_referrer_policy) = request
-        .subresource_request_metadata()
-        .map(|metadata| {
-            (
-                metadata.referrer_policy.as_deref(),
-                metadata.document_referrer_policy.as_deref(),
-            )
-        })
-        .unwrap_or((None, None));
-    crate::referrer_header_value(
-        referrer_url,
-        request_url,
-        referrer_policy,
-        document_referrer_policy,
-    )
 }
 
 pub(crate) fn store_response_cookies(
@@ -1146,6 +1126,29 @@ mod tests {
                 .map(|(_, value)| value.as_str())
                 .collect::<Vec<_>>(),
             vec!["https://explicit.test"]
+        );
+    }
+
+    #[test]
+    fn opaque_request_origin_is_cross_origin_without_hiding_referrer_url() {
+        let config = FetchConfig::default();
+        let request_url = url("https://app.test/data");
+        let request = Request::new("GET", request_url.as_str(), None, Vec::new())
+            .unwrap()
+            .with_initiator_url(&url("https://app.test/sandboxed-frame"))
+            .with_request_origin(moli_url::WebOrigin::Opaque)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+
+        let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
+
+        assert_eq!(header_value(&headers, "origin").as_deref(), Some("null"));
+        assert_eq!(
+            header_value(&headers, "sec-fetch-site").as_deref(),
+            Some("cross-site")
+        );
+        assert_eq!(
+            header_value(&headers, "referer").as_deref(),
+            Some("https://app.test/sandboxed-frame")
         );
     }
 

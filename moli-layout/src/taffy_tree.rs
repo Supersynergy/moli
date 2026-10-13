@@ -18,9 +18,10 @@ use crate::{
     LAYOUT_SUBPIXELS_PER_CSS_PIXEL, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
     LayoutWorld, PaintRect, PaintViewport,
     inline::{
-        InlineContentWidthsMemo, InlineFormattingContext, InlineFragments, InlineLinePlacement,
-        InlineObjectRole, break_inline_lines, build_inline_fragments, build_inline_line_placements,
-        measure_inline_lines, relative_atomic_inset_offset, reset_inline_layout_for_probe,
+        InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
+        InlineLinePlacement, InlineObjectRole, break_inline_lines, build_inline_fragments,
+        build_inline_line_placements, measure_inline_lines, position_inline_edges,
+        relative_atomic_inset_offset, reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -672,26 +673,33 @@ fn finish_form_control_contents<N>(world: &mut LayoutWorld<N>)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let contents = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
-        .filter(|id| {
+    let contents = world
+        .boxes
+        .iter()
+        .flat_map(|layout_box| layout_box.children.iter().copied().enumerate())
+        .filter(|(_, id)| {
             world.boxes[id.index()].anonymous_reason
                 == Some(crate::LayoutAnonymousReason::FormControlContent)
                 && world.boxes[id.index()].kind == LayoutBoxKind::AnonymousBlock
         })
         .collect::<Vec<_>>();
-    for content in contents {
+    for (row, content) in contents {
         let Some(control) = world.boxes[content.index()].layout_parent else {
             continue;
         };
         let control_layout = world.boxes[control.index()].unrounded_layout;
         let parent_writing_mode = world.boxes[control.index()].style.writing_mode();
+        let listbox = world.boxes[control.index()]
+            .element_semantics
+            .as_ref()
+            .is_some_and(crate::LayoutElementSemantics::is_select_listbox);
+        let inline_padding = if listbox { 2.0 } else { 4.0 };
         let content_width = (control_layout.size.width
             - control_layout.border.left
             - control_layout.border.right
             - control_layout.padding.left
             - control_layout.padding.right
-            - 8.0)
+            - 2.0 * inline_padding)
             .max(0.0);
         let inputs = LayoutInput {
             known_dimensions: Size::NONE,
@@ -713,9 +721,17 @@ where
             vertical_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(content.to_taffy(), inputs);
-        let x = control_layout.border.left + control_layout.padding.left + 4.0;
-        let y = ((control_layout.size.height - output.size.height) * 0.5)
-            .max(control_layout.border.top + control_layout.padding.top);
+        let x = control_layout.border.left + control_layout.padding.left + inline_padding;
+        let y = if listbox {
+            let style = &world.boxes[control.index()].style;
+            control_layout.border.top
+                + control_layout.padding.top
+                + row as f32
+                    * crate::form::select_row_height(style.font_size(), style.line_height())
+        } else {
+            ((control_layout.size.height - output.size.height) * 0.5)
+                .max(control_layout.border.top + control_layout.padding.top)
+        };
         world.set_inline_child_layout(
             content,
             Point { x, y },
@@ -2361,10 +2377,11 @@ where
             inline_percentage_basis(available_space.width, inputs.sizing_purpose);
         let mut atomic = vec![None; context.objects.len()];
         let mut atomic_baseline_ascents = vec![None; context.objects.len()];
-        let mut structural_edge_contributions = vec![false; context.objects.len()];
+        let mut structural_edge_contributions =
+            vec![InlineEdgeContribution::default(); context.objects.len()];
         let mut floats = Vec::new();
 
-        for (inline_box, object) in layout.inline_boxes_mut().iter_mut().zip(&context.objects) {
+        for (inline_box, object) in layout.inline_boxes_mut().zip(&context.objects) {
             match object.role {
                 InlineObjectRole::Atomic => {
                     let margins = self.boxes[object.box_id.index()]
@@ -2416,6 +2433,16 @@ where
                     let logical_start = object.role == InlineObjectRole::StartEdge;
                     let physical_left =
                         logical_start == (child_style.direction() == InlineDirection::Ltr);
+                    let inline_padding_border = if child_style.uses_horizontal_writing_mode() {
+                        (padding.left + border.left, padding.right + border.right)
+                    } else {
+                        (padding.top + border.top, padding.bottom + border.bottom)
+                    };
+                    let has_border_or_padding = if physical_left {
+                        inline_padding_border.0 != 0.0
+                    } else {
+                        inline_padding_border.1 != 0.0
+                    };
                     let (margin, padding, border) = if physical_left {
                         (margins.left, padding.left, border.left)
                     } else {
@@ -2425,8 +2452,10 @@ where
                     inline_box.height = 0.0;
                     let object_index = usize::try_from(inline_box.id)
                         .expect("Parley returned an inline object id outside usize");
-                    structural_edge_contributions[object_index] =
-                        margin != 0.0 || padding != 0.0 || border != 0.0;
+                    structural_edge_contributions[object_index] = InlineEdgeContribution {
+                        creates_line: margin != 0.0 || padding != 0.0 || border != 0.0,
+                        has_border_or_padding,
+                    };
                 }
             }
         }
@@ -2638,10 +2667,12 @@ where
         } else {
             break_inline_lines(context, layout, max_advance);
         }
+        position_inline_edges(self, context, layout);
         layout.align(
             alignment,
             AlignmentOptions {
                 align_when_overflowing: false,
+                last_line_alignment: None,
             },
         );
 
@@ -2840,7 +2871,7 @@ where
                     state.set_line_max_advance(slot.width.max(0.0));
                     state.set_line_x(slot.x);
                     state.set_line_y(f64::from(slot.y));
-                    state.append_inline_box_to_line(data.advance, 0.0);
+                    state.append_inline_box_to_line(data.advance, 0.0, 0.0);
                 }
             }
         }
@@ -2986,6 +3017,178 @@ fn inline_percentage_basis(
     available
         .into_option()
         .or_else(|| (sizing_purpose == SizingPurpose::IntrinsicContribution).then_some(0.0))
+}
+
+#[derive(Clone, Copy)]
+struct AtomicMeasurement {
+    output: LayoutOutput,
+    margins: taffy::Rect<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct InlineFloatPlacement {
+    child: LayoutBoxId,
+    location: Point<f32>,
+    output: LayoutOutput,
+    order: usize,
+    parent_width: Option<f32>,
+}
+
+struct InlineMeasurement {
+    size: Size<f32>,
+    /// Block-end extent of every IFC child used as the single alignment
+    /// subject. Unlike `size.height`, this includes non-contained floats
+    /// without making them contribute to normal-flow auto height.
+    alignment_block_size: f32,
+    first_baseline: Option<f32>,
+    last_baseline: Option<f32>,
+    has_non_phantom_line: bool,
+    atomic: Vec<Option<AtomicMeasurement>>,
+    floats: Vec<InlineFloatPlacement>,
+    percentage_basis: Option<f32>,
+    /// Present only for the accepted `PerformLayout` result. Intrinsic probes
+    /// retain the numeric line summary but never allocate final placement
+    /// vectors that would immediately be discarded.
+    line_placements: Option<Vec<InlineLinePlacement>>,
+}
+
+impl InlineMeasurement {
+    fn translate_block_axis(&mut self, offset: f32) {
+        if offset == 0.0 {
+            return;
+        }
+        if let Some(first_baseline) = &mut self.first_baseline {
+            *first_baseline += offset;
+        }
+        if let Some(last_baseline) = &mut self.last_baseline {
+            *last_baseline += offset;
+        }
+        if let Some(line_placements) = &mut self.line_placements {
+            for placement in line_placements {
+                placement.translate_block_axis(offset);
+            }
+        }
+        for floated in &mut self.floats {
+            floated.location.y += offset;
+        }
+    }
+}
+
+/// Returns the offset for one block-axis alignment subject.
+///
+/// Taffy's block algorithm applies these same single-subject fallbacks to its
+/// numeric children. A Parley IFC is exposed to Taffy as one measured leaf, so
+/// its line fragments and child placements must consume the alignment value at
+/// this adapter boundary instead. This is the leaf equivalent of Chromium's
+/// `AlignBlockContent` plus `BoxFragmentBuilder::MoveChildrenInDirection`, not
+/// a post-layout paint translation.
+pub(crate) fn single_subject_block_alignment_offset(
+    alignment: Option<AlignContent>,
+    free_space: f32,
+) -> f32 {
+    let Some(alignment) = alignment else {
+        return 0.0;
+    };
+    let (mut keyword, safe) = match alignment.keyword {
+        AlignContentKeyword::Stretch | AlignContentKeyword::SpaceBetween => {
+            (AlignContentKeyword::FlexStart, true)
+        }
+        AlignContentKeyword::SpaceAround | AlignContentKeyword::SpaceEvenly => {
+            (AlignContentKeyword::Center, true)
+        }
+        keyword => (keyword, alignment.safety == AlignmentSafety::Safe),
+    };
+    if free_space <= 0.0 && safe {
+        keyword = AlignContentKeyword::Start;
+    }
+    match keyword {
+        AlignContentKeyword::Start
+        | AlignContentKeyword::FlexStart
+        | AlignContentKeyword::Stretch
+        | AlignContentKeyword::SpaceBetween => 0.0,
+        AlignContentKeyword::End | AlignContentKeyword::FlexEnd => free_space,
+        AlignContentKeyword::Center
+        | AlignContentKeyword::SpaceAround
+        | AlignContentKeyword::SpaceEvenly => free_space / 2.0,
+    }
+}
+
+fn empty_inline_context() -> InlineFormattingContext {
+    InlineFormattingContext {
+        text: "".into(),
+        root_style: LayoutBoxId::from_index(0),
+        measurement_layout: Some(parley::Layout::default()),
+        laid_out: None,
+        content_widths: InlineContentWidthsMemo::default(),
+        text_units: Vec::new(),
+        source_map: Vec::new(),
+        selection: None,
+        objects: Vec::new(),
+        font_metrics: Vec::new(),
+        parent_strut: None,
+        uses_quirks_line_height: false,
+        root_includes_used_font_metrics: false,
+        style_parents: Vec::new(),
+        structural_boxes: Vec::new(),
+        line_placements: Vec::new(),
+        fragments: InlineFragments::default(),
+    }
+}
+
+fn measure_text(
+    text: &str,
+    font_size: f32,
+    line_height: f32,
+    known_dimensions: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+) -> Size<f32> {
+    if text.is_empty() {
+        return Size {
+            width: known_dimensions.width.unwrap_or(0.0),
+            height: known_dimensions.height.unwrap_or(0.0),
+        };
+    }
+
+    let character_width = (font_size * 0.6).max(0.0);
+    let collapsed_words = text.split_whitespace().collect::<Vec<_>>();
+    let character_count = if collapsed_words.is_empty() {
+        1.0
+    } else {
+        let word_characters = collapsed_words
+            .iter()
+            .map(|word| word.chars().count())
+            .sum::<usize>();
+        (word_characters + collapsed_words.len().saturating_sub(1)) as f32
+    };
+    let natural_width = character_count * character_width;
+    let longest_word = collapsed_words
+        .iter()
+        .map(|word| word.chars().count())
+        .max()
+        .unwrap_or(0) as f32
+        * character_width;
+    let width_limit = match available_space.width {
+        AvailableSpace::Definite(width) => width.max(0.0),
+        AvailableSpace::MinContent => longest_word,
+        AvailableSpace::MaxContent => natural_width,
+    };
+    let measured_width = if width_limit > 0.0 {
+        natural_width.min(width_limit)
+    } else {
+        0.0
+    };
+    let line_count = if measured_width > 0.0 {
+        (natural_width / measured_width).ceil().max(1.0)
+    } else {
+        1.0
+    };
+
+    Size {
+        width: known_dimensions.width.unwrap_or(measured_width),
+        height: known_dimensions
+            .height
+            .unwrap_or(line_height.max(0.0) * line_count),
+    }
 }
 
 #[cfg(test)]
@@ -3173,175 +3376,5 @@ mod tests {
             second.margins_can_collapse_through,
             first.margins_can_collapse_through
         );
-    }
-}
-
-#[derive(Clone, Copy)]
-struct AtomicMeasurement {
-    output: LayoutOutput,
-    margins: taffy::Rect<f32>,
-}
-
-#[derive(Clone, Copy)]
-struct InlineFloatPlacement {
-    child: LayoutBoxId,
-    location: Point<f32>,
-    output: LayoutOutput,
-    order: usize,
-    parent_width: Option<f32>,
-}
-
-struct InlineMeasurement {
-    size: Size<f32>,
-    /// Block-end extent of every IFC child used as the single alignment
-    /// subject. Unlike `size.height`, this includes non-contained floats
-    /// without making them contribute to normal-flow auto height.
-    alignment_block_size: f32,
-    first_baseline: Option<f32>,
-    last_baseline: Option<f32>,
-    has_non_phantom_line: bool,
-    atomic: Vec<Option<AtomicMeasurement>>,
-    floats: Vec<InlineFloatPlacement>,
-    percentage_basis: Option<f32>,
-    /// Present only for the accepted `PerformLayout` result. Intrinsic probes
-    /// retain the numeric line summary but never allocate final placement
-    /// vectors that would immediately be discarded.
-    line_placements: Option<Vec<InlineLinePlacement>>,
-}
-
-impl InlineMeasurement {
-    fn translate_block_axis(&mut self, offset: f32) {
-        if offset == 0.0 {
-            return;
-        }
-        if let Some(first_baseline) = &mut self.first_baseline {
-            *first_baseline += offset;
-        }
-        if let Some(last_baseline) = &mut self.last_baseline {
-            *last_baseline += offset;
-        }
-        if let Some(line_placements) = &mut self.line_placements {
-            for placement in line_placements {
-                placement.translate_block_axis(offset);
-            }
-        }
-        for floated in &mut self.floats {
-            floated.location.y += offset;
-        }
-    }
-}
-
-/// Returns the offset for one block-axis alignment subject.
-///
-/// Taffy's block algorithm applies these same single-subject fallbacks to its
-/// numeric children. A Parley IFC is exposed to Taffy as one measured leaf, so
-/// its line fragments and child placements must consume the alignment value at
-/// this adapter boundary instead. This is the leaf equivalent of Chromium's
-/// `AlignBlockContent` plus `BoxFragmentBuilder::MoveChildrenInDirection`, not
-/// a post-layout paint translation.
-pub(crate) fn single_subject_block_alignment_offset(
-    alignment: Option<AlignContent>,
-    free_space: f32,
-) -> f32 {
-    let Some(alignment) = alignment else {
-        return 0.0;
-    };
-    let (mut keyword, safe) = match alignment.keyword {
-        AlignContentKeyword::Stretch | AlignContentKeyword::SpaceBetween => {
-            (AlignContentKeyword::FlexStart, true)
-        }
-        AlignContentKeyword::SpaceAround | AlignContentKeyword::SpaceEvenly => {
-            (AlignContentKeyword::Center, true)
-        }
-        keyword => (keyword, alignment.safety == AlignmentSafety::Safe),
-    };
-    if free_space <= 0.0 && safe {
-        keyword = AlignContentKeyword::Start;
-    }
-    match keyword {
-        AlignContentKeyword::Start
-        | AlignContentKeyword::FlexStart
-        | AlignContentKeyword::Stretch
-        | AlignContentKeyword::SpaceBetween => 0.0,
-        AlignContentKeyword::End | AlignContentKeyword::FlexEnd => free_space,
-        AlignContentKeyword::Center
-        | AlignContentKeyword::SpaceAround
-        | AlignContentKeyword::SpaceEvenly => free_space / 2.0,
-    }
-}
-
-fn empty_inline_context() -> InlineFormattingContext {
-    InlineFormattingContext {
-        root_style: LayoutBoxId::from_index(0),
-        measurement_layout: Some(parley::Layout::default()),
-        laid_out: None,
-        content_widths: InlineContentWidthsMemo::default(),
-        text_units: Vec::new(),
-        source_map: Vec::new(),
-        selection: None,
-        objects: Vec::new(),
-        font_metrics: Vec::new(),
-        parent_strut: None,
-        root_includes_used_font_metrics: false,
-        style_parents: Vec::new(),
-        structural_boxes: Vec::new(),
-        line_placements: Vec::new(),
-        fragments: InlineFragments::default(),
-    }
-}
-
-fn measure_text(
-    text: &str,
-    font_size: f32,
-    line_height: f32,
-    known_dimensions: Size<Option<f32>>,
-    available_space: Size<AvailableSpace>,
-) -> Size<f32> {
-    if text.is_empty() {
-        return Size {
-            width: known_dimensions.width.unwrap_or(0.0),
-            height: known_dimensions.height.unwrap_or(0.0),
-        };
-    }
-
-    let character_width = (font_size * 0.6).max(0.0);
-    let collapsed_words = text.split_whitespace().collect::<Vec<_>>();
-    let character_count = if collapsed_words.is_empty() {
-        1.0
-    } else {
-        let word_characters = collapsed_words
-            .iter()
-            .map(|word| word.chars().count())
-            .sum::<usize>();
-        (word_characters + collapsed_words.len().saturating_sub(1)) as f32
-    };
-    let natural_width = character_count * character_width;
-    let longest_word = collapsed_words
-        .iter()
-        .map(|word| word.chars().count())
-        .max()
-        .unwrap_or(0) as f32
-        * character_width;
-    let width_limit = match available_space.width {
-        AvailableSpace::Definite(width) => width.max(0.0),
-        AvailableSpace::MinContent => longest_word,
-        AvailableSpace::MaxContent => natural_width,
-    };
-    let measured_width = if width_limit > 0.0 {
-        natural_width.min(width_limit)
-    } else {
-        0.0
-    };
-    let line_count = if measured_width > 0.0 {
-        (natural_width / measured_width).ceil().max(1.0)
-    } else {
-        1.0
-    };
-
-    Size {
-        width: known_dimensions.width.unwrap_or(measured_width),
-        height: known_dimensions
-            .height
-            .unwrap_or(line_height.max(0.0) * line_count),
     }
 }

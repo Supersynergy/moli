@@ -755,6 +755,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -765,6 +766,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), b"yes".to_vec())],
             },
         },
@@ -869,6 +871,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
                 run.clone(),
             ),
             request_url: request_url.clone(),
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -876,6 +879,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 302,
+                status_text: "Found".to_owned(),
                 headers: vec![("location".to_owned(), b"/app/final.html".to_vec())],
             },
         },
@@ -1039,6 +1043,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -1049,6 +1054,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
+                status_text: "Accepted".to_owned(),
                 headers: vec![("x-preload".to_owned(), b"yes".to_vec())],
             },
         },
@@ -1152,6 +1158,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 run.clone(),
             ),
             request_url,
+            request_method: "GET".to_owned(),
             request_mode: moli_fetch::RequestMode::Navigate,
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
@@ -1162,6 +1169,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
+                status_text: "OK".to_owned(),
                 headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         },

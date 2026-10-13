@@ -55,6 +55,23 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> RuntimeCommandTaskStep {
+    if let Some(crate::conn::CdpSessionRoute::TabTarget { tab_target_id, .. }) =
+        conn.session_route(cmd.session_id)
+    {
+        // A Tab has a browser-side debugger barrier, but no V8 context. Resume
+        // only this attachment; never dispatch the command to an active Page.
+        let page_target_id = conn
+            .primary_page_target_id_for_tab_target_id(&tab_target_id)
+            .map(str::to_owned);
+        if conn.release_waiting_for_debugger_session(cmd.session_id)
+            && let Some(page_target_id) = page_target_id
+        {
+            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
+                conn, &page_target_id,
+            );
+        }
+        return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
+    }
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
         .is_ok_and(|slot| slot.has_loaded_page())
@@ -90,27 +107,6 @@ pub(super) fn start_runtime_run_if_waiting_for_debugger_command(
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },
     }))
-}
-
-pub(super) fn apply_runtime_disable_projection_after_success_for_owner(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Result<(), String> {
-    let was_enabled = conn
-        .target_runtime_session_state_for_owner(owner)
-        .is_some_and(|state| state.runtime_frontend_enabled);
-    match conn.set_runtime_frontend_enabled_for_owner(owner, false) {
-        SessionOwnerRuntimeFrontendEnableResult::Handled => {
-            advance_runtime_observable_cursors_to_current_for_owner(conn, owner);
-            if was_enabled {
-                clear_runtime_binding_definitions_for_owner(conn, owner)?;
-            }
-            Ok(())
-        }
-        SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-            Err("Runtime.disable succeeded after session owner disappeared".to_owned())
-        }
-    }
 }
 
 pub(super) fn start_runtime_discard_console_entries_command(

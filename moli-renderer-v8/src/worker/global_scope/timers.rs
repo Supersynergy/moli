@@ -27,15 +27,18 @@ pub(super) fn worker_set_timeout_callback<'s>(
     };
 
     if args.length() > 0 {
-        let callback = match worker_timer_callback_from_arg(scope, args.get(0), "setTimeout") {
+        let Some((handler, delay_ms)) = prepare_worker_timer_arguments(scope, &args, "setTimeout")
+        else {
+            return;
+        };
+        let callback = match worker_timer_callback_from_arg(scope, handler, "setTimeout") {
             Ok(Some(callback)) => callback,
             Ok(None) => {
-                rv.set(v8::Integer::new(scope, timer_id as i32).into());
+                rv.set_uint32(0);
                 return;
             }
             Err(()) => return,
         };
-        let delay_ms = worker_timer_delay_ms(scope, &args, "DedicatedWorkerGlobalScope.setTimeout");
 
         // Collect extra arguments to pass to the callback
         let extra_args: Vec<v8::Global<v8::Value>> = (2..args.length())
@@ -72,16 +75,18 @@ pub(super) fn worker_set_interval_callback<'s>(
     };
 
     if args.length() > 0 {
-        let callback = match worker_timer_callback_from_arg(scope, args.get(0), "setInterval") {
+        let Some((handler, delay_ms)) = prepare_worker_timer_arguments(scope, &args, "setInterval")
+        else {
+            return;
+        };
+        let callback = match worker_timer_callback_from_arg(scope, handler, "setInterval") {
             Ok(Some(callback)) => callback,
             Ok(None) => {
-                rv.set(v8::Integer::new(scope, timer_id as i32).into());
+                rv.set_uint32(0);
                 return;
             }
             Err(()) => return,
         };
-        let delay_ms =
-            worker_timer_delay_ms(scope, &args, "DedicatedWorkerGlobalScope.setInterval");
 
         let extra_args: Vec<v8::Global<v8::Value>> = (2..args.length())
             .map(|i| v8::Global::new(scope, args.get(i)))
@@ -100,6 +105,36 @@ pub(super) fn worker_set_interval_callback<'s>(
     }
 
     rv.set(v8::Integer::new(scope, timer_id as i32).into());
+}
+
+fn prepare_worker_timer_arguments<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    timer_name: &'static str,
+) -> Option<(v8::Local<'s, v8::Value>, u64)> {
+    let value = args.get(0);
+    // Web IDL conversions precede both Trusted Types default-policy calls and
+    // CSP checks. Preserve callable and TrustedScript union members as objects.
+    let preserve_object = v8::Local::<v8::Object>::try_from(value).is_ok_and(|object| {
+        object.is_callable() || crate::web_api_interfaces::TrustedScript::is_instance(scope, object)
+    });
+    let handler = if value.is_string() || preserve_object {
+        value
+    } else {
+        value.to_string(scope)?.into()
+    };
+    let prefix = match timer_name {
+        "setInterval" => "DedicatedWorkerGlobalScope.setInterval",
+        _ => "DedicatedWorkerGlobalScope.setTimeout",
+    };
+    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+    let mut scope = try_catch.init();
+    let delay_ms = worker_timer_delay_ms(&mut scope, args, prefix);
+    if scope.has_caught() {
+        let _ = scope.rethrow();
+        return None;
+    }
+    Some((handler, delay_ms))
 }
 
 fn worker_timer_callback_from_arg<'s>(
@@ -145,6 +180,13 @@ fn worker_timer_callback_from_arg<'s>(
     ) else {
         return Err(());
     };
+    let allow_trusted_types_eval = require_trusted_types_for_script
+        && worker_allows_trusted_types_eval(scope).unwrap_or(false);
+    if !worker_allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval, Some(&source))
+        .unwrap_or(true)
+    {
+        return Ok(None);
+    }
     let wrapper = format!("(function() {{\n{source}\n}})");
     let Some(source) = v8::String::new(scope, &wrapper) else {
         return Ok(None);
@@ -219,4 +261,80 @@ pub(super) fn worker_request_animation_frame_callback<'s>(
         timers.push_pending(timer_info);
     }
     rv.set_uint32(timer_id);
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(plain)]
+pub(super) struct WorkerGlobalTimerOperationsDeclaration {
+    #[webapi(method = "setTimeout", callback = worker_set_timeout_callback, length = 1)]
+    set_timeout: (),
+    #[webapi(method = "clearTimeout", callback = worker_clear_timeout_callback, length = 1)]
+    clear_timeout: (),
+    #[webapi(method = "setInterval", callback = worker_set_interval_callback, length = 1)]
+    set_interval: (),
+    #[webapi(method = "clearInterval", callback = worker_clear_interval_callback, length = 1)]
+    clear_interval: (),
+    #[webapi(
+        method = "requestAnimationFrame",
+        callback = worker_request_animation_frame_callback,
+        length = 1
+    )]
+    request_animation_frame: (),
+    #[webapi(
+        method = "cancelAnimationFrame",
+        callback = worker_clear_timeout_callback,
+        length = 1
+    )]
+    cancel_animation_frame: (),
+    #[webapi(
+        method = "queueMicrotask",
+        callback = worker_queue_microtask_callback,
+        length = 1
+    )]
+    queue_microtask: (),
+}
+
+#[derive(Clone, Default)]
+pub(in crate::worker) struct WorkerIsolateTimerQueues {
+    pending: Rc<RefCell<Vec<TimerInfo>>>,
+    cancelled: Rc<RefCell<Vec<u32>>>,
+}
+
+impl WorkerIsolateTimerQueues {
+    pub(in crate::worker) fn push_pending(&self, timer: TimerInfo) {
+        self.pending.borrow_mut().push(timer);
+    }
+
+    pub(in crate::worker) fn clear_pending_and_active(&self, timer_id: u32) {
+        self.pending
+            .borrow_mut()
+            .retain(|timer| timer.id != timer_id);
+        self.cancel_active(timer_id);
+    }
+
+    pub(in crate::worker) fn cancel_active(&self, timer_id: u32) {
+        self.cancelled.borrow_mut().push(timer_id);
+    }
+
+    pub(in crate::worker) fn drain_pending(&self) -> Vec<TimerInfo> {
+        self.pending.borrow_mut().drain(..).collect()
+    }
+
+    pub(in crate::worker) fn drain_cancelled(&self) -> Vec<u32> {
+        self.cancelled.borrow_mut().drain(..).collect()
+    }
+}
+
+pub(in crate::worker) fn worker_isolate_timer_queues(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<WorkerIsolateTimerQueues> {
+    scope.get_slot::<WorkerIsolateTimerQueues>().cloned()
+}
+
+pub(in crate::worker) struct TimerInfo {
+    pub(in crate::worker) id: u32,
+    pub(in crate::worker) callback: crate::worker::timer_callback::WorkerTimerCallback,
+    pub(in crate::worker) delay_ms: u64,
+    pub(in crate::worker) is_interval: bool,
+    pub(in crate::worker) extra_args: Vec<v8::Global<v8::Value>>,
 }

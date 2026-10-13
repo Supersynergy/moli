@@ -176,6 +176,7 @@ pub(super) fn build_router() -> Router {
             get(location_nav_chain_source_page),
         )
         .route("/location-nav/chain-mid", get(location_nav_chain_mid_page))
+        .route("/location-nav/load-chain", get(location_nav_load_chain_page))
         .route(
             "/location-nav/chain-timeout-source",
             get(location_nav_chain_timeout_source_page),
@@ -679,6 +680,10 @@ pub(super) fn build_router() -> Router {
         .route(
             "/compat/chrome-cssstylesheet-rule-mutation",
             get(chrome_cssstylesheet_rule_mutation_page),
+        )
+        .route(
+            "/compat/chrome-cssstylesheet-rule-mutation-v2",
+            get(chrome_cssstylesheet_rule_mutation_v2_page),
         )
         .route(
             "/compat/chrome-delete-rule-no-crash",
@@ -2372,6 +2377,22 @@ pub(super) fn build_router() -> Router {
         .route(
             "/assets/blocking_stylesheet_alternate_probe.js",
             get(asset_blocking_stylesheet_alternate_probe_script),
+        )
+        .route(
+            "/assets/runtime_inline_module_executed",
+            get(asset_runtime_inline_module_executed),
+        )
+        .route(
+            "/assets/runtime_inline_module_gated.css",
+            get(asset_runtime_inline_module_gated_css),
+        )
+        .route(
+            "/assets/blocking_stylesheet_alternate_probe_executed",
+            get(asset_blocking_stylesheet_alternate_probe_executed),
+        )
+        .route(
+            "/assets/blocking_stylesheet_alternate_gated.css",
+            get(asset_blocking_stylesheet_alternate_gated_css),
         )
         .route(
             "/assets/dynamic_blocking_stylesheet_runtime.js",

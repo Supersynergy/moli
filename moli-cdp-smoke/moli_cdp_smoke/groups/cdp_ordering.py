@@ -2,7 +2,7 @@
 
 Use the actual WebSocket order, retaining replies received while waiting for
 another id. Timeouts only bound liveness; no sleep or retry proves ordering.
-The four mutation cases explicitly distinguish Moli's current owner-only entry
+The six mutation cases explicitly distinguish Moli's current owner-only entry
 from Chromium's ordinary-pause capability. They are not CDP-wide requirements.
 """
 
@@ -105,6 +105,7 @@ class _Page:
     url: str
     frame: str
     node: int
+    root: int
     sheet: str
     css_event_index: int
     css_reply_index: int
@@ -126,7 +127,8 @@ async def _fixture(wire: _Wire, session: str, url: str) -> _Page:
                      "fixture Document parsed", after=start)
     await wire.evaluate(session,
         "document.head.innerHTML = '<style>input {color: red}</style>';"
-        "document.body.innerHTML = '<input id=probe>'; void 0")
+        "document.body.innerHTML = '<input id=probe><section id=children>"
+        "<div><span>nested</span></div></section>'; void 0")
     await wire.call("DOM.enable", session=session)
     document = await wire.call("DOM.getDocument", session=session)
     node = await wire.call("DOM.querySelector", {
@@ -146,7 +148,8 @@ async def _fixture(wire: _Wire, session: str, url: str) -> _Page:
     event_index = wire.messages.index(event)
     if event_index >= wire.index(enable):
         raise SmokeError("CSS.styleSheetAdded must precede CSS.enable response")
-    return _Page(session, url, frame, node["nodeId"], event["params"]["header"]["styleSheetId"],
+    return _Page(session, url, frame, node["nodeId"], document["root"]["nodeId"],
+                 event["params"]["header"]["styleSheetId"],
                  event_index, wire.index(enable))
 
 
@@ -166,6 +169,9 @@ async def _native_prefix(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, 
         ("Accessibility.getFullAXTree", {}),
         ("DOM.resolveNode", {"nodeId": page.node, "objectGroup": "cdp-ordering"}),
         ("DOM.getAttributes", {"nodeId": page.node}),
+        ("CSS.getInlineStylesForNode", {"nodeId": page.node}),
+        ("CSS.getMatchedStylesForNode", {"nodeId": page.node}),
+        ("DOM.getOuterHTML", {"nodeId": page.node}),
         ("DOM.describeNode", {"backendNodeId": 2147483647}),
     ]
     ids = [await wire.send(method, params, session) for method, params in commands]
@@ -202,6 +208,9 @@ async def _native_prefix(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, 
     assert_equal(color, "rgb(255, 0, 0)", "native computed style")
     assert_equal(replies[ids[8]]["result"]["attributes"], ["id", "probe"],
                  "native attributes share the renderer query and its ordered terminal")
+    html = replies[ids[11]]["result"]["outerHTML"]
+    if '<input' not in html or 'id="probe"' not in html:
+        raise SmokeError(f"native outer HTML did not serialize the selected node: {html!r}")
     object_id = replies[ids[7]]["result"]["object"]["objectId"]
     resolved = await wire.call("Runtime.callFunctionOn", {
         "objectId": object_id, "functionDeclaration": "function() { return this.id; }",
@@ -271,14 +280,62 @@ async def _pause(wire: _Wire, page: _Page, *, instrumentation: bool = False) -> 
 
 
 async def _normal_pause(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, Any]:
+    await wire.evaluate(page.session,
+        "document.getElementById('probe').setAttribute('style', 'outline-width: 3px'); void 0")
+    children = await wire.call("DOM.querySelector", {
+        "nodeId": page.root, "selector": "#children"
+    }, page.session)
     outer = await _pause(wire, page)
+    start = len(wire.messages)
     commands = [("Page.getFrameTree", {}), ("DOM.describeNode", {"nodeId": page.node}),
                 ("CSS.getComputedStyleForNode", {"nodeId": page.node}),
-                ("DOM.getAttributes", {"nodeId": page.node})]
+                ("DOM.getAttributes", {"nodeId": page.node}),
+                ("CSS.getInlineStylesForNode", {"nodeId": page.node}),
+                ("CSS.getMatchedStylesForNode", {"nodeId": page.node}),
+                ("DOM.getOuterHTML", {"nodeId": page.node}),
+                ("DOM.querySelector", {"nodeId": page.root, "selector": "#probe"}),
+                ("DOM.querySelectorAll", {"nodeId": page.root, "selector": "#probe"}),
+                ("DOM.requestChildNodes", {"nodeId": children["nodeId"], "depth": 2}),
+                ("Accessibility.getPartialAXTree", {"nodeId": page.node}),
+                ("DOM.getBoxModel", {"nodeId": page.node})]
     ids = [await wire.send(method, params, page.session) for method, params in commands]
-    replies = {rid: await wire.response(rid) for rid in reversed(ids)}
-    assert_equal(replies[ids[-1]]["result"]["attributes"], ["id", "probe"],
+    ids_by_method = {method: rid for (method, _), rid in zip(commands, ids)}
+    replies = {method: await wire.response(rid)
+               for (method, _), rid in zip(reversed(commands), reversed(ids))}
+    assert_equal(replies["DOM.getAttributes"]["result"]["attributes"],
+                 ["id", "probe", "style", "outline-width: 3px"],
                  "native attributes resolve the frontend node while paused")
+    for method in ("CSS.getInlineStylesForNode", "CSS.getMatchedStylesForNode"):
+        properties = replies[method]["result"]["inlineStyle"]["cssProperties"]
+        width = next(p["value"] for p in properties if p["name"] == "outline-width")
+        assert_equal(width, "3px", "inline style resolves the frontend node while paused")
+    html = replies["DOM.getOuterHTML"]["result"]["outerHTML"]
+    if 'id="probe"' not in html or 'outline-width: 3px' not in html:
+        raise SmokeError(f"paused outer HTML did not serialize the live node: {html!r}")
+    assert_equal(replies["DOM.querySelector"]["result"]["nodeId"], page.node,
+                 "paused selector preserves the frontend node binding")
+    assert_equal(replies["DOM.querySelectorAll"]["result"]["nodeIds"], [page.node],
+                 "paused selector-all returns the live input")
+    child_event = await wire.until(
+        lambda m: m.get("sessionId") == page.session
+        and m.get("method") == "DOM.setChildNodes"
+        and m["params"].get("parentId") == children["nodeId"],
+        "paused child-node notification", after=start)
+    if wire.messages.index(child_event) >= wire.index(ids_by_method["DOM.requestChildNodes"]):
+        raise SmokeError("child snapshots must be published before requestChildNodes response")
+    nodes = child_event["params"]["nodes"]
+    assert_equal(nodes[0]["nodeName"], "DIV", "paused child capture reads the live subtree")
+    assert_equal(nodes[0]["children"][0]["nodeName"], "SPAN", "paused child capture retains depth")
+    backend = replies["DOM.describeNode"]["result"]["node"]["backendNodeId"]
+    if not any(node.get("backendDOMNodeId") == backend
+               for node in replies["Accessibility.getPartialAXTree"]["result"]["nodes"]):
+        raise SmokeError("paused AX query did not resolve the fixture node")
+    model = replies["DOM.getBoxModel"]["result"]["model"]
+    assert_equal(len(model["content"]), 8, "paused geometry returns a content quad")
+    if model["width"] <= 0 or model["height"] <= 0:
+        raise SmokeError(f"paused geometry has no input layout: {model!r}")
+    indexes = [wire.index(rid) for rid in ids]
+    assert_equal(indexes, sorted(indexes), "nested ready replies retain Main publication order")
     if wire.has_response(outer):
         raise SmokeError("native queries must leave the outer evaluation paused")
     await wire.call("Debugger.resume", session=page.session)
@@ -361,10 +418,17 @@ async def _focus_reentry(wire: _Wire, page: _Page, _is_moli: bool) -> dict[str, 
 
 
 async def _paused_mutation(wire: _Wire, page: _Page, is_moli: bool) -> dict[str, Any]:
+    if wire.scenario == "paused_dom_scroll":
+        await wire.evaluate(page.session,
+            "document.getElementById('probe').style.marginTop = '3000px'; void 0")
     method, params, expression, expected = {
         "paused_dom_attribute": ("DOM.setAttributeValue", {
             "nodeId": page.node, "name": "data-probe", "value": "done"
         }, "document.getElementById('probe').getAttribute('data-probe')", "done"),
+        "paused_dom_remove": ("DOM.removeNode", {"nodeId": page.node},
+            "document.getElementById('probe') === null", True),
+        "paused_dom_scroll": ("DOM.scrollIntoViewIfNeeded", {"nodeId": page.node},
+            "window.scrollY > 0", True),
         "paused_stylesheet_edit": ("CSS.setStyleSheetText", {
             "styleSheetId": page.sheet, "text": "input {color: blue}"
         }, "getComputedStyle(document.getElementById('probe')).color", "rgb(0, 0, 255)"),
@@ -410,6 +474,8 @@ async def run_cdp_ordering_group(endpoint: str, fixture_url: str, results: list[
         ("instrumentation_pause_io_only", _instrumentation_pause),
         ("native_focus_callback_reentry", _focus_reentry),
         ("paused_dom_attribute", _paused_mutation),
+        ("paused_dom_remove", _paused_mutation),
+        ("paused_dom_scroll", _paused_mutation),
         ("paused_stylesheet_edit", _paused_mutation),
         ("paused_document_content", _paused_mutation),
         ("paused_navigator_configuration", _paused_mutation),

@@ -252,6 +252,8 @@ pub struct LayoutListData {
 pub struct LayoutFormControlData {
     pub value: Arc<str>,
     pub placeholder: Arc<str>,
+    /// Display labels in option order, independently of selectedness.
+    pub option_labels: Vec<Arc<str>>,
     pub size: Option<u16>,
     pub columns: u16,
     pub rows: u16,
@@ -266,6 +268,7 @@ impl Default for LayoutFormControlData {
         Self {
             value: Arc::from(""),
             placeholder: Arc::from(""),
+            option_labels: Vec::new(),
             size: None,
             columns: 20,
             rows: 2,
@@ -274,6 +277,14 @@ impl Default for LayoutFormControlData {
             disabled: false,
             multiple: false,
         }
+    }
+}
+
+impl LayoutFormControlData {
+    pub(crate) fn select_rows(&self) -> u16 {
+        self.size
+            .unwrap_or(if self.multiple { 4 } else { 1 })
+            .max(1)
     }
 }
 
@@ -339,6 +350,17 @@ impl LayoutElementSemantics {
 
     pub const fn is_replaced(&self) -> bool {
         self.replaced.is_some()
+    }
+
+    pub(crate) fn is_select_listbox(&self) -> bool {
+        matches!(
+            self.category,
+            LayoutElementCategory::FormControl(LayoutFormControlKind::Select)
+        ) && self
+            .metadata
+            .form_control
+            .as_ref()
+            .is_some_and(|data| data.select_rows() > 1)
     }
 
     pub(crate) fn is_html_element(&self, local_name: &str) -> bool {
@@ -464,6 +486,14 @@ impl LayoutTextSelection {
     }
 }
 
+/// A resolved hyperlink, sampled only for document export. A same-document
+/// destination retains source identity only until paint projection finishes.
+#[derive(Clone, Debug)]
+pub struct LayoutHyperlink<N> {
+    pub url: std::sync::Arc<str>,
+    pub destination: Option<N>,
+}
+
 /// A short-lived, read-only view of the renderer's canonical flat tree.
 pub trait LayoutSource {
     type NodeId: Copy + Debug + Eq + Hash;
@@ -482,6 +512,18 @@ pub trait LayoutSource {
     fn root_is_document_element(&self) -> bool {
         false
     }
+    /// The source Document's rendering mode, sampled for this layout pass.
+    /// Synthetic sources use standards mode unless they explicitly opt in.
+    fn quirks_mode(&self) -> style::context::QuirksMode {
+        style::context::QuirksMode::NoQuirks
+    }
+    /// Whether the embedding context disables user scrolling of this viewport,
+    /// including its scrollbar UI and gutters, independently of CSS overflow.
+    /// Sampled for this layout pass; descendant scroll containers and
+    /// programmatic viewport scrolling keep their ordinary behavior.
+    fn disables_viewport_user_scrolling(&self) -> bool {
+        false
+    }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId>;
@@ -491,6 +533,12 @@ pub trait LayoutSource {
     fn element_semantics(&self, node: Self::NodeId) -> Option<LayoutElementSemantics>;
     fn text(&self, node: Self::NodeId) -> Option<&str>;
     fn label(&self, node: Self::NodeId) -> String;
+
+    /// Returns a link owned by this element, with its URL resolved against the
+    /// document base. Ancestor links are handled by the export projection.
+    fn hyperlink(&self, _node: Self::NodeId) -> Option<LayoutHyperlink<Self::NodeId>> {
+        None
+    }
 
     /// Returns the active document selection intersecting one source text node.
     fn text_selection(&self, _node: Self::NodeId) -> Option<LayoutTextSelection> {

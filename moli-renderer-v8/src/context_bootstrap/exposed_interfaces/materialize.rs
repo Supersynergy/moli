@@ -1,19 +1,38 @@
 use std::rc::Rc;
 
 use anyhow::{Result, anyhow};
+use moli_v8_util::{WebApiIntrinsicKind, WebApiIntrinsicLookup};
 
 use super::finalize::finalize_materialized_interface;
 use super::metadata::{InterfaceId, ResolvedPrototypeProperty};
-use super::realm_registry::{IntrinsicInterfaceRegistry, RealmInterfaceState};
+use super::realm_registry::{IntrinsicInterfaceRegistry, RealmInterfaceEntry};
 use super::template_registry::ExposedInterfaceTemplateRegistry;
 use crate::context_bootstrap::constructors::html_element_constructor_with_early_sanity_trap;
 use crate::context_bootstrap::runtime_state::set_interface_prototype_constructor;
 use crate::context_bootstrap::shared::throw_error;
 use crate::context_bootstrap::specs::ConstructorKind;
-use crate::util::{
-    constructor_prototype_object, register_intrinsic_interface, registered_intrinsic_constructor,
-    registered_intrinsic_prototype, v8str,
-};
+use crate::util::{constructor_prototype_object, v8str};
+
+/// Adapter for shared declaration helpers. Recognized Web APIs always resolve
+/// through the realm entry, even when a public binding was deleted or replaced.
+pub(super) fn resolve_web_api_intrinsic<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &str,
+    kind: WebApiIntrinsicKind,
+) -> WebApiIntrinsicLookup<'s> {
+    let Some(registry) = ExposedInterfaceTemplateRegistry::current(scope) else {
+        return WebApiIntrinsicLookup::Unmanaged;
+    };
+    if registry.id_by_name(name).is_none() {
+        return WebApiIntrinsicLookup::Unmanaged;
+    }
+    WebApiIntrinsicLookup::Managed(match kind {
+        WebApiIntrinsicKind::Constructor => ensure_intrinsic_interface_constructor(scope, name)
+            .ok()
+            .map(Into::into),
+        WebApiIntrinsicKind::Prototype => ensure_intrinsic_interface_prototype(scope, name).ok(),
+    })
+}
 
 pub(super) fn exposed_interface_lazy_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -55,13 +74,12 @@ pub(super) fn materialize_interface<'s>(
         .metadata(id)
         .ok_or_else(|| anyhow!("unknown exposed interface id {}", id.index()))?;
     let realm = IntrinsicInterfaceRegistry::for_current_context(scope, registry.len())?;
-    let global = scope.get_current_context().global(scope);
 
-    match realm
-        .state(id)
+    match &*realm
+        .entry(id)
         .ok_or_else(|| anyhow!("interface state is out of range"))?
     {
-        RealmInterfaceState::Ready => {
+        RealmInterfaceEntry::Ready => {
             return realm
                 .public_interface(scope, id)
                 .map(Into::into)
@@ -72,43 +90,23 @@ pub(super) fn materialize_interface<'s>(
                     )
                 });
         }
-        RealmInterfaceState::Materializing => {
+        RealmInterfaceEntry::Materializing => {
             return Err(anyhow!("materialization cycle reached `{}`", metadata.name));
         }
-        RealmInterfaceState::Finalizing => {
-            return realm
-                .public_interface(scope, id)
-                .map(Into::into)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "finalizing realm-owned public interface object `{}` is missing",
-                        metadata.name
-                    )
-                });
-        }
-        RealmInterfaceState::Failed => {
+        RealmInterfaceEntry::Failed => {
             return Err(anyhow!(
                 "a previous materialization of `{}` failed",
                 metadata.name
             ));
         }
-        RealmInterfaceState::Uninitialized => {}
+        RealmInterfaceEntry::Uninitialized => {}
     }
 
-    if registered_intrinsic_constructor(scope, global, metadata.name).is_some()
-        || registered_intrinsic_prototype(scope, global, metadata.name).is_some()
-    {
-        return Err(anyhow!(
-            "uninitialized interface `{}` has partial registry state",
-            metadata.name
-        ));
-    }
-
-    realm.set_state(id, RealmInterfaceState::Materializing)?;
+    realm.begin_materialization(id)?;
     match materialize_uninitialized_interface(scope, &registry, &realm, id) {
         Ok(interface) => Ok(interface),
         Err(error) => {
-            realm.set_state(id, RealmInterfaceState::Failed)?;
+            realm.fail(id)?;
             Err(error)
         }
     }
@@ -256,19 +254,27 @@ fn materialize_uninitialized_interface<'s>(
         }
     }
 
-    let global = scope.get_current_context().global(scope);
-    if !register_intrinsic_interface(
+    finish_materialized_interface(
         scope,
-        global,
-        metadata.name,
-        constructor.into(),
+        registry,
+        realm,
+        id,
+        constructor,
         constructor_prototype,
-    ) {
-        return Err(anyhow!(
-            "failed to register intrinsic interface `{}`",
-            metadata.name
-        ));
-    }
+    )
+}
+
+fn finish_materialized_interface<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    registry: &Rc<ExposedInterfaceTemplateRegistry>,
+    realm: &Rc<IntrinsicInterfaceRegistry>,
+    id: InterfaceId,
+    constructor: v8::Local<'s, v8::Function>,
+    constructor_prototype: v8::Local<'s, v8::Object>,
+) -> Result<v8::Local<'s, v8::Value>> {
+    let metadata = registry
+        .metadata(id)
+        .ok_or_else(|| anyhow!("unknown exposed interface id {}", id.index()))?;
     let public_interface = match metadata.kind {
         ConstructorKind::HtmlElement => {
             let proxy =
@@ -279,21 +285,21 @@ fn materialize_uninitialized_interface<'s>(
                             metadata.name
                         )
                     })?;
-            set_interface_prototype_constructor(scope, constructor, proxy.into());
+            set_interface_prototype_constructor(scope, constructor_prototype, proxy.into())?;
             v8::Local::<v8::Object>::from(proxy)
         }
         _ => constructor.into(),
     };
-    realm.register_objects(
+    // Like Blink's ConstructorForTypeSlowCase, finish every fallible binding
+    // installation before publishing the interface in the per-context cache.
+    finalize_materialized_interface(scope, metadata.name, constructor, constructor_prototype)?;
+    realm.publish_ready(
         scope,
         id,
         constructor.into(),
         constructor_prototype,
         public_interface,
     )?;
-    realm.set_state(id, RealmInterfaceState::Finalizing)?;
-    finalize_materialized_interface(scope, metadata.name)?;
-    realm.set_state(id, RealmInterfaceState::Ready)?;
     registry.record_materialization(id);
     Ok(public_interface.into())
 }

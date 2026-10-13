@@ -27,6 +27,8 @@ use tokio::{
 struct FixtureRuntimeState {
     dynamic_stylesheet_dcl: Arc<FixtureEvent>,
     dynamic_stylesheet_script_executed: Arc<FixtureEvent>,
+    runtime_inline_module_executed: Arc<FixtureEvent>,
+    alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
 }
 
 #[derive(Default)]
@@ -428,6 +430,9 @@ const CHROME_OVERFLOW_PROPERTY_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/chrome_overflow_property.html");
 const CHROME_CSSSTYLESHEET_RULE_MUTATION_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/chrome_cssstylesheet_rule_mutation.html");
+const CHROME_CSSSTYLESHEET_RULE_MUTATION_V2_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/chrome_cssstylesheet_rule_mutation_v2.html"
+);
 const CHROME_DELETE_RULE_NO_CRASH_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/chrome_delete_rule_no_crash.html");
 const CHROME_IMPORTANT_JS_OVERRIDE_HTML: &str =
@@ -1363,7 +1368,7 @@ const BLOCKING_STYLESHEET_PARSER_BLOCKING_JS: &str = "window.blockingStylesheetP
 const BLOCKING_STYLESHEET_PARSER_BLOCKING_DOCUMENT_WRITE_JS: &str = "window.blockingStylesheetParserWriteRan = true; window.blockingStylesheetParserWriteElapsed = Date.now() - window.blockingStylesheetStart; window.blockingStylesheetParserWriteBlockedEnough = window.blockingStylesheetParserWriteElapsed >= 50; window.blockingStylesheetParserWriteSawLate = !!document.getElementById('late'); document.write('<span id=\"written-before-late\">written</span>'); window.blockingStylesheetParserWriteSawWrittenDuringScript = !!document.getElementById('written-before-late'); window.blockingStylesheetOrder.push('parser-write');";
 const BLOCKING_STYLESHEET_DEFER_JS: &str = "window.blockingStylesheetDeferElapsed = Date.now() - window.blockingStylesheetStart; window.blockingStylesheetDeferBlockedEnough = window.blockingStylesheetDeferElapsed >= 50; window.blockingStylesheetDeferSawLate = !!document.getElementById('late'); window.blockingStylesheetDeferSawDcl = window.blockingStylesheetDeferOrder.includes('dcl'); window.blockingStylesheetDeferOrder.push('defer');";
 const PHASE_TWO_UPGRADE_RUNTIME_STYLE_DEFER_JS: &str = "window.phaseTwoUpgradeDeferSawLoaded = window.phaseTwoUpgradeStyleLoaded === true; window.phaseTwoUpgradeDeferSawLate = !!document.getElementById('late'); window.phaseTwoUpgradeStyleOrder.push('defer'); Promise.resolve().then(() => { window.phaseTwoUpgradeStyleOrder.push('defer-microtask'); window.phaseTwoUpgradeStyleFinalOrder = window.phaseTwoUpgradeStyleOrder.join(','); }); window.phaseTwoUpgradeStyleFinalOrder = window.phaseTwoUpgradeStyleOrder.join(',');";
-const BLOCKING_STYLESHEET_ALTERNATE_PROBE_JS: &str = "window.blockingStylesheetAlternateElapsed = Date.now() - window.blockingStylesheetAlternateStart; window.blockingStylesheetAlternateBlocked = window.blockingStylesheetAlternateElapsed >= 50; window.blockingStylesheetAlternateSawLate = !!document.getElementById('late'); window.blockingStylesheetAlternateSawDcl = window.blockingStylesheetAlternateDclSeen === true;";
+const BLOCKING_STYLESHEET_ALTERNATE_PROBE_JS: &str = "window.blockingStylesheetAlternateBlocked = window.blockingStylesheetAlternateLoaded === true; window.blockingStylesheetAlternateSawLate = !!document.getElementById('late'); window.blockingStylesheetAlternateSawDcl = window.blockingStylesheetAlternateDclSeen === true; fetch('/assets/blocking_stylesheet_alternate_probe_executed', { cache: 'no-store' });";
 const DYNAMIC_BLOCKING_STYLESHEET_RUNTIME_JS: &str = "window.dynamicBlockingStylesheetSawStyleLoaded = window.dynamicBlockingStylesheetStyleLoaded === true; window.dynamicBlockingStylesheetSawLate = !!document.getElementById('late'); window.dynamicBlockingStylesheetSawDcl = window.dynamicBlockingStylesheetOrder.includes('dcl'); window.dynamicBlockingStylesheetSawLoad = window.dynamicBlockingStylesheetOrder.includes('load'); window.dynamicBlockingStylesheetOrder.push('dynamic'); window.dynamicBlockingStylesheetFinalOrder = window.dynamicBlockingStylesheetOrder.join(','); fetch('/assets/dynamic_blocking_stylesheet_script_executed', { cache: 'no-store' });";
 const RUNTIME_CONNECTED_MODULEPRELOAD_SLOW_MJS: &str = "export const slow = 'modulepreload-ok';";
 const MODULEPRELOAD_SHARED_ROOT_MJS: &str = r#"import { seenLeafOrder, value } from "./modulepreload_shared_mid.mjs";

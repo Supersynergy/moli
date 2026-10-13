@@ -29,6 +29,7 @@ pub(in crate::domains) enum ProtocolOutputResponseOrder {
 /// time.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::domains) enum ProtocolOutputSlot {
+    WebMcp,
     PendingSubresourceContinueEvents,
     TopLevelLocationNavigation,
     TopLevelHistoryTraversal,
@@ -37,6 +38,8 @@ pub(in crate::domains) enum ProtocolOutputSlot {
     JavascriptDialog,
     WindowOpen,
     Popup,
+    CloseAuxiliaryWindow,
+    NavigateAuxiliaryWindow,
     SharedWorkerTargetLifecycle,
     ServiceWorkerTargetLifecycle,
     DedicatedWorkerTargetLifecycle,
@@ -68,6 +71,8 @@ impl ProtocolOutputSlot {
             | Self::Download
             | Self::JavascriptDialog
             | Self::Popup
+            | Self::CloseAuxiliaryWindow
+            | Self::NavigateAuxiliaryWindow
             | Self::SharedWorkerTargetLifecycle
             | Self::ServiceWorkerTargetLifecycle
             | Self::DedicatedWorkerTargetLifecycle
@@ -80,6 +85,7 @@ impl ProtocolOutputSlot {
             | Self::TopLevelLocationNavigation
             | Self::TopLevelHistoryTraversal => ProtocolOutputDelivery::OwnerAction,
             Self::WindowOpen
+            | Self::WebMcp
             | Self::Audits
             | Self::Console
             | Self::Log
@@ -99,7 +105,9 @@ impl ProtocolOutputSlot {
         self,
     ) -> ProtocolOutputResponseOrder {
         match self {
-            Self::TopLevelLocationNavigation
+            Self::CloseAuxiliaryWindow
+            | Self::NavigateAuxiliaryWindow
+            | Self::TopLevelLocationNavigation
             | Self::TopLevelHistoryTraversal
             | Self::Download
             | Self::SharedWorkerTargetLifecycle
@@ -136,6 +144,7 @@ impl ProtocolOutputSlot {
             | Self::DocumentLifecycle
             | Self::RuntimeObservable
             | Self::DomStorage
+            | Self::WebMcp
             | Self::SessionHistoryUpdate
             | Self::SameDocumentNavigation => ProtocolOutputResponseOrder::BeforeResponse,
         }
@@ -145,10 +154,11 @@ impl ProtocolOutputSlot {
         self,
         conn: &'a mut CdpConnection,
         context: &'a mut ProtocolOutputProjectionContext<'_>,
-        payloads: Option<&'a mut ProtocolOutputPayloads>,
+        payloads: &'a mut ProtocolOutputPayloads,
     ) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
         Box::pin(async move {
             match self {
+                Self::WebMcp => crate::domains::web_mcp::project_async(context, payloads).await,
                 Self::PendingSubresourceContinueEvents => {
                     crate::domains::network::project_pending_subresource_continue_async(
                         conn, context, payloads,
@@ -228,6 +238,8 @@ impl ProtocolOutputSlot {
                 | Self::JavascriptDialog
                 | Self::WindowOpen
                 | Self::Popup
+                | Self::CloseAuxiliaryWindow
+                | Self::NavigateAuxiliaryWindow
                 | Self::DocumentTitleChanged
                 | Self::DocumentLifecycle
                 | Self::ChildFrameActivity
@@ -307,6 +319,7 @@ mod tests {
             (DocumentLifecycle, ProtocolObservation, BeforeResponse),
             (RuntimeObservable, OwnerAction, BeforeResponse),
             (DomStorage, ProtocolObservation, BeforeResponse),
+            (WebMcp, ProtocolObservation, BeforeResponse),
             (ChildFrameActivity, OwnerAction, AfterResponse),
             (SameDocumentNavigation, OwnerAction, BeforeResponse),
             (SessionHistoryUpdate, OwnerAction, BeforeResponse),

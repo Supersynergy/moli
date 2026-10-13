@@ -140,6 +140,14 @@ impl DocumentPolicyContainer {
     ) -> Self {
         let response_content_security_policies =
             response_content_security_policies_from_headers(headers);
+        let sandbox = DocumentSandboxPolicy::from_response_content_security_policies(
+            &response_content_security_policies,
+        );
+        let origin = if sandbox.forces_opaque_origin {
+            url::Origin::new_opaque()
+        } else {
+            final_url.origin()
+        };
         Self {
             referrer_policy: crate::referrer_policy::response_referrer_policy_from_headers(headers),
             cross_origin_embedder_policy:
@@ -151,9 +159,7 @@ impl DocumentPolicyContainer {
                     final_url, headers,
                 ),
             document_content_security_policies: response_content_security_policies.clone(),
-            sandbox: DocumentSandboxPolicy::from_response_content_security_policies(
-                &response_content_security_policies,
-            ),
+            sandbox,
             response_content_security_policies,
             response_content_security_report_only_policies:
                 response_content_security_report_only_policies_from_headers(headers),
@@ -166,7 +172,7 @@ impl DocumentPolicyContainer {
                 crate::permissions_policy::DocumentPermissionsPolicy::from_navigation_response_headers(
                     headers,
                     final_url,
-                ),
+                ).for_document_origin(&origin),
             ..Self::default()
         }
     }
@@ -219,7 +225,31 @@ impl DocumentPolicyContainer {
 }
 
 impl DocumentRuntime {
+    #[inline]
     pub(super) fn apply_style_csp_mutation_followups<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host_ptr: *mut JsContextHost,
+        attribute_mutations: &[super::mutation_commands::InlineStyleAttributeCspMutation],
+        connected_roots: &[DomHandle],
+        stylesheet_owner_changes: &[crate::dom::native::DomStylesheetOwnerChange],
+    ) {
+        if attribute_mutations.is_empty()
+            && connected_roots.is_empty()
+            && stylesheet_owner_changes.is_empty()
+        {
+            return;
+        }
+        self.apply_nonempty_style_csp_mutation_followups(
+            scope,
+            host_ptr,
+            attribute_mutations,
+            connected_roots,
+            stylesheet_owner_changes,
+        );
+    }
+
+    fn apply_nonempty_style_csp_mutation_followups<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
@@ -500,6 +530,15 @@ impl DocumentRuntime {
 
     pub(crate) fn document_policy_container(&self) -> &DocumentPolicyContainer {
         &self.policy_container
+    }
+
+    /// An initial empty Document inherits the complete creator policy,
+    /// including sandbox flags supplied by an embedding iframe.
+    pub(crate) fn set_initial_document_policy_container(
+        &mut self,
+        policy: DocumentPolicyContainer,
+    ) {
+        self.policy_container = policy;
     }
 
     pub(crate) fn set_main_navigation_policy_container(

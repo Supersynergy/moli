@@ -64,7 +64,8 @@ class OrderingTranscriptTests(unittest.IsolatedAsyncioTestCase):
              "params": {"context": {"id": 7}}},
         ])
         wire = _Wire(client, "late-context")  # type: ignore[arg-type]
-        page = _Page("page", "http://fixture/plain", "frame", 1, "sheet", 0, 0)
+        page = _Page(session="page", url="http://fixture/plain", frame="frame", node=1,
+                     root=2, sheet="sheet", css_event_index=0, css_reply_index=0)
         with self.assertRaisesRegex(SmokeError, "notification must precede world response"):
             await _world_prefix(wire, page, False)
 

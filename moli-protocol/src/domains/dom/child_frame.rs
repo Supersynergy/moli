@@ -18,7 +18,7 @@ use crate::automation::{
 };
 use crate::conn::{CdpConnection, CommandOwnerScope};
 use moli_core::page::{
-    DocumentNodeRuntimeObjectResolution, Page, PendingPageCommand, RendererDocumentNodeGeometry,
+    DocumentNodeRuntimeObjectResolution, Page, RendererDocumentNodeGeometry,
     RendererDocumentNodeReference,
 };
 
@@ -111,25 +111,22 @@ async fn query_selector_command(
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let root_backend_node_id = match root {
-        Some(reference) => {
-            let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
-            required_child_frame_backend_node_id(&reference)?
-        }
-        None => {
+    let root = match root {
+        Some(reference) => reference.into_renderer_reference(renderer_inspector_session_id.clone()),
+        None => moli_core::page::RendererDomNodeReference::BackendNodeId(
             child_frame_document_root_node_reference(conn, owner, frame_id)
                 .await?
-                .backend_node_id
-        }
+                .backend_node_id,
+        ),
     };
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_child_frame_document_query_selector_for_backend_node_id(
+        .start_child_frame_document_query_selector_for_node(
             renderer_inspector_session_id,
             include_whitespace,
             frame_id.to_owned(),
-            root_backend_node_id,
+            root,
             selector.to_owned(),
             multiple,
         )
@@ -219,10 +216,12 @@ async fn text_command(
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
 ) -> Result<DevToolsGetTextResult, PendingDomCommandStartError> {
-    let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_text_for_reference(page, reference)?;
+    let pending = page
+        .start_document_node_text(reference.into_renderer_reference(session))
+        .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
@@ -232,25 +231,18 @@ async fn text_command(
         .and_then(text_result_from_renderer_resolution)
 }
 
-fn start_document_node_text_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    page.start_document_node_text_for_backend_node_id(backend_node_id)
-        .map_err(PendingDomCommandStartError::renderer_error)
-}
-
 async fn property_command(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
     name: &str,
 ) -> Result<DevToolsGetPropertyResult, PendingDomCommandStartError> {
-    let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_property_for_reference(page, reference, name)?;
+    let pending = page
+        .start_document_node_property(reference.into_renderer_reference(session), name)
+        .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
@@ -258,16 +250,6 @@ async fn property_command(
     page.finish_document_node_property(completion)
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(property_result_from_renderer_resolution)
-}
-
-fn start_document_node_property_for_reference(
-    page: &Page,
-    reference: DevToolsDomNodeReference,
-    name: &str,
-) -> Result<PendingPageCommand, PendingDomCommandStartError> {
-    let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    page.start_document_node_property_for_backend_node_id(backend_node_id, name)
-        .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 async fn outer_html_command(
@@ -278,27 +260,27 @@ async fn outer_html_command(
     include_shadow_dom: bool,
 ) -> Result<String, PendingDomCommandStartError> {
     let reference = match reference {
-        Some(reference) => Some(resolve_frontend_node_reference(conn, owner, reference).await?),
-        None => None,
-    };
-    let backend_node_id = match reference {
-        Some(reference) => required_child_frame_backend_node_id(&reference)?,
-        None => {
+        Some(reference) => reference,
+        None => DevToolsDomNodeReference::BackendNodeId(
             child_frame_document_root_node_reference(conn, owner, frame_id)
                 .await?
-                .backend_node_id
-        }
+                .backend_node_id,
+        ),
     };
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
-        .start_outer_html_for_backend_node_id(backend_node_id, include_shadow_dom)
+        .start_outer_html_for_node(
+            reference.into_renderer_reference(session),
+            include_shadow_dom,
+        )
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_outer_html_for_backend_node_id(completion)
+    page.finish_outer_html_for_node(completion)
         .map_err(PendingDomCommandStartError::renderer_error)?
         .ok_or_else(PendingDomCommandStartError::node_not_found)
 }
@@ -395,17 +377,16 @@ async fn node_snapshot_for_reference(
     depth: i32,
     pierce: bool,
 ) -> Result<moli_core::page::DocumentNodeSnapshot, PendingDomCommandStartError> {
-    let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
     let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let backend_node_id = required_child_frame_backend_node_id(&reference)?;
+    let reference = reference.into_renderer_reference(renderer_inspector_session_id.clone());
     let pending = page
-        .start_document_node_snapshot_for_backend_node_id_in_inspector_session(
+        .start_document_node_snapshot_for_node_in_inspector_session(
             renderer_inspector_session_id,
             include_whitespace,
-            backend_node_id,
+            reference,
             depth,
             pierce,
         )
@@ -494,19 +475,18 @@ async fn document_geometry_for_reference(
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
 ) -> Result<RendererDocumentNodeGeometry, PendingDomCommandStartError> {
-    let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
+    let session = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let backend_node_id = required_child_frame_backend_node_id(&reference)?;
     let pending = page
-        .start_document_geometry_for_backend_node_id(backend_node_id)
+        .start_document_geometry_for_node(reference.into_renderer_reference(session))
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
     match page
-        .finish_document_geometry_for_backend_node_id(completion)
+        .finish_document_geometry_for_node(completion)
         .map_err(PendingDomCommandStartError::renderer_error)?
     {
         Some(resolution) => Ok(resolution),

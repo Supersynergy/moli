@@ -32,6 +32,9 @@ struct AllowedDirectCallFile {
 }
 
 const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
+    // WebMCP retains native registration/invocation abort algorithms here.
+    // Page-supplied execute functions use WindowWebIdlCallbackFunction instead.
+    ("context_bootstrap/web_mcp/state.rs", 1),
     ("custom_elements/construction.rs", 1),
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
@@ -71,6 +74,14 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         1,
         DirectCallOwner::TypedWebIdlAdapter,
     ),
+    // The typed Window callback adapter checks exact Realm currentness and
+    // enters the Web IDL relevant/incumbent contexts before normalizing the
+    // Promise-returning execute callback. It owns no raw author-function root.
+    allowed(
+        "context_bootstrap/web_mcp/execution.rs",
+        1,
+        DirectCallOwner::TypedWebIdlAdapter,
+    ),
     // Ordinary calls, including HTML-owned callbacks and script wrappers,
     // enter through the common JavaScript execution boundary.
     allowed(
@@ -94,7 +105,8 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/navigation_callbacks/navigation.rs",
-        11,
+        // Three settlement calls now go through the existing shared helpers.
+        8,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
@@ -116,8 +128,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/stream_adapter/utils.rs",
-        // Cancellation continuations now use the native Promise API.
-        8,
+        // Pending promise settlement and cancellation continuations use the
+        // native Promise API; the remaining calls run stream algorithms.
+        4,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
@@ -151,6 +164,13 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     // Captured native intrinsics, DOM/native forwarding, and compiled jobs.
+    // These two calls invoke WeakMap.get/set captured before author code runs.
+    // No page-supplied callback or mutable prototype method reaches this cache.
+    allowed(
+        "context_bootstrap/window_accessors/cross_origin_cache.rs",
+        2,
+        DirectCallOwner::NativeForwardingOrScript,
+    ),
     allowed(
         "context_bootstrap/constructors/document_nodes.rs",
         1,
@@ -247,7 +267,7 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "worker/global_scope/mod.rs",
+        "worker/global_scope/console.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),

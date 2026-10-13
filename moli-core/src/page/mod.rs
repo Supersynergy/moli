@@ -68,6 +68,7 @@ pub use input_support::{
     decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
     decode_insert_text_completion,
 };
+pub use moli_dom::accessibility::{AccessibilityNode, AccessibilityNodeId, AccessibilityValue};
 pub use moli_page_types::DomScrollIntoViewRect;
 pub use moli_page_types::{
     RendererDomDebuggerDomBreakpointType, RendererDomDebuggerEventListenerBreakpoint,
@@ -77,7 +78,6 @@ pub use moli_page_types::{
     renderer_inspector_protocol_configuration_command_from_message,
     renderer_inspector_protocol_configuration_command_from_method,
 };
-pub use moli_renderer_v8::RendererRuntimeInspectorMessageResponseOrder;
 pub use moli_renderer_v8::dom::native::SelectedFile;
 pub use moli_renderer_v8::network::{
     RendererNetworkResourceLoadOutcome, RendererNetworkResourceLoadPreparation,
@@ -88,8 +88,10 @@ pub use moli_renderer_v8::{
     PendingWorkerRuntimeInspectorSessionResponse, RendererActivityDiagnostics,
     RendererAgentAttachmentId, RendererAutofillAddressField, RendererAutofillCreditCard,
     RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
-    RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
-    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
+    RendererAuxiliaryDocumentResponse, RendererAuxiliaryNavigationKind, RendererAuxiliaryWindow,
+    RendererBrowsingContextGroup, RendererBrowsingContextName, RendererCaptureScreencastFrameReply,
+    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
+    RendererCaptureScreenshotRequest, RendererCapturedDocumentEnvironment,
     RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDedicatedWorkerTargetEvent,
     RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentHitTestResult,
     RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
@@ -108,15 +110,18 @@ pub use moli_renderer_v8::{
     RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId, RendererJavaScriptDialogResult,
     RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererLifecycleEpoch,
     RendererLifecycleEventStamp, RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
-    RendererMainDocumentCommit, RendererPageCommandPostResponseContinuation,
-    RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
-    RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPendingDownloadActivation,
-    RendererPendingDownloadResponse, RendererPendingFileChooserActivation,
-    RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
-    RendererPendingSameDocumentNavigation, RendererPendingTopLevelHistoryTraversal,
-    RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
-    RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererMainDocumentCommit, RendererMainDocumentResource, RendererNavigationInitiator,
+    RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts,
+    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
+    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReplacementError,
+    RendererPageReplacementFailureDisposition, RendererPdfOptions, RendererPendingAuxiliaryPage,
+    RendererPendingDownloadActivation, RendererPendingDownloadResponse,
+    RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
+    RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
+    RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
+    RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
+    RendererPopupActivationSource, RendererPopupDisposition, RendererPrintToPdfReply,
+    RendererPrintToPdfRequest, RendererResourceContentBody, RendererResourceSearchRequest,
     RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
@@ -144,6 +149,9 @@ pub use moli_renderer_v8::{
 };
 pub use moli_renderer_v8::{
     RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
+};
+pub use moli_renderer_v8::{
+    RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder,
 };
 pub use navigation_diagnostics::{NavigationRedirect, NavigationResponse};
 pub use protocol_support::{
@@ -193,6 +201,7 @@ pub use crate::renderer::{
 
 pub struct Page {
     page_state: PageStateCache,
+    requested_document_activity: std::cell::Cell<moli_page_types::DocumentActivity>,
     // Chromium owns this on RenderFrameHostImpl::IdleManager. Keep it on the
     // current document handle instead of deriving browser-side navigation
     // policy from whichever renderer snapshot the protocol actor consumed
@@ -217,12 +226,30 @@ impl fmt::Debug for Page {
 }
 
 impl Page {
+    pub(crate) fn adopt_renderer_document_replacement(
+        &mut self,
+        replacement: moli_renderer_v8::RendererPageReplacementCommit,
+    ) -> Result<(
+        RendererPageCreationDiagnostics,
+        RendererPageCreationArtifacts,
+    )> {
+        let (state, diagnostics, artifacts) =
+            self.handle.adopt_document_replacement(replacement)?;
+        self.idle_override = state.idle_override();
+        self.requested_document_activity
+            .set(state.document_activity);
+        self.page_state.replace(state);
+        self.page_creation_artifacts = None;
+        Ok((diagnostics, artifacts))
+    }
+
     pub(crate) fn from_attached_handle(
         handle: RendererPageHandle,
         page_state: Arc<RendererPageState>,
     ) -> Self {
         let idle_override = page_state.idle_override();
         Self {
+            requested_document_activity: std::cell::Cell::new(page_state.document_activity),
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,
@@ -239,6 +266,7 @@ impl Page {
     ) -> Self {
         let idle_override = page_state.idle_override();
         Self {
+            requested_document_activity: std::cell::Cell::new(page_state.document_activity),
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,

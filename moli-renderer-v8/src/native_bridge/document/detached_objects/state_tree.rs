@@ -8,6 +8,7 @@ use crate::{
         set_private_value,
     },
 };
+use smallvec::SmallVec;
 
 pub(in crate::native_bridge::document) fn detached_is_node<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -171,6 +172,20 @@ fn detached_set_owner_document_inner<'s>(
     }
 }
 
+pub(super) fn owner_document_native_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    owner_document: v8::Local<'s, v8::Object>,
+) -> Option<DomHandle> {
+    detached_native_handle_for_runtime(scope, runtime_ptr, owner_document).or_else(|| {
+        node_runtime_and_handle_from_object(scope, owner_document)
+            .ok()
+            .and_then(|(node_runtime_ptr, handle)| {
+                (node_runtime_ptr == runtime_ptr).then_some(handle)
+            })
+    })
+}
+
 fn sync_detached_native_owner_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     node: v8::Local<'s, v8::Object>,
@@ -183,8 +198,7 @@ fn sync_detached_native_owner_document<'s>(
     let Some(handle) = detached_native_handle_for_runtime(scope, runtime_ptr, node) else {
         return false;
     };
-    let Some(document_handle) =
-        detached_native_handle_for_runtime(scope, runtime_ptr, owner_document)
+    let Some(document_handle) = owner_document_native_handle(scope, runtime_ptr, owner_document)
     else {
         return false;
     };
@@ -618,23 +632,6 @@ fn detached_native_element_child_objects<'s>(
             .into_iter()
             .filter(|child| detached_node_type(scope, *child) == Some(1))
             .collect(),
-    )
-}
-
-fn detached_native_contains<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-    other: v8::Local<'s, v8::Object>,
-) -> Option<bool> {
-    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, node)?;
-    let other_handle = detached_native_handle_for_runtime(scope, runtime_ptr, other)?;
-    Some(
-        handle == other_handle
-            || unsafe { &*runtime_ptr }
-                .dom_host()
-                .dom()
-                .contains(handle, other_handle),
     )
 }
 
@@ -1183,7 +1180,8 @@ pub(crate) fn detached_record_native_tree_mutations(
                 .map(|mutation| mutation.target()),
         )
         .chain(inputs.character_data_mutations().iter().copied());
-    let mut documents = Vec::new();
+    // The usual parser mutation has one owner document, which fits inline.
+    let mut documents = SmallVec::<[_; 1]>::new();
     for target in targets {
         if let Some(document) = dom_host.owner_document_handle(target)
             && !documents.contains(&document)
@@ -1377,32 +1375,6 @@ pub(crate) fn detached_is_connected<'s>(
                 })
                 .flatten()
         });
-    }
-    false
-}
-
-pub(in crate::native_bridge::document) fn detached_contains<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    node: v8::Local<'s, v8::Object>,
-    other: v8::Local<'s, v8::Object>,
-) -> bool {
-    if node.strict_equals(other.into()) {
-        return true;
-    }
-    if let Some(contains) = detached_native_contains(scope, node, other) {
-        return contains;
-    }
-    if let Some(delegate) = detached_live_delegate_object(scope, node) {
-        let candidate = detached_live_delegate_object(scope, other).unwrap_or(other);
-        return call_object_method(scope, delegate, "contains", &[candidate.into()])
-            .is_some_and(|value| value.boolean_value(scope));
-    }
-    let mut current = detached_parent_node_object(scope, other);
-    while let Some(candidate) = current {
-        if candidate.strict_equals(node.into()) {
-            return true;
-        }
-        current = detached_parent_node_object(scope, candidate);
     }
     false
 }

@@ -35,6 +35,10 @@ struct OwnerDocumentPolicySnapshot {
 
 const JAVASCRIPT_URL_TRUSTED_TYPES_SINK: &str = "Location href";
 
+fn security_origin_from_serialized(origin: &str) -> url::Origin {
+    url::Url::parse(origin).map_or_else(|_| url::Origin::new_opaque(), |url| url.origin())
+}
+
 fn policy_child_window_handle(scope: &mut v8::PinScope<'_, '_>) -> Option<DomHandle> {
     if let Some(handle) = active_child_window_handle(scope) {
         return Some(handle);
@@ -129,7 +133,9 @@ impl JsContextHost {
         owner: OwnerDispatchScope,
     ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
         match owner {
-            OwnerDispatchScope::Top => Some(self.document_policy_container().permissions_policy),
+            OwnerDispatchScope::Top => {
+                Some(self.document_policy_container().permissions_policy.clone())
+            }
             OwnerDispatchScope::Child(handle) => self
                 .frame_owner_current_child_snapshot(handle)
                 .map(|snapshot| {
@@ -140,7 +146,7 @@ impl JsContextHost {
                 }),
             OwnerDispatchScope::LightweightPopup(popup_id) => self
                 .lightweight_popup_policy_container(popup_id)
-                .map(|policy| policy.permissions_policy),
+                .map(|policy| policy.permissions_policy.clone()),
         }
     }
 
@@ -149,12 +155,12 @@ impl JsContextHost {
         document: DomHandle,
     ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
         if document == self.document_handle() {
-            return Some(self.document_policy_container().permissions_policy);
+            return Some(self.document_policy_container().permissions_policy.clone());
         }
         if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
             return self
                 .lightweight_popup_policy_container(popup_id)
-                .map(|policy| policy.permissions_policy);
+                .map(|policy| policy.permissions_policy.clone());
         }
         let child_handle = self.child_browsing_context_host_for_document_handle(document)?;
         let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
@@ -163,6 +169,52 @@ impl JsContextHost {
                 .settings
                 .document_policy_container
                 .permissions_policy,
+        )
+    }
+
+    // Read the committed owner's security origin, including inherited blank
+    // documents and sandboxing. A pending navigation's URL is not authority.
+    pub(crate) fn document_security_origin(&self, document: DomHandle) -> url::Origin {
+        if document == self.document_handle() && self.document_sandbox_policy().forces_opaque_origin
+        {
+            return url::Origin::new_opaque();
+        }
+        if let Some(child) = self.child_browsing_context_host_for_document_handle(document) {
+            return self
+                .child_document_security_origin(child)
+                .unwrap_or_else(url::Origin::new_opaque);
+        }
+        let serialized = (document == self.document_handle())
+            .then(|| {
+                self.frame_owner_store
+                    .current_main_owner_snapshot()
+                    .map(|owner| owner.settings.origin)
+            })
+            .flatten()
+            .or_else(|| {
+                self.lightweight_popup_id_for_document_handle(document)
+                    .and_then(|popup| self.lightweight_popup_origin(popup))
+            });
+        serialized.map_or_else(
+            || self.document_url_for_handle(document).origin(),
+            |origin| security_origin_from_serialized(&origin),
+        )
+    }
+
+    // Commit observers run before the adapter updates its Document-handle map.
+    pub(crate) fn child_document_security_origin(&self, child: DomHandle) -> Option<url::Origin> {
+        let owner = self.frame_owner_store.current_child_owner_snapshot(child)?;
+        Some(
+            if owner
+                .settings
+                .document_policy_container
+                .sandbox
+                .forces_opaque_origin
+            {
+                url::Origin::new_opaque()
+            } else {
+                security_origin_from_serialized(&owner.settings.origin)
+            },
         )
     }
 
@@ -839,7 +891,7 @@ impl JsContextHost {
         }
         if include_call_location
             && let Some((source_file, line_number, column_number)) =
-                current_script_violation_location(scope)
+                crate::content_security_policy::current_script_violation_location(scope)
         {
             for violation in [&mut report_only_violation, &mut enforced_violation]
                 .into_iter()
@@ -1272,23 +1324,4 @@ impl JsContextHost {
         self.dispatch_child_window_event(scope, handle, "securitypolicyviolation", event);
         Ok(())
     }
-}
-
-fn current_script_violation_location(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> Option<(String, i32, i32)> {
-    let stack = v8::StackTrace::current_stack_trace(scope, 1)?;
-    let frame = stack.get_frame(scope, 0)?;
-    let source_file = frame
-        .get_script_name_or_source_url(scope)
-        .map(|source| source.to_rust_string_lossy(scope))
-        .map(|source| {
-            crate::content_security_policy::content_security_policy_source_file_for_report(&source)
-        })
-        .unwrap_or_default();
-    let line_number = i32::try_from(frame.get_line_number())
-        .unwrap_or_default()
-        .max(0);
-    let column_number = i32::try_from(frame.get_column()).unwrap_or_default().max(0);
-    Some((source_file, line_number, column_number))
 }

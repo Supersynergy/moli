@@ -81,6 +81,7 @@ where
 pub struct LayoutPassRequest {
     pub viewport: LayoutViewport,
     pub reason: LayoutFlushReason,
+    environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
 }
 
@@ -89,6 +90,9 @@ impl LayoutPassRequest {
         Self {
             viewport,
             reason,
+            environment: crate::LayoutEnvironment {
+                scrollbars_hidden: false,
+            },
             paint_capture: None,
         }
     }
@@ -104,11 +108,15 @@ impl LayoutPassRequest {
         reason: LayoutFlushReason,
         paint_capture: PaintCaptureRequest,
     ) -> Self {
-        Self {
-            viewport,
-            reason,
-            paint_capture: Some(paint_capture),
-        }
+        let mut request = Self::new(viewport, reason);
+        request.paint_capture = Some(paint_capture);
+        request
+    }
+
+    /// Sets document-wide runtime policy without changing authored CSS styles.
+    pub const fn with_environment(mut self, environment: crate::LayoutEnvironment) -> Self {
+        self.environment = environment;
+        self
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -207,6 +215,7 @@ where
     let started = Instant::now();
     let phase_started = Instant::now();
     let mut world = build_layout_world(source, styles)?;
+    world.environment = request.environment;
     let box_tree_elapsed = phase_started.elapsed();
     debug_assert!(
         world
@@ -230,8 +239,7 @@ where
     let numeric_layout_elapsed = phase_started.elapsed();
     let phase_started = Instant::now();
     let mut embedded_frames = HashMap::new();
-    for index in 0..world.boxes.len() {
-        let layout_box = &world.boxes[index];
+    for (index, layout_box) in world.boxes.iter().enumerate() {
         if !layout_box
             .element_semantics()
             .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Frame))
@@ -269,7 +277,7 @@ where
     let embedded_frame_elapsed = phase_started.elapsed();
     finish_layout_pass(
         &world,
-        source.root(),
+        source,
         request.viewport,
         request.reason,
         started,
@@ -330,7 +338,10 @@ where
 {
     let root_id = world.root;
     let defining_body = world.viewport_scroll_policy.defining_body();
-    world.viewport_scroll_policy.prepare_scrollbar_layout();
+    let scrollbars_hidden = world.environment.scrollbars_hidden;
+    world
+        .viewport_scroll_policy
+        .prepare_scrollbar_layout(scrollbars_hidden);
     for (index, layout_box) in world.boxes.iter_mut().enumerate() {
         let id = crate::LayoutBoxId::from_index(index);
         if id == root_id {
@@ -338,7 +349,9 @@ where
         } else if defining_body == Some(id) {
             layout_box.style.prepare_viewport_defining_body_layout();
         } else {
-            layout_box.style.prepare_scrollbar_layout(false);
+            layout_box
+                .style
+                .prepare_scrollbar_layout(false, scrollbars_hidden);
         }
     }
 
@@ -357,6 +370,12 @@ where
             metrics.first_pass_elapsed = preparation_elapsed + elapsed;
         } else {
             metrics.followup_passes_elapsed += elapsed;
+        }
+        // Hidden controls cannot introduce an automatic gutter. Final output
+        // projection still computes scroll extents, so this demand needs no
+        // scrollbar-feedback overflow projection or corrective numeric pass.
+        if scrollbars_hidden {
+            break;
         }
         let phase_started = Instant::now();
         touched.append(&mut pending_feedback_seeds);

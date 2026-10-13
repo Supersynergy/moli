@@ -111,36 +111,34 @@ pub struct FetchArgs {
     /// Select the fetch output format. When omitted, rendered HTML documents
     /// are serialized and raw responses such as PDFs or videos are written
     /// verbatim. `screenshot` writes a viewport PNG, `screenshot_full` writes a
-    /// full-document PNG, and `pdf` writes a paginated PDF directly to stdout;
-    /// all three require layout. Dump output is quiet by default; pass
+    /// full-document PNG, and `pdf` writes a paginated PDF with CSS backgrounds
+    /// directly to stdout; all three require layout. Dump output is quiet by default; pass
     /// `--log-level` to opt into diagnostic logs.
     #[arg(short, long, value_enum)]
     pub dump: Option<DumpFormat>,
 
-    /// Evaluate one JavaScript expression after page readiness and write its
-    /// value to stdout. Promises are awaited. Strings are written as text;
-    /// other serializable values are written as compact JSON.
-    #[arg(
-        long,
-        value_name = "EXPRESSION",
-        conflicts_with_all = [
-            "eval_file",
-            "dump",
-            "with_base",
-            "with_frames",
-            "strip_mode"
-        ]
-    )]
+    /// Exit with code 22 if the final main-document HTTP status is >= 400,
+    /// suppressing response output and reporting the status to stderr.
+    #[arg(long, conflicts_with = "fail_with_body")]
+    pub fail: bool,
+
+    /// Exit with code 22 if the final main-document HTTP status is >= 400,
+    /// preserving the selected output format and reporting the status to stderr.
+    /// Readiness or output errors retain exit code 1 and include the known HTTP status.
+    #[arg(long, conflicts_with = "fail")]
+    pub fail_with_body: bool,
+
+    /// Evaluate one expression after page readiness. Promises are awaited.
+    /// With --dump, discard its value and dump the resulting page state.
+    /// Otherwise write strings as text and other serializable values as JSON.
+    #[arg(long, value_name = "EXPRESSION", conflicts_with = "eval_file")]
     pub eval: Option<String>,
 
     /// Read the JavaScript expression from a UTF-8 file, or from stdin when PATH
     /// is `-`. This avoids command-line argument length limits for large or
-    /// multiline scripts. Promises are awaited.
-    #[arg(
-        long,
-        value_name = "PATH",
-        conflicts_with_all = ["eval", "dump", "with_base", "with_frames", "strip_mode"]
-    )]
+    /// multiline scripts. Promises are awaited. With --dump, export the
+    /// resulting page state instead of the expression value.
+    #[arg(long, value_name = "PATH", conflicts_with = "eval")]
     pub eval_file: Option<PathBuf>,
 
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_request_header_arg)]
@@ -274,7 +272,12 @@ pub struct FetchArgs {
     /// replacement navigations, the selected lifecycle stage, response match,
     /// selector, and script waits share one absolute deadline. Network-idle and
     /// DOM-stable return the current page with a warning when it expires.
-    #[arg(short, long, alias = "wait-ms", default_value_t = 25_000)]
+    #[arg(
+        short,
+        long,
+        aliases = ["wait-ms", "timeout-ms"],
+        default_value_t = 25_000
+    )]
     pub timeout: u64,
 
     #[command(flatten)]
@@ -581,6 +584,7 @@ pub struct CommonArgs {
     pub disable_subframes: bool,
 
     /// Enable the real on-demand layout renderer and screenshot surfaces.
+    /// Native scrollbars are hidden unless --scrollbars or MOLI_SCROLLBARS is enabled.
     /// With `fetch --eval` or `--eval-file`, refresh layout once before running
     /// the script so geometry APIs can read it. Script mutations do not refresh it.
     ///
@@ -593,6 +597,15 @@ pub struct CommonArgs {
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     pub layout: bool,
+
+    /// Show native scrollbars. Requires --layout.
+    #[arg(
+        long,
+        env = "MOLI_SCROLLBARS",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        requires_if("true", "layout")
+    )]
+    pub scrollbars: bool,
 
     #[arg(short, long = "cookie-file")]
     pub cookie_file: Vec<String>,

@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use moli_encoding::HtmlDocumentStreamingDecoder;
+use moli_encoding::DocumentStreamingDecoder;
 use std::time::Instant;
 
 use super::streaming::{
@@ -21,7 +21,7 @@ use super::{
 pub(in crate::runtime) struct PendingStreamingPhaseOneContinuation {
     runtime: Box<ConcurrentParseTimeRuntime>,
     input: StreamingDocumentInputSource,
-    decoder: HtmlDocumentStreamingDecoder,
+    decoder: DocumentStreamingDecoder,
     service_worker_preload_context: Option<ServiceWorkerScriptPreloadContext>,
     started: Instant,
     deferred_main_resource_failure: Option<anyhow::Error>,
@@ -35,7 +35,7 @@ impl PendingStreamingPhaseOneContinuation {
     pub(super) fn bridge(
         runtime: ConcurrentParseTimeRuntime,
         raw_body: RawDocumentBodySource,
-        decoder: HtmlDocumentStreamingDecoder,
+        decoder: DocumentStreamingDecoder,
         service_worker_preload_context: Option<ServiceWorkerScriptPreloadContext>,
         started: Instant,
     ) -> Result<Self> {
@@ -72,6 +72,14 @@ impl PendingStreamingPhaseOneContinuation {
 
     pub(in crate::runtime) fn has_ready_input(&mut self) -> bool {
         self.input.has_ready_input()
+    }
+
+    pub(super) fn retire_for_committed_navigation(self) -> PageVm {
+        let Self { runtime, input, .. } = self;
+        // Dropping the input receiver cancels the old body bridge without
+        // waiting for its response to finish.
+        drop(input);
+        (*runtime).into_navigation_triggered_page_vm()
     }
 
     pub(in crate::runtime) async fn resume(self) -> Result<PendingPhaseOneResumeOutcome> {

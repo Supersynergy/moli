@@ -26,9 +26,7 @@ use style_traits::{ParsingMode, ToCss};
 
 use crate::dom::native::Element;
 
-use super::{
-    presentational_hints::synthesize_hidden_until_found_presentational_hint, query::QueryElement,
-};
+use super::{presentational_hints::synthesize_hidden_presentational_hint, query::QueryElement};
 
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
@@ -163,6 +161,7 @@ impl QueryElement<'_> {
                 );
             }
         } else if element.namespace() == HTML_NAMESPACE {
+            append_html_direction_declaration(element, &mut block);
             if element.local_name() == "object" {
                 append_html_object_dimension_declarations(element, &mut block);
             }
@@ -176,11 +175,33 @@ impl QueryElement<'_> {
                 LayerOrder::root(),
             ));
         }
-        synthesize_hidden_until_found_presentational_hint(
+        synthesize_hidden_presentational_hint(
             self.host(),
             self.handle(),
             self.shared_lock(),
             hints,
+        );
+    }
+}
+
+fn append_html_direction_declaration(element: &Element, block: &mut PropertyDeclarationBlock) {
+    use style::properties::generated::longhands::direction::computed_value::T as Direction;
+
+    // The HTML direction hint participates below author CSS. The UA's bidi
+    // isolation rule is separate, and layout consumes both computed values.
+    let direction = element.attribute("dir").and_then(|value| {
+        if value.eq_ignore_ascii_case("ltr") {
+            Some(Direction::Ltr)
+        } else if value.eq_ignore_ascii_case("rtl") {
+            Some(Direction::Rtl)
+        } else {
+            None
+        }
+    });
+    if let Some(direction) = direction {
+        block.push(
+            PropertyDeclaration::Direction(direction),
+            Importance::Normal,
         );
     }
 }

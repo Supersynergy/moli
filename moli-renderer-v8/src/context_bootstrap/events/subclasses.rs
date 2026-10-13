@@ -1,4 +1,4 @@
-use super::base::{define_event_property, event_type_argument, initialize_event_object};
+use super::base::{define_event_property, event_type_argument, initialize_event_object_with_type};
 use super::init::{
     init_bool_property, init_number_property, init_string_property, init_value_property,
     init_window_view_property, read_event_init,
@@ -9,8 +9,10 @@ use super::*;
 mod basic;
 mod constructor;
 mod data;
+mod error;
 mod keyboard;
 mod pointer;
+mod security_policy;
 
 pub(in crate::context_bootstrap::events) use basic::initialize_text_event;
 pub(in crate::context_bootstrap) use constructor::build_event_subclass_template;
@@ -22,3 +24,5 @@ pub(in crate::context_bootstrap) use pointer::{
 };
 
 pub(in crate::context_bootstrap::events) use data::initialize_navigate_event_methods;
+
+pub(crate) use error::construct_original_error_event;

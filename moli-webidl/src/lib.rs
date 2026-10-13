@@ -29,10 +29,41 @@
 //! generates named property parsing for dictionary objects. Both derives use
 //! the converter wrappers in `types` and only produce Rust values; object shape
 //! declaration and Web API wrapper allocation remain outside this crate.
+//! Dictionary members are converted in lexicographical order of their final
+//! JavaScript names. `#[webidl(inherit)]` on one dictionary field converts the
+//! ancestor's members from the same object first; it does not read a nested
+//! property. Positional arguments retain their declaration/index order.
+//!
+//! Interface fields use `#[webidl(interface = interfaces::EventTarget)]` with
+//! `v8::Local<'s, v8::Object>`, optionally wrapped in `Option` or a variadic
+//! argument's `Vec`. The interface supplies `NAME` and `is_instance`; a
+//! `brand_check = path` attribute overrides the native identity predicate.
+//! `Option` skips missing/undefined values, while `nullable` additionally accepts
+//! null. Identity is checked at the field's position in conversion order, and
+//! the original object is retained. Interface conversion cannot be combined
+//! with `converter`, `with`, or string conversion options.
+//!
+//! Dictionary fields use `#[webidl(dictionary)]` with a type implementing
+//! `WebIdlDictionary`. Non-optional fields without an explicit default parse
+//! missing/undefined/null as an empty dictionary, executing member defaults and
+//! required-member checks. `Option<T>` skips missing/undefined but parses null
+//! as `Some(empty_dictionary)`; `nullable` instead maps null to `None`.
+//! Explicit `default = expr` replaces missing/undefined values only, following
+//! the same evaluation order as other field defaults. Null still parses an
+//! empty dictionary. Empty dictionaries have no inherited JavaScript properties.
+//!
+//! Iterable fields use `#[webidl(sequence)]` with `Vec<T>` or `Option<Vec<T>>`.
+//! Item conversion is inferred from `T`, or selected by `converter = "..."`.
+//! `sequence, interface = Type` validates every item using the same interface
+//! metadata and optional `brand_check` as scalar interface fields. Conversion
+//! reuses the runtime iterator and converts each item before reading the next.
+//! `sequence` converts one iterable argument; `variadic` converts argument tails.
 
 extern crate self as moli_webidl;
 
+mod buffer_source;
 mod convert;
+pub use buffer_source::AllowSharedBufferSource;
 mod error;
 mod helpers;
 mod traits;
@@ -62,11 +93,13 @@ pub use moli_webidl_callback::{
 pub use moli_webidl_derive::{WebIdlArgs, WebIdlDictionary, WebIdlEnum};
 pub use traits::{ParseOutcome, WebIdlArguments, WebIdlConverter, WebIdlDictionary, WebIdlEnum};
 pub use types::{
-    Boolean, BufferSource, ByteString, ClampedUnsignedShort, DomString, DomString16, Double,
-    EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
-    EventListenerOptions, Long, Record, Sequence, StringOptions, UnrestrictedDouble, UnsignedLong,
+    Boolean, BufferSource, ByteString, ClampedUnsignedShort, Dictionary, DomString, DomString16,
+    Double, EnforceRangeLong, EnforceRangeUnsignedLong, EnforceRangeUnsignedLongLong, EnumValue,
+    EventListenerOptions, InterfaceObject, InterfaceOptions, Long, LongLong, Octet, Record,
+    Sequence, Short, StringOptions, UnrestrictedDouble, UnrestrictedFloat, UnsignedLong,
     UnsignedLongLong, UnsignedShort, UsvString,
 };
 
 /// Restricted WebIDL float represented as a finite binary32 value.
 pub use types::Float;
+pub use types::{EnforceRangeLongLong, EnforceRangeUnsignedShort};

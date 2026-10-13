@@ -1725,7 +1725,7 @@ const rect = item.getBoundingClientRect();
     assert_eq!(result, "function|function|0|true");
 }
 #[test]
-fn geometry_rect_objects_expose_domrect_to_json() {
+fn geometry_rect_objects_and_lists_expose_their_webidl_shapes() {
     let mut vm = new_rendered_test_vm(
         "https://geometry-domrect-shape.test/",
         "<!doctype html><body><div id='node'>text</div></body>",
@@ -1756,14 +1756,18 @@ fn geometry_rect_objects_expose_domrect_to_json() {
     [
       'x', 'y', 'width', 'height', 'top', 'right', 'bottom', 'left'
     ].every(name => json[name] === rect[name]),
+    rects instanceof DOMRectList,
     Array.isArray(rects),
+    Object.prototype.toString.call(rects),
     rects.length,
     rects[0] instanceof DOMRect,
+    rects.item(0) === rects[0],
     typeof rects[0].toJSON,
     rangeRect instanceof DOMRect,
     typeof rangeRect.toJSON,
+    rangeRects instanceof DOMRectList,
     rangeRects[0] instanceof DOMRect,
-    contentRect instanceof DOMRect,
+    Object.getPrototypeOf(contentRect) === DOMRectReadOnly.prototype,
     typeof contentRect.toJSON,
     Object.hasOwn(DOMRectReadOnly.prototype, 'toJSON'),
     Object.hasOwn(DOMRect.prototype, 'toJSON')
@@ -1775,7 +1779,205 @@ fn geometry_rect_objects_expose_domrect_to_json() {
 
     assert_eq!(
         result,
-        "true|true||function|x,y,width,height,top,right,bottom,left|true|true|1|true|function|true|function|true|true|function|true|false"
+        concat!(
+            "true|true||function|x,y,width,height,top,right,bottom,left|true|",
+            "true|false|[object DOMRectList]|1|true|true|function|true|function|",
+            "true|true|true|function|true|false"
+        )
+    );
+}
+
+#[test]
+fn dom_rect_list_has_readonly_indexed_semantics_and_rejects_structured_clone() {
+    let mut vm = new_parsed_test_vm(
+        "https://domrect-list.test/",
+        "<!doctype html><body><div id='node'>text</div></body>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      callback();
+      return "ok";
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const node = document.getElementById("node");
+  const list = node.getClientRects();
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const rangeList = range.getClientRects();
+  const indexDescriptor = Object.getOwnPropertyDescriptor(list, "0");
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(
+    DOMRectList.prototype,
+    "length"
+  );
+  const itemDescriptor = Object.getOwnPropertyDescriptor(
+    DOMRectList.prototype,
+    "item"
+  );
+  const fake = Object.create(DOMRectList.prototype);
+  return JSON.stringify({
+    constructor: [typeof DOMRectList, DOMRectList.length,
+      probe(() => DOMRectList()), probe(() => new DOMRectList())].join("|"),
+    instance: [list instanceof DOMRectList, list instanceof Array,
+      Object.getPrototypeOf(list) === DOMRectList.prototype,
+      Object.prototype.toString.call(list), list.constructor === DOMRectList].join("|"),
+    values: [list.length, list[-1], list[1], list.item(-1), list.item(1),
+      list.item(0) === list[0], list[0] instanceof DOMRect,
+      Object.keys(list).join(",")].join("|"),
+    indexDescriptor: [indexDescriptor.value === list[0], indexDescriptor.writable,
+      indexDescriptor.enumerable, indexDescriptor.configurable].join("|"),
+    prototypeDescriptors: [typeof lengthDescriptor.get, lengthDescriptor.get.name,
+      lengthDescriptor.get.length, lengthDescriptor.set === undefined,
+      lengthDescriptor.enumerable, lengthDescriptor.configurable,
+      itemDescriptor.value.name, itemDescriptor.value.length,
+      itemDescriptor.enumerable, itemDescriptor.writable,
+      itemDescriptor.configurable].join("|"),
+    brands: [probe(() => lengthDescriptor.get.call(fake)),
+      probe(() => itemDescriptor.value.call(fake, 0))].join("|"),
+    range: [rangeList instanceof DOMRectList,
+      Object.prototype.toString.call(rangeList), rangeList.item(0) === rangeList[0]].join("|"),
+    clone: probe(() => structuredClone(list)),
+    visibleSlots: Object.getOwnPropertyNames(list)
+      .filter(name => name.startsWith("__moliDomRectList")).join(",")
+  });
+})()
+"#,
+        )
+        .expect("DOMRectList WebIDL probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"constructor":"function|0|TypeError|TypeError","instance":"true|false|true|[object DOMRectList]|true","values":"1|||||true|true|0","indexDescriptor":"true|false|true|true","prototypeDescriptors":"function|get length|0|true|true|true|item|1|true|true|true","brands":"TypeError|TypeError","range":"true|[object DOMRectList]|true","clone":"DataCloneError","visibleSlots":""}"#
+    );
+}
+
+#[test]
+fn dom_rect_list_item_checks_bounds_before_reading_inherited_array_properties() {
+    let mut vm = new_rendered_test_vm(
+        "https://domrect-list-item-bounds.test/",
+        "<!doctype html><body><div id='node'>text</div><div id='hidden' style='display:none'>hidden</div></body>",
+    );
+
+    // Calibrated against /usr/bin/chromium 145.0.7632.116.
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const node = document.getElementById('node');
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const emptyRange = document.createRange();
+  const lists = [node.getClientRects(), range.getClientRects(),
+    document.getElementById('hidden').getClientRects(), emptyRange.getClientRects()];
+  const probe = list => [list.length > 0,
+    list.item(0) === (list.length === 0 ? null : list[0]),
+    list.item(list.length) === null,
+    list.item(20) === null,
+    list.item(-1) === null];
+  const baseline = lists.map(probe);
+  const indices = [0, 1, 20, 4294967295];
+  const saved = indices.map(index => Object.getOwnPropertyDescriptor(Array.prototype, index));
+  let inheritedValues;
+  try {
+    for (const index of indices) {
+      Object.defineProperty(Array.prototype, index, {
+        value: 'inherited rectangle', writable: true, configurable: true
+      });
+    }
+    inheritedValues = lists.map(probe);
+  } finally {
+    indices.forEach((index, i) => {
+      if (saved[i]) Object.defineProperty(Array.prototype, index, saved[i]);
+      else delete Array.prototype[index];
+    });
+  }
+  let getterReads = 0;
+  let inheritedGetter;
+  try {
+    Object.defineProperty(Array.prototype, '20', {configurable: true,
+      get() { getterReads++; return 'inherited getter rectangle'; }});
+    inheritedGetter = lists.map(list => list.item(20) === null);
+  } finally {
+    if (saved[2]) Object.defineProperty(Array.prototype, '20', saved[2]);
+    else delete Array.prototype[20];
+  }
+  let conversions = 0;
+  const convertedIndices = lists.map(list =>
+    list.item({valueOf() { conversions++; return 20; }}) === null);
+  return JSON.stringify({baseline, inheritedValues, inheritedGetter, getterReads,
+    convertedIndices, conversions});
+})()
+"#,
+        )
+        .expect("DOMRectList.item should check bounds before reading the backing array");
+
+    let result: serde_json::Value =
+        serde_json::from_str(&result).expect("DOMRectList.item bounds probe should return JSON");
+    let expected_rows = serde_json::json!([
+        [true, true, true, true, true],
+        [true, true, true, true, true],
+        [false, true, true, true, true],
+        [false, true, true, true, true],
+    ]);
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "baseline": expected_rows,
+            "inheritedValues": expected_rows,
+            "inheritedGetter": [true, true, true, true],
+            "getterReads": 0,
+            "convertedIndices": [true, true, true, true],
+            "conversions": 4,
+        })
+    );
+}
+
+#[test]
+fn dom_rect_lists_support_iteration_for_element_and_range_geometry() {
+    let mut vm = new_rendered_test_vm(
+        "https://domrect-list-iteration.test/",
+        "<!doctype html><body><div id='node'>text</div><div id='hidden' style='display:none'>hidden</div></body>",
+    );
+
+    // Calibrated against /usr/bin/chromium 145.0.7632.116.
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const node = document.getElementById('node');
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const emptyRange = document.createRange();
+  const lists = [node.getClientRects(), range.getClientRects(),
+    document.getElementById('hidden').getClientRects(), emptyRange.getClientRects()];
+  const descriptor = Object.getOwnPropertyDescriptor(DOMRectList.prototype, Symbol.iterator);
+  return JSON.stringify({
+    prototype: [typeof descriptor.value, descriptor.value === Array.prototype.values,
+      descriptor.writable, descriptor.enumerable, descriptor.configurable],
+    iteration: lists.map(list => {
+      const spread = [...list];
+      const iterated = [];
+      for (const rect of list) iterated.push(rect);
+      return [list.length > 0,
+        spread.length === list.length && spread.every((rect, index) => rect === list[index]),
+        iterated.length === list.length && iterated.every((rect, index) => rect === list[index])];
+    }),
+    generic: [...descriptor.value.call({0: 'first', 1: 'second', length: 2})],
+  });
+})()
+"#,
+        )
+        .expect("Element and Range DOMRectLists should be iterable");
+
+    assert_eq!(
+        result,
+        r#"{"prototype":["function",true,true,false,true],"iteration":[[true,true,true],[true,true,true],[false,true,true],[false,true,true]],"generic":["first","second"]}"#
     );
 }
 

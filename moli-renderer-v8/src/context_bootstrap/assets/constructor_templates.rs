@@ -62,8 +62,8 @@ use super::super::{
         offline_audio_context_constructor_callback,
     },
     webrtc::{
-        rtc_data_channel_event_constructor_callback, rtc_ice_candidate_constructor_callback,
-        rtc_peer_connection_constructor_callback,
+        rtc_data_channel_event_constructor_callback, rtc_error_event_constructor_callback,
+        rtc_ice_candidate_constructor_callback, rtc_peer_connection_constructor_callback,
         rtc_peer_connection_ice_event_constructor_callback,
         rtc_session_description_constructor_callback,
     },
@@ -94,6 +94,11 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 .length(0)
                 .build(scope)
         }
+        ConstructorKind::Shell { length } => {
+            v8::FunctionTemplate::builder(shell_constructor_callback)
+                .length(i32::from(length))
+                .build(scope)
+        }
         ConstructorKind::Event => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::Event,
@@ -109,8 +114,18 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             build_value_event_template(scope, ValueEventKind::Transition)
         }
         ConstructorKind::BlobEvent => build_value_event_template(scope, ValueEventKind::Blob),
+        ConstructorKind::GamepadEvent => build_value_event_template(scope, ValueEventKind::Gamepad),
+        ConstructorKind::PictureInPictureEvent => {
+            build_value_event_template(scope, ValueEventKind::PictureInPicture)
+        }
         ConstructorKind::WebGLContextEvent => {
             build_value_event_template(scope, ValueEventKind::WebGlContext)
+        }
+        ConstructorKind::ToolActivatedEvent => {
+            build_value_event_template(scope, ValueEventKind::ToolActivated)
+        }
+        ConstructorKind::ToolCancelEvent => {
+            build_value_event_template(scope, ValueEventKind::ToolCancel)
         }
         ConstructorKind::UiEvent => {
             build_event_subclass_template(scope, EventSubclassKind::UiEvent)
@@ -215,6 +230,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::MediaQueryListEvent => {
             super::super::media_queries::build_media_query_list_event_template(scope)
         }
+        ConstructorKind::HashChangeEvent => {
+            build_event_subclass_template(scope, EventSubclassKind::HashChangeEvent)
+        }
         ConstructorKind::PageTransitionEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PageTransitionEvent)
         }
@@ -227,6 +245,22 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 dom_exception_constructor_callback
             ))
             .length(0)
+            .build(scope)
+        }
+        ConstructorKind::RtcError => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCError,
+                rtc_error_constructor_callback
+            ))
+            .length(1)
+            .build(scope)
+        }
+        ConstructorKind::RtcErrorEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCErrorEvent,
+                rtc_error_event_constructor_callback
+            ))
+            .length(2)
             .build(scope)
         }
         ConstructorKind::DomError => {
@@ -621,6 +655,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 .length(1)
                 .build(scope)
         }
+        ConstructorKind::RtcPeerConnectionIceErrorEvent => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::RTCPeerConnectionIceErrorEvent,
+                super::super::webrtc::rtc_peer_connection_ice_error_event_constructor
+            ))
+            .length(2)
+            .build(scope)
+        }
         ConstructorKind::RtcDataChannelEvent => {
             v8::FunctionTemplate::builder(rtc_data_channel_event_constructor_callback)
                 .length(2)
@@ -634,6 +676,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         | ConstructorKind::Screen => v8::FunctionTemplate::builder(illegal_constructor_callback)
             .length(0)
             .build(scope),
+        ConstructorKind::SpeechSynthesisEvent => super::super::events::speech::build_template(
+            scope,
+            super::super::events::speech::SpeechEventKind::Synthesis,
+        ),
+        ConstructorKind::SpeechSynthesisErrorEvent => super::super::events::speech::build_template(
+            scope,
+            super::super::events::speech::SpeechEventKind::Error,
+        ),
         ConstructorKind::SpeechSynthesisUtterance => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::SpeechSynthesisUtterance,
@@ -723,6 +773,8 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope)
         }
         ConstructorKind::PerformanceEntry
+        | ConstructorKind::ResizeObserverEntry
+        | ConstructorKind::ResizeObserverSize
         | ConstructorKind::PerformanceNavigationTiming
         | ConstructorKind::PerformanceMeasure
         | ConstructorKind::PerformanceResourceTiming

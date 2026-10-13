@@ -2415,6 +2415,10 @@ mod tests {
             response_stage_request_id: request_id.to_owned(),
             document_navigation_token: None,
             navigation: NavigationDispatchState {
+                web_mcp_invocation: None,
+                navigation_initiator: None,
+                initial_document_environment: None,
+                auxiliary_document_response: None,
                 redirect_chain: Vec::new(),
                 redirect_headers: None,
                 navigate_id: Some(1),
