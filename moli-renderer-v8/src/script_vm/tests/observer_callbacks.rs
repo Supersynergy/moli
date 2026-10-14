@@ -255,6 +255,136 @@ JSON.stringify({
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_modes() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let mut vm = observer_callback_test_vm("https://intersection-entry-realm.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            r#"
+            globalThis.rows = [];
+            globalThis.child = __observerCallbackFrame.contentWindow;
+            const target = document.body.appendChild(document.createElement('div'));
+            target.id = 'intersection-target';
+            target.style.cssText = 'width:100px;height:20px;padding:0;border:0';
+        "#,
+        )
+        .unwrap();
+        let before_ready = vm.layout_pass_observability_for_test().1;
+        if policy == moli_page_types::LayoutPolicy::OnDemand {
+            // Legacy observers sample an already-published tree. Establish the
+            // initial sample after fixture setup, before observer registration.
+            assert_eq!(
+                vm.eval(
+                    "document.getElementById('intersection-target').getBoundingClientRect().width"
+                )
+                .unwrap(),
+                "100"
+            );
+        }
+        let builds = vm.layout_pass_observability_for_test().1;
+        assert_eq!(
+            builds,
+            before_ready + u64::from(policy == moli_page_types::LayoutPolicy::OnDemand),
+            "readiness publishes one initial real layout and none for Mock: {policy:?}"
+        );
+        vm.eval(
+            r#"
+            globalThis.rootIO = new IntersectionObserver(child.Function('entries', 'observer', `
+                const entry = entries[0];
+                parent.rows.push({
+                    callbackRealm: window === parent.child,
+                    observerRealm: Object.getPrototypeOf(observer) === parent.IntersectionObserver.prototype,
+                    receiver: this === observer && observer === parent.rootIO,
+                    arrayRealm: Object.getPrototypeOf(entries) === Array.prototype,
+                    entryRealm: Object.getPrototypeOf(entry) === IntersectionObserverEntry.prototype,
+                    rectRealm: [entry.boundingClientRect, entry.intersectionRect, entry.rootBounds].every(
+                        rect => rect !== null && DOMRectReadOnly.prototype.isPrototypeOf(rect)),
+                    target: entry.target === parent.document.getElementById('intersection-target'),
+                    count: entries.length,
+                    argc: arguments.length
+                });
+                parent.entryWidth = entry.boundingClientRect.width;
+            `));
+            rootIO.observe(target);
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify(rows)").unwrap(),
+            r#"[{"callbackRealm":true,"observerRealm":true,"receiver":true,"arrayRealm":true,"entryRealm":true,"rectRealm":true,"target":true,"count":1,"argc":2}]"#,
+            "{policy:?}"
+        );
+        if policy == moli_page_types::LayoutPolicy::OnDemand {
+            assert_eq!(vm.eval("entryWidth").unwrap(), "100");
+        }
+        assert_eq!(
+            vm.layout_pass_observability_for_test().1,
+            builds,
+            "observer registration, delivery and record reads must reuse the initial sample: {policy:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn intersection_entries_project_targets_into_the_isolated_callback_world() {
+    for policy in [
+        moli_page_types::LayoutPolicy::Mock,
+        moli_page_types::LayoutPolicy::OnDemand,
+    ] {
+        let mut vm = new_storage_test_vm("https://intersection-isolated-world.test/");
+        vm.set_layout_policy(policy);
+        vm.eval(
+            r#"
+            const root = document.documentElement || document.appendChild(document.createElement('html'));
+            const body = document.body || root.appendChild(document.createElement('body'));
+            const target = body.appendChild(document.createElement('div'));
+            target.id = 'intersection-target';
+            target.style.cssText = 'width:100px;height:20px;padding:0;border:0';
+        "#,
+        )
+        .unwrap();
+        let isolated = vm
+            .create_isolated_world("intersection-entry-realm", false)
+            .unwrap();
+        vm.eval_in_isolated_context(
+            isolated,
+            r#"
+            globalThis.rows = [];
+            globalThis.observer = new IntersectionObserver(function(entries, observer) {
+                const entry = entries[0];
+                rows.push([
+                    this === observer && observer === globalThis.observer,
+                    Object.getPrototypeOf(entries) === Array.prototype,
+                    Object.getPrototypeOf(entry) === IntersectionObserverEntry.prototype,
+                    [entry.boundingClientRect, entry.intersectionRect, entry.rootBounds].every(
+                        rect => rect !== null && DOMRectReadOnly.prototype.isPrototypeOf(rect)),
+                    entry.target === document.getElementById('intersection-target'),
+                    HTMLDivElement.prototype.isPrototypeOf(entry.target),
+                    entries.length === 1 && arguments.length === 2
+                ]);
+            });
+            observer.observe(document.getElementById('intersection-target'));
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval_in_isolated_context(isolated, "JSON.stringify(rows)")
+                .unwrap(),
+            "[[true,true,true,true,true,true,true]]",
+            "{policy:?}"
+        );
+        vm.destroy_isolated_world_context(isolated);
+        assert_eq!(
+            vm.eval("'default-realm-still-live'").unwrap(),
+            "default-realm-still-live"
+        );
+    }
+}
+
 #[test]
 fn observer_callback_exceptions_are_reported_to_the_callback_relevant_window() {
     let mut vm = observer_callback_test_vm("https://observer-callback-exception-realm.test/");
