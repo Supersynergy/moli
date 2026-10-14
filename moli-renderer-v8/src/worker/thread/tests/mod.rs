@@ -1545,3 +1545,5 @@ mod canvas_fill_rect;
 mod xhr_failure;
 
 mod payment_events;
+
+mod performance_handler_order;
