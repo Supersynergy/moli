@@ -1,0 +1,243 @@
+diff --git a/moli-protocol/src/domains/input.rs b/moli-protocol/src/domains/input.rs
+index 4375fd9ad..cdcc6ddd0 100644
+--- a/moli-protocol/src/domains/input.rs
++++ b/moli-protocol/src/domains/input.rs
+@@ -129,6 +129,7 @@ enum PendingInputCommandKind {
+     DispatchDragEvent,
+     SynthesizeTapGesture,
+     InsertText,
++    CancelDragging,
+ }
+ 
+ enum PendingInputOperation {
+@@ -295,9 +296,7 @@ pub(crate) fn try_start_input_command_dispatch(
+         ));
+     };
+     match action {
+-        InputAction::CancelDragging => {
+-            InputCommandDispatchStep::Complete(drag::cancel_dragging_command_output_plan(conn, cmd))
+-        }
++        InputAction::CancelDragging => drag::start_cancel_dragging(conn, cmd),
+         InputAction::SetInterceptDrags => InputCommandDispatchStep::Complete(
+             drag::set_intercept_drags_command_output_plan(conn, cmd),
+         ),
+@@ -1456,6 +1455,7 @@ async fn complete_pending_input_command(
+                 PendingInputCommandKind::DispatchDragEvent => "drag event page command",
+                 PendingInputCommandKind::DispatchKeyEvent
+                 | PendingInputCommandKind::InsertText
++                | PendingInputCommandKind::CancelDragging
+                 | PendingInputCommandKind::PrepareElementClick
+                 | PendingInputCommandKind::DispatchElementClick => {
+                     unreachable!()
+@@ -1535,6 +1535,27 @@ async fn complete_pending_input_command(
+                 )),
+             }
+         }
++        PendingInputCommandKind::CancelDragging => {
++            match completed_page_command_result(completed_operation) {
++                Err(error) => Err(error),
++                Ok(result) => {
++                    let completion =
++                        settle_completed_input_page_command(conn, &owner, result, command_context);
++                    let (reply, _, continuation) = completion.into_parts();
++                    if continuation.is_none() && matches!(reply, moli_core::RendererPageReply::Unit) {
++                        conn.mutate_target_page_state_for_session(session_id, |state| {
++                            state.input_drag_intercepted = false;
++                        });
++                        Ok(AutomationResult::Empty)
++                    } else {
++                        Err(DevToolsError::new(
++                            DevToolsErrorKind::Internal,
++                            "unexpected drag cancellation completion",
++                        ))
++                    }
++                }
++            }
++        }
+         PendingInputCommandKind::InsertText => {
+             let result = match completed_page_command_result(completed_operation) {
+                 Ok(result) => result,
+diff --git a/moli-protocol/src/domains/input/drag.rs b/moli-protocol/src/domains/input/drag.rs
+index 387b984aa..79533d678 100644
+--- a/moli-protocol/src/domains/input/drag.rs
++++ b/moli-protocol/src/domains/input/drag.rs
+@@ -71,14 +71,37 @@ pub(super) fn drag_intercepted_event(
+     ))
+ }
+ 
+-pub(super) fn cancel_dragging_command_output_plan(
++pub(super) fn start_cancel_dragging(
+     conn: &mut CdpConnection,
+     cmd: &Cmd<'_>,
+-) -> CommandOutputPlan {
+-    if !conn.mutate_target_page_state_for_session(cmd.session_id, |state| {
+-        state.input_drag_intercepted = false;
+-    }) {
+-        return CommandOutputPlan::error(-32000, "NoBrowserContext");
++) -> InputCommandDispatchStep {
++    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
++    if conn
++        .target_page_residence_identity_for_owner(&owner)
++        .is_none()
++    {
++        return InputCommandDispatchStep::Complete(
++            if conn.mutate_target_page_state_for_session(cmd.session_id, |state| {
++                state.input_drag_intercepted = false;
++            }) {
++                CommandOutputPlan::success()
++            } else {
++                CommandOutputPlan::error(-32000, "NoBrowserContext")
++            },
++        );
++    }
++    match start_page_input_command(
++        conn,
++        cmd.id,
++        &owner,
++        PendingInputCommandKind::CancelDragging,
++        |page| page.start_clear_active_drag_data_transfer(),
++    ) {
++        Ok(Some(pending)) => InputCommandDispatchStep::Pending(pending),
++        Ok(None) => InputCommandDispatchStep::Complete(CommandOutputPlan::success()),
++        Err(error) => InputCommandDispatchStep::Complete(CommandOutputPlan::error(
++            error.code,
++            error.message,
++        )),
+     }
+-    CommandOutputPlan::success()
+ }
+diff --git a/moli-protocol/src/domains/input/tests.rs b/moli-protocol/src/domains/input/tests.rs
+index ceee8edda..48e92782f 100644
+--- a/moli-protocol/src/domains/input/tests.rs
++++ b/moli-protocol/src/domains/input/tests.rs
+@@ -950,6 +950,37 @@ async fn mouse_drag_without_interception_emits_no_drag_intercepted_event() {
+     );
+ }
+ 
++#[tokio::test(flavor = "multi_thread")]
++async fn cancel_dragging_retires_renderer_session_and_emits_dragend_once() {
++    let mut ctx = TestContext::new();
++    with_loaded_document(&mut ctx, DRAG_PAGE).await;
++    ctx.capture_fixture_layout(None).await;
++    ctx.process_async(json!({
++        "id": 1,
++        "method": "Input.setInterceptDrags",
++        "params": { "enabled": true }
++    }))
++    .await;
++    ctx.expect_result(1, json!({}), None);
++    dispatch_drag_mouse(&mut ctx, 2, "mousePressed", 20, 1).await;
++    dispatch_drag_mouse(&mut ctx, 3, "mouseMoved", 120, 1).await;
++    assert_eq!(
++        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
++        "dragstart"
++    );
++
++    for id in [4, 5] {
++        ctx.process_async(json!({ "id": id, "method": "Input.cancelDragging" }))
++            .await;
++        ctx.expect_result(id, json!({}), None);
++    }
++    dispatch_drag_mouse(&mut ctx, 6, "mouseReleased", 120, 0).await;
++    assert_eq!(
++        evaluate_string(&mut ctx, "window.__drag.join('|')").await,
++        "dragstart|dragend"
++    );
++}
++
+ #[tokio::test(flavor = "multi_thread")]
+ async fn cancel_dragging_clears_reachable_drag_state_and_succeeds_when_idle() {
+     let mut ctx = TestContext::new();
+diff --git a/moli-renderer-v8/src/script_vm/input_dispatch.rs b/moli-renderer-v8/src/script_vm/input_dispatch.rs
+index d76acae57..6f9a77433 100644
+--- a/moli-renderer-v8/src/script_vm/input_dispatch.rs
++++ b/moli-renderer-v8/src/script_vm/input_dispatch.rs
+@@ -1745,6 +1745,11 @@ impl ScriptVm {
+             moli_layout::LayoutPoint::new(x as f32, y as f32),
+         )?
+         .map(|hit| hit.handle) else {
++            // A client may cancel or release outside the viewport. The source
++            // must still receive dragend and the retained session must retire.
++            if matches!(event_name, "drop" | "dragleave") {
++                self.clear_active_drag_data_transfer()?;
++            }
+             return Ok(input_dispatch_outcome(false));
+         };
+ 
+@@ -1839,8 +1844,13 @@ impl ScriptVm {
+     }
+ 
+     pub(crate) fn clear_active_drag_data_transfer(&mut self) -> Result<()> {
+-        self.active_drag_session.take();
+-        Ok(())
++        let session = self.active_drag_session.take();
++        self.with_default_context_scope(move |scope, runtime_ptr| {
++            if let Some(session) = session {
++                dispatch_drag_end(scope, runtime_ptr, &session, 0.0, 0.0, 0);
++            }
++            Ok(())
++        })
+     }
+ 
+     pub(crate) fn set_file_input_files(
+diff --git a/moli-renderer-v8/src/script_vm/tests/dom_xhr/dom/pointer_and_mouse.rs b/moli-renderer-v8/src/script_vm/tests/dom_xhr/dom/pointer_and_mouse.rs
+index 72091a1a6..173631a80 100644
+--- a/moli-renderer-v8/src/script_vm/tests/dom_xhr/dom/pointer_and_mouse.rs
++++ b/moli-renderer-v8/src/script_vm/tests/dom_xhr/dom/pointer_and_mouse.rs
+@@ -1218,6 +1218,22 @@ fn intercepted_drag_cancel_dispatches_dragleave_and_dragend() {
+     );
+ }
+ 
++#[test]
++fn intercepted_drag_cancel_outside_viewport_still_ends_on_source() {
++    let mut vm = new_rendered_test_vm("https://drag-intercept-outside.test/", DRAG_INTERCEPT_PAGE);
++    vm.eval(DRAG_INTERCEPT_LISTENERS)
++        .expect("drag listener setup should evaluate");
++    let data = drag_data_from(&start_intercepted_drag(&mut vm));
++    vm.dispatch_drag_event_at_point(-100.0, -100.0, "dragleave", data, 0)
++        .expect("cancel outside viewport");
++    vm.dispatch_mouse_event_at_point(20.0, 120.0, "mouseup", 0, Some(0), 0.0, 0.0)
++        .expect("late mouseup");
++    assert_eq!(
++        vm.eval("window.__dragLog.join('|')").expect("log"),
++        "dragstart|dragend"
++    );
++}
++
+ #[test]
+ fn canceled_dragstart_is_not_intercepted() {
+     let mut vm = new_rendered_test_vm("https://drag-intercept-canceled.test/", DRAG_INTERCEPT_PAGE);
+diff --git a/moli/tests/process_signal.rs b/moli/tests/process_signal.rs
+index 0faa7a25c..0dd64fa83 100644
+--- a/moli/tests/process_signal.rs
++++ b/moli/tests/process_signal.rs
+@@ -15,6 +15,20 @@ fn moli_cli_path() -> PathBuf {
+ 
+ #[test]
+ fn cli_serve_exits_promptly_when_sigterm_is_delivered() {
++    assert_serve_exits_promptly(libc::SIGTERM);
++}
++
++#[test]
++fn cli_serve_exits_promptly_when_sigint_is_delivered() {
++    assert_serve_exits_promptly(libc::SIGINT);
++}
++
++#[test]
++fn cli_serve_exits_promptly_when_sighup_is_delivered() {
++    assert_serve_exits_promptly(libc::SIGHUP);
++}
++
++fn assert_serve_exits_promptly(signal: libc::c_int) {
+     let mut child = Command::new(moli_cli_path())
+         .args([
+             "serve",
+@@ -57,7 +71,7 @@ fn cli_serve_exits_promptly_when_sigterm_is_delivered() {
+ 
+     // SAFETY: child_pid identifies the live server process.
+     assert_eq!(
+-        unsafe { libc::kill(child_pid as libc::pid_t, libc::SIGTERM) },
++        unsafe { libc::kill(child_pid as libc::pid_t, signal) },
+         0
+     );
+ 

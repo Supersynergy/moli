@@ -1,0 +1,39 @@
+{
+  "review_date": "2026-10-15",
+  "decision": "NO_GO_PENDING_NATIVE_GATES",
+  "reviewed_heads": {
+    "Supersynergy/moli#1": "cac20d15b83892d71fa8efc27d1e802002a4d68e",
+    "Supersynergy/moli#2": "8fac63e31ed0d004033e16813ed6921ec6e21135",
+    "Supersynergy/superweb#1": "d22b68b37aa99214a4ba166174c95ea0b9bb07ab"
+  },
+  "integration_order": [
+    "Supersynergy/moli#1",
+    "Supersynergy/moli#2 with reviewed fixes",
+    "Supersynergy/superweb#1 with reviewed fixes"
+  ],
+  "moli_candidate_patch_sha256": "6be12bb853ac5bd62beec8ba99878aaac6321330c0421519c739549d11d68e9b",
+  "fresh_tests": {
+    "js_regressions_before": {
+      "passed": 4,
+      "failed": 10
+    },
+    "js_regressions_after": {
+      "passed": 14,
+      "failed": 0
+    },
+    "encoder_smoke": "passed",
+    "moli_patch_apply_check": "passed",
+    "rust": "blocked_missing_toolchain",
+    "combined_browser": "not_run"
+  },
+  "executables": {
+    "node": "v24.19.0",
+    "moli": null,
+    "superweb": null,
+    "playwright_chromium": null
+  },
+  "release_approved": false,
+  "merged": false,
+  "installation_changed": false,
+  "deployed": false
+}
