@@ -1,9 +1,19 @@
 <p align="center">
-  <img
-    src="../assets/moli-browser-banner.jpg"
-    alt="Moli Browser — Struktur zuerst. Pixel bei Bedarf. Open-Source-Browser für KI-Agenten."
-    width="1086"
-  />
+  <picture>
+    <source
+      media="(prefers-color-scheme: dark)"
+      srcset="../assets/moli-browser-banner-dark.jpg"
+    />
+    <source
+      media="(prefers-color-scheme: light)"
+      srcset="../assets/moli-browser-banner.jpg"
+    />
+    <img
+      src="../assets/moli-browser-banner.jpg"
+      alt="Moli Browser — Struktur zuerst. Pixel bei Bedarf. Open-Source-Browser für KI-Agenten."
+      width="1086"
+    />
+  </picture>
 </p>
 
 <h1 align="center">Moli</h1>
