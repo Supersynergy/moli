@@ -1,9 +1,19 @@
 <p align="center">
-  <img
-    src="../assets/moli-browser-banner.jpg"
-    alt="Moli Browser — 구조 우선, 픽셀은 필요할 때만. AI 에이전트를 위한 오픈 소스 브라우저."
-    width="1086"
-  />
+  <picture>
+    <source
+      media="(prefers-color-scheme: dark)"
+      srcset="../assets/moli-browser-banner-dark.jpg"
+    />
+    <source
+      media="(prefers-color-scheme: light)"
+      srcset="../assets/moli-browser-banner.jpg"
+    />
+    <img
+      src="../assets/moli-browser-banner.jpg"
+      alt="Moli Browser — 구조 우선, 픽셀은 필요할 때만. AI 에이전트를 위한 오픈 소스 브라우저."
+      width="1086"
+    />
+  </picture>
 </p>
 
 <h1 align="center">Moli</h1>
@@ -337,7 +347,7 @@ Kitesurf, 53.29%의 Lightpanda, 44.88%의 Obscura보다 앞섰습니다. 기준 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/lexbench-efficiency-map-dark.jpg">
-  <img alt="네 가지 로컬 엔진의 작업당 중앙 최대 메모리와 작업 성공률: Chrome 99.9%, 697 MiB; Moli 80.7%, 92 MiB; Lightpanda 43.8%, 34 MiB; Obscura 44.9%, 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
+  <img alt="네 가지 로컬 엔진의 작업당 중앙 최대 메모리와 작업 성공률: Chrome 99.9%, 697 MiB; Moli 80.7%, 92 MiB; Lightpanda 43.8%, 34 MiB; Obscura 39.5%, 39 MiB" src="../assets/lexbench-efficiency-map-light.jpg" width="100%">
 </picture>
 
 Kitesurf는 원격 서비스이므로 CPU, 메모리, 프로세스 수를 측정할 수 없습니다. 따라서
