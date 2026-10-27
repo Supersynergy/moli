@@ -23,6 +23,13 @@ Use managed `--browser chromium` runs for the full oracle, including process
 resource sampling; sharing an external `--endpoint` does not provide the same
 process isolation or owned PID.
 
+The `Browser.close` lifecycle contract requires an acknowledgment followed by a
+natural, zero-status exit of the owned browser process before cleanup. It
+observes the parent's return code independently of stdout/stderr EOF: a
+descendant may retain an inherited output pipe after the browser has exited,
+which can leave `asyncio.subprocess.Process.wait()` pending. Failures identify
+the session case and lifecycle stage, including acknowledgment and process exit.
+
 Lifecycle artifacts retain total FDs for both engines. Chromium also records
 FDs for regular files inside its owned profile: delayed database initialization
 opens these independently of target churn. Its fixed FD budget covers the
@@ -247,6 +254,19 @@ main-world marker through a replacement connection. Chromium returned `42` in
 both sessions. The identical probe timed out at the replacement evaluation after
 10,000 ms when Moli's parent-session renderer-inspector detach fix was removed,
 and passed after the fix was restored.
+
+The Puppeteer DedicatedWorker probe waits for an asserted fixture-message reply
+before its first `WebWorker.evaluate()`. `workercreated` and
+`Runtime.executionContextCreated` can arrive before worker initialization is
+complete. Reading `self.location.pathname` at that point crashed the pinned
+Chromium 145.0.7632.6 renderer in 6 of 20 runs with four workers on four CPU
+cores, matching the CI `Runtime.callFunctionOn: Target closed` failure. Holding
+the worker's `Runtime.runIfWaitingForDebugger` command for 500 ms reproduced
+the failure in all three controlled runs; the same runs passed after adding
+the fixture round trip. The full Puppeteer group then passed 30 of 30 runs
+under the same CPU and worker limits. The original global-value, exact-once
+console routing, explicit termination, and navigation teardown checks still
+run after readiness is established.
 
 The Puppeteer Shadow DOM accessibility workflow was calibrated on 2026-10-08
 with puppeteer-core 24.30.0 against `/usr/bin/chromium` 145.0.7632.116, then run
@@ -903,11 +923,14 @@ Useful environment variables:
 
 Moli runs do not need Playwright-managed browser binaries. Chromium runs require
 the browser installed by the locked Playwright version, or an explicit override.
-The runner starts `moli serve` with `--layout --resource` so screenshot
+The runner starts `moli serve` with `--layout --resource --debugger` so screenshot
 coverage uses the real renderer and the Chromium-derived Network matrix can
 observe every optional resource family, including images, audio, video, and
-text tracks. These are smoke-only opt-ins; normal moli defaults remain
-Mock layout with optional resources disabled.
+text tracks. Debugger scenarios require real pauses, which `moli serve` skips
+by default. When testing an external Moli `--endpoint`, start that server with
+`--debugger` to run scenarios that assert debugger statements or breakpoints.
+These options enable the capabilities exercised by this suite; normal Moli
+defaults use Mock layout with optional resources and debugger pauses disabled.
 
 ## Relationship to the Node smoke
 

@@ -51,12 +51,16 @@ mod disable_js;
 mod eval;
 #[path = "fetch_cli/http_fail.rs"]
 mod http_fail;
+#[path = "fetch_cli/layout_regressions.rs"]
+mod layout_regressions;
 #[path = "fetch_cli/markdown.rs"]
 mod markdown;
 #[path = "fetch_cli/readiness.rs"]
 mod readiness;
 #[path = "fetch_cli/redirect_chain.rs"]
 mod redirect_chain;
+#[path = "fetch_cli/subprocess.rs"]
+mod subprocess;
 
 struct Output {
     status: OutputStatus,
