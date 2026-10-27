@@ -317,6 +317,7 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
             <div id="drop">drop</div>
           `;
           window.__keys = [];
+          window.__dragEvents = [];
           const textInput = document.getElementById('text');
           const hoverTarget = document.getElementById('hover');
           const hoverChild = document.getElementById('hover-child');
@@ -325,10 +326,15 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
           textInput.addEventListener('keydown', event => window.__keys.push(`${event.key}:${event.shiftKey}:${event.ctrlKey || event.metaKey}`));
           hoverTarget.addEventListener('mouseenter', () => window.__hovered = true);
           hoverChild.addEventListener('click', () => window.__hoverChildClicked = true);
-          dragSource.addEventListener('dragstart', event => event.dataTransfer.setData('text/plain', 'dragged-value'));
+          dragSource.addEventListener('dragstart', event => {
+            window.__dragEvents.push('start');
+            event.dataTransfer.setData('text/plain', 'dragged-value');
+          });
+          dragSource.addEventListener('dragend', () => window.__dragEvents.push('end'));
           dropTarget.addEventListener('dragover', event => event.preventDefault());
           dropTarget.addEventListener('drop', event => {
             event.preventDefault();
+            window.__dragEvents.push('drop');
             dropTarget.textContent = event.dataTransfer.getData('text/plain');
           });
         }"""
@@ -396,13 +402,13 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
     )
     assert_equal(form_state, {"checked": True, "radio": "b", "select": "two"}, "checkbox/radio/select state")
 
-    drag = page.locator("#drag").drag_to(page.locator("#drop"), timeout=1_000)
-    if is_moli_browser():
-        await _expect_drag_interception_boundary(drag, "Moli drag interception boundary")
-        assert_equal(await page.text_content("#drop"), "drop", "unsupported drag/drop does not dispatch")
-    else:
-        await drag
-        assert_equal(await page.text_content("#drop"), "dragged-value", "Chromium drag/drop dispatches")
+    await page.locator("#drag").drag_to(page.locator("#drop"), timeout=1_000)
+    assert_equal(await page.text_content("#drop"), "dragged-value", "drag/drop transfers the native payload")
+    assert_equal(
+        await page.evaluate("() => window.__dragEvents"),
+        ["start", "drop", "end"],
+        "drag/drop dispatches dragend on the source after drop",
+    )
     state.record("locator_input_workflows")
 
 
@@ -1716,17 +1722,6 @@ async def _expect_playwright_error(awaitable: object) -> str:
     except PlaywrightError as error:
         return str(error)
     raise SmokeError("expected Playwright command to fail")
-
-
-async def _expect_drag_interception_boundary(awaitable: object, label: str) -> str:
-    error = await _expect_playwright_error(awaitable)
-    explicit_unsupported = "Input.setInterceptDrags" in error and "not supported" in error
-    bounded_drag_interception = (
-        "Timeout 1000ms exceeded" in error and "performing move and up action" in error
-    )
-    if not explicit_unsupported and not bounded_drag_interception:
-        raise SmokeError(f"{label}: expected drag interception boundary, got: {error}")
-    return error
 
 
 async def run_selector_eval_and_handle_conversion_workflows(state: SmokeState) -> None:
