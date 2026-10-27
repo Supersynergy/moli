@@ -97,6 +97,9 @@ impl AppConfig {
 }
 
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
+    if common.live_layout && !common.layout {
+        bail!("--live-layout requires --layout or MOLI_LAYOUT=true");
+    }
     if common.scrollbars && !common.layout {
         bail!("--scrollbars requires --layout or MOLI_LAYOUT=true");
     }
@@ -176,6 +179,12 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     } else {
         OptionalResourceFetchMask::NONE
     };
+    // Real layout measures text with the page's `@font-face` fonts. Without
+    // the font family the face is never fetched and every line is shaped with
+    // the fallback font, so text widths and wrapping differ from Chromium.
+    if common.layout {
+        optional_resource_fetch_mask |= OptionalResourceFetchMask::FONT;
+    }
     for (enabled, resource) in [
         (common.image, OptionalResourceFetchMask::IMAGE),
         (common.font, OptionalResourceFetchMask::FONT),
@@ -194,7 +203,9 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     config
         .browser
         .set_subframe_loading_enabled(!common.disable_subframes);
-    config.browser.set_layout_policy(if common.layout {
+    config.browser.set_layout_policy(if common.live_layout {
+        LayoutPolicy::Live
+    } else if common.layout {
         LayoutPolicy::OnDemand
     } else {
         LayoutPolicy::Mock

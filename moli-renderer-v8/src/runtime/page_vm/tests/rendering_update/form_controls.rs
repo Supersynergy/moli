@@ -72,7 +72,7 @@ document.getElementById('field').focus();
                 }
             }
             let image = moli_paint::raster_snapshot(&snapshot)?;
-            let pixels = image.rgba.chunks_exact(4);
+            let pixels = image.rgba.as_chunks::<4>().0.iter();
             match state {
                 "transparent" | "clipped" => assert!(
                     !pixels
@@ -152,7 +152,7 @@ input,textarea{display:block;box-sizing:border-box;width:220px;height:100px;
                     moli_layout::PaintViewport::new(260, 140, 1.0),
                 )?.expect("placeholder caret layout");
                 let image = moli_paint::raster_snapshot(&snapshot)?;
-                let red_pixels = image.rgba.chunks_exact(4).enumerate().filter_map(|(index, pixel)| {
+                let red_pixels = image.rgba.as_chunks::<4>().0.iter().enumerate().filter_map(|(index, pixel)| {
                     (pixel[0] > 200 && pixel[1] < 50 && pixel[2] < 50 && pixel[3] > 200)
                         .then_some((index as u32 % image.width, index as u32 / image.width))
                 }).collect::<Vec<_>>();

@@ -142,6 +142,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 resource: false,
                 disable_subframes: false,
                 layout: false,
+                live_layout: false,
                 scrollbars: false,
                 cookie_file: Vec::new(),
                 document_start_script: Vec::new(),
@@ -1698,6 +1699,22 @@ fn app_config_defaults_layout_to_mock_for_fetch_and_serve() {
 }
 
 #[test]
+fn layout_fetches_fonts_so_text_is_measured_with_web_fonts() {
+    for args in [
+        vec!["moli", "fetch", "--layout", "https://example.com"],
+        vec!["moli", "serve", "--layout"],
+    ] {
+        let cli = Cli::try_parse_from(normalize_args_for_compat(args.clone())).unwrap();
+        let config = AppConfig::from_cli(&cli).unwrap();
+        assert_eq!(
+            config.browser.optional_resource_fetch_mask(),
+            OptionalResourceFetchMask::FONT,
+            "{args:?} must fetch fonts and no other optional resource"
+        );
+    }
+}
+
+#[test]
 fn layout_selects_on_demand_policy_for_fetch_and_serve() {
     for args in [
         vec!["moli", "fetch", "--layout", "https://example.com"],
@@ -1708,6 +1725,23 @@ fn layout_selects_on_demand_policy_for_fetch_and_serve() {
         assert_eq!(
             config.browser.layout_policy(),
             moli_core::LayoutPolicy::OnDemand
+        );
+    }
+}
+
+#[test]
+fn live_layout_selects_live_policy_for_fetch_and_serve() {
+    assert!(Cli::try_parse_from(["moli", "serve", "--live-layout"]).is_err());
+    for command in ["fetch", "serve"] {
+        let mut args = vec!["moli", command, "--layout", "--live-layout"];
+        if command == "fetch" {
+            args.push("about:blank");
+        }
+        let cli = Cli::try_parse_from(args).unwrap();
+        let config = AppConfig::from_cli(&cli).unwrap();
+        assert_eq!(
+            config.browser.layout_policy(),
+            moli_core::LayoutPolicy::Live
         );
     }
 }

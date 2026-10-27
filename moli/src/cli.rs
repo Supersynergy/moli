@@ -588,9 +588,11 @@ pub struct CommonArgs {
     pub disable_subframes: bool,
 
     /// Enable the real on-demand layout renderer and screenshot surfaces.
+    /// Layout also fetches `@font-face` fonts to measure text with page fonts.
     /// Native scrollbars are hidden unless --scrollbars or MOLI_SCROLLBARS is enabled.
     /// With `fetch --eval` or `--eval-file`, refresh layout once before running
-    /// the script so geometry APIs can read it. Script mutations do not refresh it.
+    /// the script so geometry APIs can read it. Use --live-layout to refresh
+    /// geometry after script mutations as well.
     ///
     /// Without this flag Moli keeps deterministic compatibility
     /// geometry and does not construct layout or paint output.
@@ -601,6 +603,11 @@ pub struct CommonArgs {
         value_parser = clap::builder::BoolishValueParser::new()
     )]
     pub layout: bool,
+
+    /// Refresh changed layout on geometry reads, including script mutations.
+    /// Requires --layout; otherwise geometry retains the published snapshot.
+    #[arg(long, env = "MOLI_LIVE_LAYOUT", value_parser = clap::builder::BoolishValueParser::new(), requires_if("true", "layout"))]
+    pub live_layout: bool,
 
     /// Show native scrollbars. Requires --layout.
     #[arg(
@@ -1095,6 +1102,16 @@ mod tests {
             }
             other => panic!("expected serve command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn live_layout_requires_explicit_layout() {
+        assert!(Cli::try_parse_from(["moli", "serve", "--live-layout"]).is_err());
+        let cli = Cli::parse_from(["moli", "serve", "--layout", "--live-layout"]);
+        let Commands::Serve(args) = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(args.common.layout && args.common.live_layout);
     }
 
     #[test]

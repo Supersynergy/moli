@@ -1586,7 +1586,7 @@ mod page_residence_tests {
             .page_residence_token()
             .expect("the installed attachment should expose its lifetime token");
 
-        let mut wait = Box::pin(token.wait());
+        let mut wait = std::pin::pin!(token.wait());
         let mut context = Context::from_waker(Waker::noop());
         assert!(
             matches!(wait.as_mut().poll(&mut context), Poll::Pending),

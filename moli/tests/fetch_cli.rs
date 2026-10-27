@@ -4172,7 +4172,10 @@ fn cli_connection_failure_reports_curl_code_and_cause() -> Result<()> {
     assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
     assert!(stdout.is_empty(), "stdout={stdout}");
     assert_single_fetch_failure_reason(&stderr, &url, "curl request failed");
-    assert!(stderr.contains("[7]"), "stderr={stderr}");
+    // macOS may time out a bound, non-listening socket instead of refusing it.
+    let refused = stderr.contains("[7]");
+    let connect_timed_out = cfg!(target_os = "macos") && stderr.contains("[28]");
+    assert!(refused || connect_timed_out, "stderr={stderr}");
     assert!(stderr.contains("Failed to connect"), "stderr={stderr}");
     Ok(())
 }

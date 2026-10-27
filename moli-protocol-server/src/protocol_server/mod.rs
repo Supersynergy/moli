@@ -1,7 +1,7 @@
 #[cfg(test)]
 use std::path::PathBuf;
 use std::{
-    future::IntoFuture,
+    future::{Future, IntoFuture},
     net::SocketAddr,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
@@ -146,6 +146,20 @@ impl ProtocolServer {
 
     pub async fn serve(&self) -> Result<()> {
         self.serve_with_control(BrowserInstanceControl::new()).await
+    }
+
+    /// Request instance shutdown when the external lifecycle signal arrives.
+    pub async fn serve_until(&self, shutdown: impl Future<Output = ()>) -> Result<()> {
+        let control = BrowserInstanceControl::new();
+        let serving = self.serve_with_control(control.clone());
+        tokio::pin!(serving);
+        tokio::select! {
+            result = &mut serving => result,
+            () = shutdown => {
+                control.request(InstanceCommand::Shutdown);
+                serving.await
+            }
+        }
     }
 
     /// Serve one instance with a protocol-independent lifecycle control handle.

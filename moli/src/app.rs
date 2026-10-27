@@ -239,6 +239,7 @@ pub async fn run_cli_with_config<W: Write>(
             }
         }
         Commands::Serve(_) => {
+            let shutdown = server_shutdown_signal()?;
             if config.browser.fetch().obey_robots() {
                 // Protocol clients drive navigation themselves, so the CLI
                 // cannot refuse a page on their behalf. Say so rather than let
@@ -256,7 +257,10 @@ pub async fn run_cli_with_config<W: Write>(
                 storage_partition,
                 NavigationRuntimeConfig::from(&config.browser),
             );
-            server.serve().await.context("protocol server failed")?;
+            server
+                .serve_until(shutdown)
+                .await
+                .context("protocol server failed")?;
         }
         Commands::Import(args) => {
             let summary =
@@ -274,6 +278,29 @@ pub async fn run_cli_with_config<W: Write>(
     }
 
     Ok(())
+}
+
+fn server_shutdown_signal() -> Result<impl std::future::Future<Output = ()>> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate())?;
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut hangup = signal(SignalKind::hangup())?;
+        Ok(async move {
+            tokio::select! {
+                _ = term.recv() => {},
+                _ = interrupt.recv() => {},
+                _ = hangup.recv() => {},
+            }
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+    }
 }
 
 fn reject_multiple_stdin_script_sources(args: &FetchArgs) -> Result<()> {

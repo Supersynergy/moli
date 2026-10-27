@@ -103,7 +103,7 @@ fn pagination_and_ranges_do_not_duplicate_or_leak_text() {
     let selected = document(
         &snapshot,
         &PdfOptions {
-            page_ranges: vec![1..=1],
+            page_ranges: std::iter::once(1..=1).collect(),
             ..options()
         },
     );
@@ -113,7 +113,7 @@ fn pagination_and_ranges_do_not_duplicate_or_leak_text() {
         pdf_snapshot(
             &snapshot,
             &PdfOptions {
-                page_ranges: vec![100..=usize::MAX],
+                page_ranges: std::iter::once(100..=usize::MAX).collect(),
                 ..options()
             }
         ),
@@ -429,13 +429,13 @@ fn repeated_images_fill_the_clipped_pdf_region() {
         .filter(|bytes| bytes.len() == 64 * 32 * 3)
         .collect();
     assert_eq!(repeated_images.len(), 1, "one bounded RGB image in the PDF");
-    for (index, pixel) in repeated_images[0].chunks_exact(3).enumerate() {
+    for (index, pixel) in repeated_images[0].as_chunks::<3>().0.iter().enumerate() {
         let expected = if ((index % 64) / 2).is_multiple_of(2) {
             [255, 0, 0]
         } else {
             [0, 255, 0]
         };
-        assert_eq!(pixel, expected, "PDF pattern at pixel {index}");
+        assert_eq!(*pixel, expected, "PDF pattern at pixel {index}");
     }
 }
 

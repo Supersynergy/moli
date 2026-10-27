@@ -113,7 +113,9 @@ pub fn parse_point_list(raw: &str) -> Option<Vec<(f64, f64)>> {
     })?;
     Some(
         values
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|point| (point[0], point[1]))
             .collect(),
     )
