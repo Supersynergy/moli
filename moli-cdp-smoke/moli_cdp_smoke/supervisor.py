@@ -6,7 +6,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
@@ -54,22 +54,36 @@ class WorkerOutcome:
     endpoint: str | None = None
     error: str | None = None
     browser: dict[str, Any] | None = None
+    previous_attempts: tuple[WorkerOutcome, ...] = ()
 
     @property
     def passed(self) -> bool:
         return self.status == "passed"
+
+    @property
+    def flaky(self) -> bool:
+        return self.passed and bool(self.previous_attempts)
 
     def summary(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "group": self.job.group.name,
             "attempt": self.job.attempt,
             "status": self.status,
-            "durationSeconds": round(self.duration_seconds, 3),
+            "durationSeconds": round(
+                self.duration_seconds + sum(attempt.duration_seconds for attempt in self.previous_attempts), 3
+            ),
             "exitCode": self.exit_code,
             "scenarioCount": self.scenario_count,
             "log": str(self.log_path),
             "result": str(self.result_path),
+            "flaky": self.flaky,
+            "retriesUsed": len(self.previous_attempts),
         }
+        if self.previous_attempts:
+            payload["executions"] = [
+                attempt.summary()
+                for attempt in (*self.previous_attempts, replace(self, previous_attempts=()))
+            ]
         if self.error:
             payload["error"] = self.error
         if self.endpoint:
@@ -90,6 +104,13 @@ def _positive_float(raw: str) -> float:
     value = float(raw)
     if not 0 < value < float("inf"):
         raise argparse.ArgumentTypeError("value must be a finite positive number")
+    return value
+
+
+def _nonnegative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be nonnegative")
     return value
 
 
@@ -122,12 +143,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--repeat",
         type=_positive_int,
         default=1,
-        help="Run every selected group this many times; any failure fails the suite.",
+        help="Run every selected group this many times; every repetition must pass.",
+    )
+    parser.add_argument(
+        "--retries",
+        type=_nonnegative_int,
+        default=0,
+        help="Retry each failed Chromium group in a fresh worker/browser (default: 0).",
     )
     parser.add_argument(
         "--fail-fast",
         action="store_true",
         help="Do not start queued workers after the first failure.",
+    )
+    parser.add_argument(
+        "--strict-full-suite",
+        action="store_true",
+        help="Require all default groups in owned browsers, without filters or fail-fast.",
     )
     parser.add_argument(
         "--output-dir",
@@ -270,10 +302,12 @@ async def _run_worker_job(
     started_at = time.monotonic()
     print(f"[moli-cdp-supervisor] START {job.label}", file=sys.stderr, flush=True)
     with log_path.open("wb", buffering=0) as log_stream:
+        environment = _worker_environment()
+        environment["MOLI_SMOKE_WORKER_TIMEOUT_SECONDS"] = str(timeout_seconds)
         process = await asyncio.create_subprocess_exec(
             *_worker_argv(job, result_path),
             cwd=str(REPO_ROOT),
-            env=_worker_environment(),
+            env=environment,
             stdout=log_stream,
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=os.name == "posix",
@@ -347,7 +381,26 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _validate_full_suite(args: argparse.Namespace) -> None:
+    if not args.strict_full_suite:
+        return
+    forbidden = [
+        name for name, enabled in [
+            ("--group", args.group), ("--endpoint", args.endpoint),
+            ("--fail-fast", args.fail_fast), ("--list-groups", args.list_groups),
+            *[(name, os.environ.get(name)) for name in (
+                "MOLI_SMOKE_GROUPS", "MOLI_MULTI_PAGE_CASES", "MOLI_MULTI_PAGE_SHARD",
+            )],
+        ] if enabled
+    ]
+    if forbidden:
+        raise RuntimeError("strict full-suite mode forbids " + ", ".join(forbidden))
+
+
 async def run_supervisor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    _validate_full_suite(args)
+    if args.retries and (args.browser != "chromium" or args.endpoint):
+        raise RuntimeError("--retries requires managed --browser chromium")
     selection = resolve_group_selection(args.group)
     output_dir = (args.output_dir or _default_output_dir()).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -390,18 +443,40 @@ async def run_supervisor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]
                     scenario_count=0,
                     error="not started after an earlier failure",
                 )
-            try:
-                outcome = await _run_worker_job(job, output_dir, args.timeout)
-            except Exception as error:
-                outcome = WorkerOutcome(
-                    job=job,
-                    status="crashed",
-                    duration_seconds=0,
-                    exit_code=None,
-                    log_path=output_dir / f"{job.file_stem}.log",
-                    result_path=output_dir / f"{job.file_stem}.json",
-                    scenario_count=0,
-                    error=f"failed to start or supervise worker: {error}",
+            attempts: list[WorkerOutcome] = []
+            for retry in range(args.retries + 1):
+                attempt_dir = output_dir
+                if retry:
+                    attempt_dir = output_dir / "retries" / job.file_stem / f"retry-{retry:02d}"
+                    print(
+                        f"[moli-cdp-supervisor] RETRY {job.label} {retry}/{args.retries}; "
+                        f"previous {attempts[-1].status}, log={attempts[-1].log_path}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                attempt_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    outcome = await _run_worker_job(job, attempt_dir, args.timeout)
+                except Exception as error:
+                    outcome = WorkerOutcome(
+                        job=job,
+                        status="crashed",
+                        duration_seconds=0,
+                        exit_code=None,
+                        log_path=attempt_dir / f"{job.file_stem}.log",
+                        result_path=attempt_dir / f"{job.file_stem}.json",
+                        scenario_count=0,
+                        error=f"failed to start or supervise worker: {error}",
+                    )
+                attempts.append(outcome)
+                if outcome.passed:
+                    break
+            outcome = replace(outcome, previous_attempts=tuple(attempts[:-1]))
+            if outcome.flaky:
+                print(
+                    f"[moli-cdp-supervisor] FLAKY {job.label} passed after {len(attempts) - 1} retries",
+                    file=sys.stderr,
+                    flush=True,
                 )
             if not outcome.passed:
                 stop_starting.set()
@@ -414,6 +489,9 @@ async def run_supervisor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]
         "jobs": args.jobs,
         "timeoutSeconds": args.timeout,
         "repeat": args.repeat,
+        "retries": args.retries,
+        "flakyGroups": sum(outcome.flaky for outcome in outcomes),
+        "strictFullSuite": args.strict_full_suite,
         "externalEndpoint": args.endpoint,
         "browser": args.browser or ("external" if args.endpoint else "moli"),
         "outputDirectory": str(output_dir),
@@ -437,6 +515,7 @@ async def run_supervisor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]
     passed = sum(outcome.passed for outcome in outcomes)
     print(
         f"[moli-cdp-supervisor] summary {passed}/{len(outcomes)} passed; "
+        f"{summary['flakyGroups']} flaky; "
         f"artifacts={output_dir}",
         file=sys.stderr,
     )
@@ -446,6 +525,7 @@ async def run_supervisor(args: argparse.Namespace) -> tuple[int, dict[str, Any]]
 async def async_main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.list_groups:
+        _validate_full_suite(args)
         print(json.dumps({"groups": group_listing()}, indent=2, ensure_ascii=False))
         return 0
     exit_code, _ = await run_supervisor(args)
