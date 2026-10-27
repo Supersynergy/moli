@@ -1,5 +1,7 @@
 use super::*;
 
+mod background;
+
 pub(in crate::native_bridge::element::styles) fn style_property_value_with_context(
     runtime: &JsContextHost,
     handle: DomHandle,
@@ -104,6 +106,9 @@ pub(super) fn computed_style_property_value_after_style_update(
     }
     if property == "font-variant" {
         return computed_font_variant_shorthand_value(runtime, handle, resolution);
+    }
+    if property == "background" {
+        return background::computed_shorthand(runtime, handle, resolution);
     }
     if property == "mask" {
         return computed_mask_shorthand_value(runtime, handle, resolution);
@@ -1376,13 +1381,13 @@ fn transition_property_token_is_valid(value: &str) -> bool {
 }
 
 fn transition_property_token_serialization(value: &str) -> Option<String> {
-    let mut input = ParserInput::new(value);
-    let mut input = Parser::new(&mut input);
+    let input = value;
+    let mut input = Parser::new(input);
     let ident = input
         .parse_entirely(|input| {
             input
                 .expect_ident_cloned()
-                .map_err(|_| input.new_custom_error::<(), ()>(()))
+                .map_err(|_| cssparser::ParseError::<()>::custom(()))
         })
         .ok()?;
     let lowered = ident.to_ascii_lowercase();
