@@ -1,14 +1,17 @@
 use super::*;
 use crate::blob;
 use crate::native_bridge::throw_dom_exception;
-use crate::runtime::{RendererDragData, RendererDraggedDirectory, RendererDraggedFile};
+use crate::runtime::{
+    RendererDragData, RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile,
+};
 use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use crate::webidl;
 use moli_file_api::data_transfer::{
     DataTransferItemSummary, child_entry_full_path, clear_data_removes_item,
     contains_string_item_type, data_transfer_types_from_items, drag_effect_allowed_from_mask,
-    normalize_drag_data_type, valid_drop_effect, valid_effect_allowed,
+    drag_operations_mask_from_effect_allowed, normalize_drag_data_type, valid_drop_effect,
+    valid_effect_allowed,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -472,6 +475,46 @@ pub(crate) fn native_set_drag_drop_effect<'s>(
     if valid_drop_effect(effect) {
         set_private_string(scope, data_transfer, DATA_TRANSFER_DROP_EFFECT_SLOT, effect);
     }
+}
+
+/// Reads the string items and `effectAllowed` that `dragstart` listeners left
+/// in the shared store, in the shape CDP reports as `Input.DragData`.
+pub(crate) fn read_string_drag_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    store: &NativeDragDataStore,
+) -> (Vec<RendererDragDataItem>, i32) {
+    let backing = store.local(scope);
+    let mask = drag_operations_mask_from_effect_allowed(
+        &private_string_property(scope, backing, DATA_TRANSFER_EFFECT_ALLOWED_SLOT)
+            .unwrap_or_else(|| "uninitialized".to_owned()),
+    );
+    let mut items = Vec::new();
+    let Some(item_array) =
+        private_property_as_array(scope, backing, DATA_TRANSFER_STORE_ITEMS_SLOT)
+    else {
+        return (items, mask);
+    };
+    for index in 0..item_array.length() {
+        let Some(item) = item_array
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        else {
+            continue;
+        };
+        if item_kind(scope, item).as_deref() != Some("string") {
+            continue;
+        }
+        items.push(RendererDragDataItem {
+            mime_type: item_type(scope, item).unwrap_or_default(),
+            // Native interception serializes the store, independently of the
+            // access granted to the last JavaScript event listener.
+            data: private_string_property(scope, item, DATA_TRANSFER_ITEM_STRING_SLOT)
+                .unwrap_or_default(),
+            title: None,
+            base_url: None,
+        });
+    }
+    (items, mask)
 }
 
 fn private_string_property<'s>(

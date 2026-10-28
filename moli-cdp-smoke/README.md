@@ -151,7 +151,7 @@ or identical scenario counts:
 | Fetch body streams | Buffered seeking and explicit rejection of continuation after body take | Sequential reads; EOF may require a separate empty read |
 | WebSocket events and URL blocking | Extra generic request events, payload lengths, and WebSocket URL blocking | Dedicated WebSocket events and payload data; URL blocking excludes WebSockets |
 | Hosted file URLs | Capability error before navigation/interception | File navigation and interception; missing file returns `ERR_FILE_NOT_FOUND` |
-| Other capability boundaries | Stack timing privacy, unsupported drag/CPU throttling, PI rename extension | Observed stack timing, successful drag/throttling, rejected PI rename |
+| Other capability boundaries | Stack timing privacy, unsupported CPU throttling, PI rename extension | Observed stack timing, successful throttling, rejected PI rename |
 | Response/manifest/idle details | Plaintext TextTrack bodies, document-relative data manifest URLs, same-site idle persistence | Base64 TextTrack bodies, data manifest URL fallbacks, cross-document idle reset |
 
 The `dom-input` text-editing checks were calibrated on 2026-09-12 against
@@ -189,6 +189,17 @@ Source inspection remains useful for explaining why Chromium behaves as
 observed, but it does not replace the executable probe when one can be run. If
 Chromium cannot be tested, document that limitation explicitly instead of
 presenting an inferred expectation as verified behavior.
+
+The native drag scenarios were calibrated on 2026-10-28 against Playwright's
+Chrome for Testing 145.0.7632.6. The `dom` group checks drag eligibility and
+movement thresholds, native `effectAllowed: "uninitialized"`, frontend-session
+isolation, cancellation, protected dragenter/dragover data, client-edited replay
+payloads, and accepted or rejected drops. Chromium reports all operations as
+`-1`, while Moli reports the supported mask `19`; the shared assertion compares
+the copy/link/move bits. Default text drops into writable input, textarea, and
+contenteditable targets need no author-canceled dragover. They use copy for a
+draggable element source: `copyMove` allows the drop, while `linkMove` rejects it.
+The same scenarios run against Moli's current build.
 
 The `Fetch.getResponseBody` text encoding was calibrated on 2026-10-19 against
 Debian `/usr/bin/chromium` 145.0.7632.116. A fresh page enabled `Network` and

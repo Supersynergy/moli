@@ -68,6 +68,7 @@ struct DragEventInitDeclaration<'scope> {
     meta_key: bool,
     shift_key: bool,
     data_transfer: v8::Local<'scope, v8::Value>,
+    related_target: Option<v8::Local<'scope, v8::Value>>,
 }
 
 #[derive(WebApiObject)]
@@ -637,7 +638,11 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
     let modifier_keys = modifier_key_state(modifiers);
     let init = PointerEventInitDeclaration::new(
         !is_enter_or_leave,
-        !is_enter_or_leave,
+        !is_enter_or_leave
+            && !matches!(
+                event_type,
+                "pointercancel" | "gotpointercapture" | "lostpointercapture"
+            ),
         true,
         coordinates.screen_x,
         coordinates.screen_y,
@@ -673,10 +678,28 @@ pub(crate) fn construct_drag_event<'s>(
     data_transfer: v8::Local<'s, v8::Value>,
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    construct_drag_event_with_related_target(
+        scope,
+        event_type,
+        coordinates,
+        data_transfer,
+        None,
+        modifiers,
+    )
+}
+
+pub(crate) fn construct_drag_event_with_related_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    coordinates: InputEventCoordinates,
+    data_transfer: v8::Local<'s, v8::Value>,
+    related_target: Option<v8::Local<'s, v8::Value>>,
+    modifiers: u8,
+) -> Option<v8::Local<'s, v8::Object>> {
     let modifier_keys = modifier_key_state(modifiers);
     let init = DragEventInitDeclaration::new(
         true,
-        true,
+        !matches!(event_type, "dragleave" | "dragend"),
         true,
         coordinates.screen_x,
         coordinates.screen_y,
@@ -687,6 +710,7 @@ pub(crate) fn construct_drag_event<'s>(
         modifier_keys.meta,
         modifier_keys.shift,
         data_transfer,
+        related_target,
     )
     .bind(scope)
     .ok()?;

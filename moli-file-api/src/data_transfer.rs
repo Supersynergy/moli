@@ -3,7 +3,7 @@ const DRAG_MODIFIER_CTRL: u8 = 2;
 const DRAG_MODIFIER_META: u8 = 4;
 const DRAG_MODIFIER_SHIFT: u8 = 8;
 
-/// Permissions granted to a DataTransfer view of a native data store.
+/// Access granted to a drag data store while a native drag event is dispatched.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DragDataStoreMode {
     ReadWrite,
@@ -86,12 +86,16 @@ pub fn drag_operations_mask_from_effect_allowed(effect_allowed: &str) -> i32 {
 }
 
 pub fn preferred_drop_effect_from_mask(mask: i32) -> &'static str {
-    if (mask & 1) != 0 {
+    // Chromium prefers move for constrained source operations, but uses copy
+    // for all/uninitialized rather than treating that mask as move-first.
+    if (mask & 19) == 19 {
+        "copy"
+    } else if (mask & 16) != 0 {
+        "move"
+    } else if (mask & 1) != 0 {
         "copy"
     } else if (mask & 2) != 0 {
         "link"
-    } else if (mask & 16) != 0 {
-        "move"
     } else {
         "none"
     }
@@ -220,6 +224,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn effect_allowed_round_trips_through_drag_operations_mask() {
+        for effect in [
+            "none", "copy", "link", "move", "copyLink", "copyMove", "linkMove", "all",
+        ] {
+            let mask = drag_operations_mask_from_effect_allowed(effect);
+            assert_eq!(drag_effect_allowed_from_mask(mask), effect);
+        }
+        assert_eq!(
+            drag_operations_mask_from_effect_allowed("uninitialized"),
+            19
+        );
+        assert_eq!(drag_operations_mask_from_effect_allowed("bogus"), 0);
+    }
+
+    #[test]
     fn normalizes_legacy_drag_data_type_aliases() {
         assert_eq!(normalize_drag_data_type(" text "), "text/plain");
         assert_eq!(normalize_drag_data_type("URL"), "text/uri-list");
@@ -242,7 +261,8 @@ mod tests {
         assert_eq!(drag_effect_allowed_from_mask(1 | 2 | 16), "all");
 
         assert_eq!(preferred_drop_effect_from_mask(1 | 2 | 16), "copy");
-        assert_eq!(preferred_drop_effect_from_mask(2 | 16), "link");
+        assert_eq!(preferred_drop_effect_from_mask(2 | 16), "move");
+        assert_eq!(preferred_drop_effect_from_mask(1 | 16), "move");
         assert_eq!(preferred_drop_effect_from_mask(16), "move");
         assert_eq!(preferred_drop_effect_from_mask(0), "none");
     }

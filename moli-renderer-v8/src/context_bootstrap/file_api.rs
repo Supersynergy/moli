@@ -17,8 +17,8 @@ pub(crate) use data_transfer::{
     is_branded_data_transfer_object, native_data_transfer_drop_effect,
     native_data_transfer_drop_effect_is_initialized, native_data_transfer_effect_allowed,
     native_data_transfer_file_count, native_data_transfer_files, native_data_transfer_get_data,
-    native_data_transfer_has_type, populate_native_drag_data_store,
-    protect_native_drag_source_view, readonly_data_transfer_for_input,
+    native_data_transfer_has_type, native_set_drag_drop_effect, populate_native_drag_data_store,
+    protect_native_drag_source_view, read_string_drag_data, readonly_data_transfer_for_input,
     replace_drag_data_store_contents, update_drag_data_store_operations_mask,
 };
 pub(crate) use data_transfer::{
