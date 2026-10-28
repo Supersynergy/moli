@@ -1126,8 +1126,7 @@ pub(super) struct ActiveDragSession {
     /// longer drive `dragover` and `drop`. `Input.dispatchDragEvent` does.
     pub intercepted: bool,
     pub target: Option<DomHandle>,
-    pub x: f64,
-    pub y: f64,
+    pub coordinates: crate::native_bridge::element::InputEventCoordinates,
     pub modifiers: u8,
 }
 

@@ -2393,7 +2393,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fileapi", "drag-and-drop", "datatransfer", "events", "input", "actions"]
-notes = "Manual compat port for renderer drag operation-mask mapping: source drag_operations_mask values are exposed through DataTransfer.effectAllowed while every target event view starts with dropEffect none, explicitly canceled dragover requests only deliver drop and run text defaults when their dropEffect is allowed by the source mask, dispatch-drag modifiers populate DragEvent modifier-key state, and Ctrl/Meta/Shift/Alt modifier combinations select copy/move/link defaults with explicit link gestures taking precedence when the source mask allows them."
+notes = "Manual compat port for renderer drag operation-mask mapping: source drag_operations_mask values initialize each protected target view's dropEffect, drop carries the negotiated operation, and explicitly canceled dragover requests only deliver drop and run text defaults when their dropEffect is allowed by the source mask. CDP modifier flags populate DragEvent modifier-key state without overriding the preferred operation."
 
 [[test.actions]]
 type = "dispatch-drag"

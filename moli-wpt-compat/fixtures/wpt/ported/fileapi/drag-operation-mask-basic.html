@@ -90,22 +90,22 @@ promise_test(async function () {
   await complete;
   const noKeys = "false,false,false,false";
   const expected = [
-    { phase: "none", allowed: "none", over: ["none", "none"] },
-    { phase: "link", allowed: "link", over: ["none", "none"], text: "link-text" },
-    { phase: "move", allowed: "move", over: ["none", "none"], text: "move-text" },
-    { phase: "copyLink", allowed: "copyLink", over: ["move", "move"] },
-    { phase: "linkMove", allowed: "linkMove", over: ["copy", "copy"] },
-    { phase: "all", allowed: "all", over: ["link", "link"], text: "all-text" },
+    { phase: "none", allowed: "none", initial: "none", over: ["none", "none"] },
+    { phase: "link", allowed: "link", initial: "link", over: ["link", "link"], drop: "link", text: "link-text" },
+    { phase: "move", allowed: "move", initial: "move", over: ["move", "move"], drop: "move", text: "move-text" },
+    { phase: "copyLink", allowed: "copyLink", initial: "copy", over: ["move", "move"] },
+    { phase: "linkMove", allowed: "linkMove", initial: "move", over: ["copy", "copy"] },
+    { phase: "all", allowed: "all", initial: "copy", over: ["link", "link"], drop: "link", text: "all-text" },
     {
-      phase: "modifiers", allowed: "copy", over: ["none", "none"], text: "modifiers-text",
+      phase: "modifiers", allowed: "copy", initial: "copy", over: ["copy", "copy"], drop: "copy", text: "modifiers-text",
       keys: ["true,true,true,true", "false,true,false,true", "true,false,true,false"],
     },
     {
-      phase: "modifierSelection", allowed: "all", over: ["none", "none"], text: "auto-text",
+      phase: "modifierSelection", allowed: "all", initial: "copy", over: ["copy", "copy"], drop: "copy", text: "auto-text",
       keys: ["false,true,false,false", "false,false,false,true", "true,false,false,false"],
     },
     {
-      phase: "modifierPrecedence", allowed: "all", over: ["none", "none"], text: "precedence-text",
+      phase: "modifierPrecedence", allowed: "all", initial: "copy", over: ["copy", "copy"], drop: "copy", text: "precedence-text",
       keys: ["false,false,true,false", "false,true,false,true", "true,false,true,false"],
     },
   ];
@@ -114,14 +114,14 @@ promise_test(async function () {
     const record = records[item.phase];
     const keys = item.keys || [noKeys, noKeys, noKeys];
     assert_equals(record.enter.length, 1, item.phase + ": one dragenter");
-    assert_array_equals(record.enter[0], ["none", item.allowed, keys[0], ""], item.phase + ": event view starts with none and protected data");
+    assert_array_equals(record.enter[0], [item.initial, item.allowed, keys[0], ""], item.phase + ": effectAllowed initializes the protected view");
     assert_equals(record.over.length, 2, item.phase + ": explicit over and drop each negotiate dragover");
     for (let index = 0; index < 2; index++) {
       assert_array_equals(record.over[index], [item.over[index], item.allowed, keys[index + 1], ""], item.phase + ": operation/modifiers/protected data at over " + index);
     }
     if (item.text) {
       assert_equals(record.drop.length, 1, item.phase + ": allowed operation dispatches drop");
-      assert_array_equals(record.drop[0], [item.text, "none", item.allowed, "hello world", keys[2]], item.phase + ": the drop command payload is readable only during drop");
+      assert_array_equals(record.drop[0], [item.text, item.drop, item.allowed, "hello world", keys[2]], item.phase + ": drop carries its negotiated operation and readable command payload");
       const caret = 6 + item.text.length;
       assert_equals(record.input.length, 1, item.phase + ": one default edit");
       assert_array_equals(record.input[0], ["hello " + item.text, caret, caret], item.phase + ": accepted drop replaces the selection");
@@ -131,5 +131,5 @@ promise_test(async function () {
     }
   }
   assert_equals(expectedDrops, 6, "only the six accepted phases dispatch drop");
-}, "Input.dispatchDragEvent validates operation masks, protected data and modifier-key negotiation");
+}, "Input.dispatchDragEvent validates operation masks, protected data and modifier-key forwarding");
 </script>

@@ -47,6 +47,8 @@ async def run_drag_interception_workflows(state: SmokeState) -> None:
                  ["dragstart", "drop", "dragend"], "Playwright dragTo completes the native source lifecycle")
     assert_equal(next(event for event in events if event["type"] == "drop")["data"],
                  "native-payload", "Playwright dragTo transfers the native payload")
+    assert_equal([event["effect"] for event in events if event["type"] in ("drop", "dragend")],
+                 ["copy", "copy"], "a handled native drop retains its negotiated copy operation")
     await page.evaluate("() => window.__dragLog = []")
     state.record("locator_native_drag_to")
 
@@ -130,8 +132,11 @@ async def run_drag_interception_workflows(state: SmokeState) -> None:
             if event["type"] in ("dragenter", "dragover"):
                 assert_equal(event["data"], "", f"{event['type']} protects the payload")
                 assert_equal(event["types"], ["text/plain"], f"{event['type']} exposes types")
+                assert_equal(event["effect"], "copy", f"all operations initialize {event['type']} to copy")
         assert_equal(next(event for event in events if event["type"] == "drop")["data"],
                      "native-payload", "drop can read the original payload")
+        assert_equal([event["effect"] for event in events if event["type"] in ("drop", "dragend")],
+                     ["copy", "copy"], "handled replay preserves the accepted operation through source completion")
         await mouse(first, "mouseReleased", 250, 40, 0)
 
         data = await start(first, "first")

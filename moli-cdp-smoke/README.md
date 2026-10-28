@@ -190,8 +190,13 @@ observed, but it does not replace the executable probe when one can be run. If
 Chromium cannot be tested, document that limitation explicitly instead of
 presenting an inferred expectation as verified behavior.
 
-The native drag scenarios were calibrated on 2026-10-28 against Playwright's
-Chrome for Testing 145.0.7632.6. The `dom` group checks drag eligibility and
+The native drag scenarios were recalibrated on 2026-10-29 against Chrome for
+Testing 156.0.8078.73 with its default flags, and with `SetDefaultDropEffect`
+and `SuppressPointerStreamAfterDrag` explicitly enabled. Both runs agree.
+CI's CDP Chromium job installs this pinned oracle for `dom-input` with
+`--chromium-bin-for-group`, while retaining the locked Playwright client and
+the existing browser for other groups. All default groups still run under
+`--strict-full-suite`. The `dom-input` group checks drag eligibility and
 movement thresholds, native `effectAllowed: "uninitialized"`, frontend-session
 isolation, cancellation, protected dragenter/dragover data, client-edited replay
 payloads, and accepted or rejected drops. Chromium reports all operations as
@@ -200,6 +205,22 @@ the copy/link/move bits. Default text drops into writable input, textarea, and
 contenteditable targets need no author-canceled dragover. They use copy for a
 draggable element source: `copyMove` allows the drop, while `linkMove` rejects it.
 The same scenarios run against Moli's current build.
+
+Protected enter/over views start with the preferred operation allowed by the
+source; leave uses `none`, and drop receives the negotiated operation. CDP
+modifier flags remain observable without overriding this initialization. The
+manual port in `fixtures/drag-pointer-suppression.html` preserves the upstream
+WPT scenario: pointer cancellation, capture release, and out/ancestor-leave
+events must precede leaving the drag source. It also checks resumed pointer
+entry while preserving the independent legacy mouse hover state. Returning
+from a released capture to its descendant does not leave that ancestor.
+
+Moli's drop-result regressions follow the HTML processing model: a drop must
+be handled by script or complete its default action to succeed. Chrome 156
+still reports its previous operation for an unhandled generic target and
+ignores a drop listener's final operation changes. Those differences are
+covered by Moli's specification regressions; the shared Chromium oracle
+checks initialization, negotiation, and pointer suppression.
 
 The `Fetch.getResponseBody` text encoding was calibrated on 2026-10-19 against
 Debian `/usr/bin/chromium` 145.0.7632.116. A fresh page enabled `Network` and
@@ -1033,6 +1054,9 @@ Useful environment variables:
 - `MOLI_BIN`: path to the `moli` binary under test.
 - `CHROMIUM_BIN` / `--chromium-bin`: optional executable override for
   `--browser chromium`; otherwise use the locked Playwright browser.
+- `--chromium-bin-for-group GROUP=PATH`: use a Chromium executable for one
+  group while preserving the full group selection. May be repeated; each
+  group's actual executable is recorded as `chromiumBin` in `summary.json`.
 - `MOLI_CDP_PORT`: fixed CDP server port for single-worker debugging. By
   default every worker uses `--port 0` and reads the OS-selected endpoint from
   Moli's bound-listener log. A fixed port is rejected with parallel workers.

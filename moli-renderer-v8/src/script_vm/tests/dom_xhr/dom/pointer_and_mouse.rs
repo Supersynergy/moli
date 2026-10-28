@@ -1615,7 +1615,7 @@ document.getElementById('target').addEventListener('drop', e => {
             serde_json::json!([
                 enter_types,
                 "",
-                [false, "client-drop", "text/plain", ["text/plain"], "none"],
+                [false, "client-drop", "text/plain", ["text/plain"], "copy"],
                 1,
                 true,
                 0
@@ -1994,19 +1994,19 @@ for(const type of ['dragenter','dragover','drop']) target.addEventListener(type,
             ])
         };
         let mut expected_records = Vec::new();
-        for (event, allowed) in [
-            ("dragenter", "copy"),
-            ("dragover", "linkMove"),
-            ("dragover", "copyMove"),
+        for (event, allowed, effect) in [
+            ("dragenter", "copy", "copy"),
+            ("dragover", "linkMove", "move"),
+            ("dragover", "copyMove", "move"),
         ] {
             expected_records.push(serde_json::json!({
-                "type":event,"allowed":allowed,"effect":"none","data":["","","",""],
+                "type":event,"allowed":allowed,"effect":effect,"data":["","","",""],
                 "types":entered_types,"items":entered_items,"files":[],"sourceSame":false,
                 "sourceClosed":["",2,2,"string","text/plain"]
             }));
         }
         expected_records.push(serde_json::json!({
-            "type":"drop","allowed":"copyMove","effect":"none",
+            "type":"drop","allowed":"copyMove","effect":"copy",
             "data":["drop-text","","","drop-metadata"],
             "types":["text/plain","application/x-drop","Files"],
             "items":[["string","text/plain"],["string","application/x-drop"],["file","application/octet-stream"]],
@@ -2080,13 +2080,13 @@ source.addEventListener('dragend',record);
         observed,
         serde_json::json!([
             [
-                ["dragenter", "a", null, true, true, 0, false, "", "none"],
+                ["dragenter", "a", null, true, true, 0, false, "", "copy"],
                 ["dragenter", "b", "a", true, true, 1, false, "", "copy"],
-                ["dragleave", "a", "b", false, false, 1, false, "", "copy"],
-                ["dragenter", "a", "b", true, true, 2, false, "", "none"],
+                ["dragleave", "a", "b", false, false, 1, false, "", "none"],
+                ["dragenter", "a", "b", true, true, 2, false, "", "copy"],
                 ["dragleave", "b", "a", false, false, 2, false, "", "none"],
-                ["dragover", "a", null, true, true, 3, false, "", "none"],
-                ["dragover", "a", null, true, true, 4, false, "", "none"],
+                ["dragover", "a", null, true, true, 3, false, "", "copy"],
+                ["dragover", "a", null, true, true, 4, false, "", "copy"],
                 [
                     "drop",
                     "a",
@@ -2096,7 +2096,7 @@ source.addEventListener('dragend',record);
                     5,
                     false,
                     "target-final",
-                    "none"
+                    "copy"
                 ],
                 ["dragend", "source", null, false, false, 6, true, "", "copy"]
             ],

@@ -1,8 +1,3 @@
-const DRAG_MODIFIER_ALT: u8 = 1;
-const DRAG_MODIFIER_CTRL: u8 = 2;
-const DRAG_MODIFIER_META: u8 = 4;
-const DRAG_MODIFIER_SHIFT: u8 = 8;
-
 /// Access granted to a drag data store while a native drag event is dispatched.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DragDataStoreMode {
@@ -23,25 +18,6 @@ impl DragDataStoreMode {
 
     pub fn can_write_data(self) -> bool {
         self == Self::ReadWrite
-    }
-}
-
-#[derive(Clone, Copy)]
-struct DragModifierState {
-    alt: bool,
-    ctrl: bool,
-    meta: bool,
-    shift: bool,
-}
-
-impl DragModifierState {
-    fn from_mask(modifiers: u8) -> Self {
-        Self {
-            alt: modifiers & DRAG_MODIFIER_ALT != 0,
-            ctrl: modifiers & DRAG_MODIFIER_CTRL != 0,
-            meta: modifiers & DRAG_MODIFIER_META != 0,
-            shift: modifiers & DRAG_MODIFIER_SHIFT != 0,
-        }
     }
 }
 
@@ -98,21 +74,6 @@ pub fn preferred_drop_effect_from_mask(mask: i32) -> &'static str {
         "link"
     } else {
         "none"
-    }
-}
-
-pub fn modifier_drop_effect(modifiers: u8) -> Option<&'static str> {
-    let state = DragModifierState::from_mask(modifiers);
-    // Match the CDP modifier bitmask policy used by DragEvent construction:
-    // explicit link gestures win, then copy gestures, then shift-move.
-    if state.alt || (state.ctrl && state.shift) {
-        Some("link")
-    } else if state.ctrl || state.meta {
-        Some("copy")
-    } else if state.shift {
-        Some("move")
-    } else {
-        None
     }
 }
 
@@ -268,28 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn drag_modifier_drop_effect_maps_cdp_modifier_masks_by_precedence() {
-        assert_eq!(modifier_drop_effect(0), None);
-        assert_eq!(modifier_drop_effect(DRAG_MODIFIER_CTRL), Some("copy"));
-        assert_eq!(modifier_drop_effect(DRAG_MODIFIER_META), Some("copy"));
-        assert_eq!(modifier_drop_effect(DRAG_MODIFIER_SHIFT), Some("move"));
-        assert_eq!(modifier_drop_effect(DRAG_MODIFIER_ALT), Some("link"));
-        assert_eq!(
-            modifier_drop_effect(DRAG_MODIFIER_CTRL | DRAG_MODIFIER_SHIFT),
-            Some("link")
-        );
-        assert_eq!(
-            modifier_drop_effect(DRAG_MODIFIER_ALT | DRAG_MODIFIER_META),
-            Some("link")
-        );
-        assert_eq!(
-            modifier_drop_effect(DRAG_MODIFIER_CTRL | DRAG_MODIFIER_META),
-            Some("copy")
-        );
-    }
-
-    #[test]
-    fn drag_modifier_drop_effect_respects_effect_allowed_filter() {
+    fn effect_allowed_restricts_requested_drop_operations() {
         assert!(drop_effect_allowed_by_effect_allowed(Some("all"), "copy"));
         assert!(drop_effect_allowed_by_effect_allowed(Some("all"), "link"));
         assert!(drop_effect_allowed_by_effect_allowed(Some("all"), "move"));

@@ -47,20 +47,24 @@ _INSTALL = """options => {
   for (const type of ['dragstart','drag','dragenter','dragover','dragleave','drop','dragend']) {
     document.addEventListener(type, event => {
       const dt=event.dataTransfer;
+      const initialEffect=dt.dropEffect;
       if(type==='dragstart') {
         dt.setData('text/plain','native-secret');
         dt.setData('application/x-native','native-only');
         if(options.sourceFile) dt.items.add(new File(['native-file-payload'],'source-file.txt',{type:'text/plain'}));
         dt.effectAllowed='copyMove';
       }
-      if(type==='dragover' && ['a','b'].includes(event.target.id)) event.preventDefault();
+      if(type==='dragover' && ['a','b'].includes(event.target.id)) {
+        if(options.overEffect) dt.dropEffect=options.overEffect;
+        event.preventDefault();
+      }
       if(type==='drop') event.preventDefault();
       const view={type,dt,items:dt.items,types:dt.types,files:dt.files,item:dt.items[0],
         fileItem:Array.from(dt.items).find(item=>item.kind==='file')};
       if(type==='dragstart') contract.sourceView=view;
       const record={type,target:node(event.target),relatedTarget:node(event.relatedTarget),
         cancelable:event.cancelable,dt:identity(dt),data:dt.getData('text/plain'),
-        types:Array.from(dt.types),allowed:dt.effectAllowed,effect:dt.dropEffect};
+        types:Array.from(dt.types),allowed:dt.effectAllowed,initialEffect,effect:dt.dropEffect};
       if(contract.sourceView) record.source=contract.sourceState();
       if(type==='drop') {
         record.oldViews=contract.views.filter(view=>['dragenter','dragover'].includes(view.type)).map(oldView);
@@ -122,10 +126,12 @@ async def _drag_step(page, session, kind: str, data: dict, x: int = 250) -> list
 
 @asynccontextmanager
 async def _board(state: SmokeState, *, native: bool = True, capture: bool = False,
-                 strings: bool = False, source_file: bool = False, page=None):
+                 strings: bool = False, source_file: bool = False,
+                 over_effect: str | None = None, page=None):
     page = state.page if page is None else page
     await page.set_content(_BOARD)
-    await page.evaluate(_INSTALL, {"capture": capture, "strings": strings, "sourceFile": source_file})
+    await page.evaluate(_INSTALL, {"capture": capture, "strings": strings,
+                                  "sourceFile": source_file, "overEffect": over_effect})
     await capture_layout(page)
     session = await new_cdp_session(page.context, page)
     intercepted = []
@@ -283,49 +289,175 @@ async def _target_contracts(state: SmokeState) -> None:
         events = [event for step in steps for event in step]
         for event in events:
             assert_equal(event["cancelable"], event["type"] != "dragleave", f"{event['type']} cancellation contract")
-            assert_equal(event["effect"], "none", "plain target event views start with no explicit dropEffect")
+            assert_equal(event["effect"], "none" if event["type"] == "dragleave" else "move",
+                         f"copyMove initializes {event['type']} with its phase's operation")
+
+    # Chrome 148 introduced source-operation initialization for enter/over;
+    # drop receives the operation negotiated by the preceding accepted over.
+    # See https://developer.chrome.com/release-notes/148.
+    for mask, allowed, effect in ((0, "none", "none"), (1, "copy", "copy"),
+                                  (2, "link", "link"), (16, "move", "move"),
+                                  (3, "copyLink", "copy"), (17, "copyMove", "move"),
+                                  (18, "linkMove", "move"), (19, "all", "copy"),
+                                  (-1, "all", "copy")):
+        async with _board(state, native=False) as (session, _):
+            packet = _data("operations", mask)
+            enter = await _drag_step(page, session, "dragEnter", packet)
+            over = await _drag_step(page, session, "dragOver", packet)
+            assert_equal([(event["type"], event["allowed"], event["initialEffect"]) for event in enter + over],
+                         [("dragenter", allowed, effect), ("dragover", allowed, effect)],
+                         f"mask {mask} initializes target operations from effectAllowed")
+
+    for operation in ("copy", "link", "move"):
+        async with _board(state, over_effect=operation) as (session, _):
+            packet = _data("negotiated", 19)
+            await _drag_step(page, session, "dragEnter", packet)
+            over = await _drag_step(page, session, "dragOver", packet)
+            assert_equal([(event["initialEffect"], event["effect"]) for event in over],
+                         [("copy", operation)], f"dragover can negotiate {operation} from all operations")
+            drop = await _drag_step(page, session, "drop", packet)
+            assert_equal([(event["type"], event["initialEffect"], event["effect"]) for event in drop],
+                         [("dragover", "copy", operation), ("drop", operation, operation)],
+                         f"drop preserves the accepted {operation} operation")
+            assert_equal([event["effect"] for event in await _events(page) if event["type"] == "dragend"],
+                         [operation], f"a handled {operation} drop reports its negotiated source result")
     state.record("drag_target_transition_order_related_target_and_views")
 
 
 async def _pointer_contracts(state: SmokeState) -> None:
+    fixture = (Path(__file__).parents[1] / "fixtures/drag-pointer-suppression.html").read_text(encoding="utf-8")
+    for capture in (False, True):
+        for resume_same_target in (True, False):
+            await _pointer_contract_case(state, fixture, capture, resume_same_target)
+    state.record("native_drag_pointer_cancel_capture_and_stream_recovery")
+
+
+async def _pointer_contract_case(state: SmokeState, fixture: str,
+                                 capture: bool, resume_same_target: bool) -> None:
+    label = f"capture={capture}, resume={'same' if resume_same_target else 'different'}"
     async with AsyncExitStack() as cleanup:
-        # Give pointer capture its own Page, independent of the earlier external
-        # drag cases and the pointer streams those commands created.
         page = await state.page.context.new_page()
         cleanup.push_async_callback(page.close)
-        async with _board(state, capture=True, page=page) as (session, intercepted):
+        await page.set_content(fixture)
+        await page.evaluate("options => window.installPointerSuppression(options)", {"capture": capture})
+        await page.evaluate("""() => {
+          const state=window.__pointerSuppression;
+          const name=node=>node ? node.id || node.nodeName : null;
+          for(const type of ['pointerover','pointerenter','mouseover','mouseenter','mouseout','mouseleave'])
+            document.addEventListener(type,event=>state.events.push({
+              type,target:name(event.target),related:name(event.relatedTarget),pointerId:event.pointerId ?? null,
+              buttons:event.buttons,bubbles:event.bubbles,cancelable:event.cancelable,
+              trusted:event.isTrusted,dragging:state.started,
+            }),true);
+          state.endEffects=[];
+          document.addEventListener('dragend',event=>state.endEffects.push(event.dataTransfer.dropEffect));
+        }""")
+        await capture_layout(page)
+        session = await new_cdp_session(page.context, page)
+        cleanup.push_async_callback(session.detach)
+        intercepted = []
+        ready = asyncio.Event()
+
+        def on_intercepted(event: dict) -> None:
+            intercepted.append(event)
+            ready.set()
+
+        session.on("Input.dragIntercepted", on_intercepted)
+        await session.send("Input.setInterceptDrags", {"enabled": True})
+        try:
+            await _mouse(session, "mouseMoved", 40, 40, 0)
+            await _mouse(session, "mousePressed", 40, 40, 1)
+            await _mouse(session, "mouseMoved", 55, 55, 1)
+            await asyncio.wait_for(ready.wait(), timeout=5)
             await page.wait_for_function(
-                "() => window.__dragContract.events.some(event => event.type === 'lostpointercapture')",
+                "() => window.__pointerSuppression.events.some(event => event.dragging && "
+                "event.type === 'pointerleave' && event.target === 'HTML')",
                 timeout=5_000,
             )
-            initial = await _events(page)
-            start = next(index for index, event in enumerate(initial) if event["type"] == "dragstart")
-            assert_equal([event["type"] for event in initial[start:start + 3]],
-                         ["dragstart", "pointercancel", "lostpointercapture"],
-                         "native drag cancels the pointer before releasing capture")
-            assert_equal([(event["buttons"], event["cancelable"]) for event in initial[start + 1:start + 3]],
-                         [(0, False), (0, False)], "pointer cancellation and capture loss have no pressed buttons")
-            assert_equal(any(event["type"] == "gotpointercapture" for event in initial[:start]), True,
-                         "the source actually acquired capture before dragging")
-            before = len(initial)
+            initial = await page.evaluate("() => window.__pointerSuppression.events")
+            target = "source" if capture else "leaf"
+            leave_chain = ["source", "outer", "BODY", "HTML"]
+            if not capture:
+                leave_chain.insert(0, "leaf")
+            # Assert the complete element ancestor chain. Document event targets
+            # are outside this element-boundary contract.
+            suppression = [event for event in initial if event["dragging"]
+                           and event["target"] != "#document" and event["type"] != "dragstart"]
+            expected = [("pointercancel", target)]
+            if capture:
+                expected.append(("lostpointercapture", target))
+            expected.append(("pointerout", target))
+            expected.extend(("pointerleave", ancestor) for ancestor in leave_chain)
+            assert_equal([(event["type"], event["target"]) for event in suppression], expected,
+                         f"{label}: native startup suppresses the pointer before any source dragleave")
+            pointer_id = next(event["pointerId"] for event in initial if event["type"] == "pointerdown")
+            assert_equal([(event["buttons"], event["bubbles"], event["cancelable"],
+                           event["trusted"], event["related"], event["pointerId"]) for event in suppression],
+                         [(0, kind != "pointerleave", kind == "pointerout", True, None, pointer_id)
+                          for kind, _ in expected],
+                         f"{label}: suppressed events retain pointer identity and native flags")
+            assert_equal(any(event["type"] == "gotpointercapture" for event in initial), capture,
+                         f"{label}: capture was acquired only in the capture scenario")
+
+            # Replay the native packet at the original hit, then leave the
+            # source. The fixture checks suppression was already observable.
+            packet = intercepted[0]["data"]
+            await session.send("Input.dispatchDragEvent", {
+                "type": "dragEnter", "x": 55, "y": 55, "data": packet,
+            })
+            before = await page.evaluate("() => window.__pointerSuppression.events.length")
             await _mouse(session, "mouseMoved", 60, 50, 1)
             await _mouse(session, "mouseMoved", 250, 40, 1)
-            ordinary = [event["type"] for event in (await _events(page))[before:]
-                        if event["type"].startswith("pointer") or event["type"] in ("mousemove", "mouseup")]
-            assert_equal(ordinary, [], "an active native drag suppresses the ordinary pointer/mouse stream")
-            await _drag(session, "dragCancel", intercepted[0]["data"])
-            end = [event for event in await _events(page) if event["type"] == "dragend"]
-            assert_equal([(event["effect"], event["cancelable"]) for event in end], [("none", False)],
-                         "effective cancellation ends the source exactly once")
-            before = len(await _events(page))
-            await _mouse(session, "mouseMoved", 60, 50, 1)
-            await _mouse(session, "mouseReleased", 60, 50, 0)
-            resumed = [event["type"] for event in (await _events(page))[before:]]
-            assert_equal(resumed, ["pointermove", "mousemove", "pointerup", "mouseup"],
-                         "a completed dragCancel restores ordinary input even before the held button is released")
-            assert_equal(len(intercepted), 1, "held movement after cancellation cannot start a second drag")
+            active = await page.evaluate("start => window.__pointerSuppression.events.slice(start)", before)
+            assert_equal([event["type"] for event in active
+                          if event["type"].startswith(("pointer", "mouse"))], [],
+                         f"{label}: an active native drag suppresses pointer and mouse input")
+            await _drag(session, "dragOver", packet)
+            assert_equal(await page.evaluate("() => window.__pointerSuppression.dragLeaveSawSuppression"), True,
+                         f"{label}: source dragleave observes startup pointer suppression")
+            await _drag(session, "dragCancel", packet)
+            ended = await page.evaluate("() => window.__pointerSuppression")
+            assert_equal(ended["endEffects"], ["none"], f"{label}: cancellation ends the source exactly once")
+            assert_equal([(event["bubbles"], event["cancelable"]) for event in ended["events"]
+                          if event["type"] == "dragend"], [(True, False)],
+                         f"{label}: dragend is bubbling and noncancelable")
 
-    state.record("native_drag_pointer_cancel_capture_and_stream_recovery")
+            x, y = (60, 50) if resume_same_target else (250, 40)
+            resumed_target = "leaf" if resume_same_target else "target"
+            before = len(ended["events"])
+            await _mouse(session, "mouseMoved", x, y, 1)
+            await _mouse(session, "mouseReleased", x, y, 0)
+            resumed = await page.evaluate("start => window.__pointerSuppression.events.slice(start)", before)
+            enter_chain = (["HTML", "BODY", "outer", "source", "leaf"] if resume_same_target
+                           else ["HTML", "BODY", "target"])
+            assert_equal([(event["type"], event["target"], event["related"]) for event in resumed
+                          if event["type"] in ("pointerover", "pointerenter", "pointerout", "pointerleave")
+                          and event["target"] != "#document"],
+                         [("pointerover", resumed_target, None)]
+                         + [("pointerenter", ancestor, None) for ancestor in enter_chain],
+                         f"{label}: the recovered pointer enters from outside without repeating old leaves")
+            if resume_same_target:
+                mouse_boundaries = ([("mouseout", "source", "leaf"), ("mouseover", "leaf", "source"),
+                                     ("mouseenter", "leaf", "source")] if capture else [])
+            else:
+                mouse_boundaries = [("mouseout", target, "target"), ("mouseleave", target, "target"),
+                                    ("mouseover", "target", target), ("mouseenter", "target", target)]
+            # Legacy mouse ancestor dispatch is a separate hover contract.
+            # Here retain exact old/new target boundaries and reject duplicates;
+            # the pointer contract above still checks every element ancestor.
+            assert_equal([(event["type"], event["target"], event["related"]) for event in resumed
+                          if event["type"] in ("mouseover", "mouseenter", "mouseout", "mouseleave")
+                          and event["target"] in (target, resumed_target)],
+                         mouse_boundaries, f"{label}: suppression preserves the separate legacy mouse hover")
+            assert_equal([event["type"] for event in resumed
+                          if event["type"] in ("pointermove", "mousemove", "pointerup", "mouseup")],
+                         ["pointermove", "mousemove", "pointerup", "mouseup"],
+                         f"{label}: completed cancellation restores held movement and release")
+            assert_equal(len(intercepted), 1, f"{label}: held movement cannot start another native drag")
+        finally:
+            await _drag(session, "dragCancel", _data(None))
+            await _mouse(session, "mouseReleased", 250, 40, 0)
+            await session.send("Input.setInterceptDrags", {"enabled": False})
 
 
 async def run_drag_protocol_contracts(state: SmokeState) -> None:

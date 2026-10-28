@@ -21,7 +21,6 @@ const DATA_TRANSFER_FILES_SLOT: &str = "__lmDataTransferFiles";
 const DATA_TRANSFER_ITEMS_SLOT: &str = "__lmDataTransferItems";
 const DATA_TRANSFER_TYPES_SLOT: &str = "__lmDataTransferTypes";
 const DATA_TRANSFER_DROP_EFFECT_SLOT: &str = "__lmDataTransferDropEffect";
-const DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT: &str = "__lmDataTransferDropEffectInitialized";
 const DATA_TRANSFER_EFFECT_ALLOWED_SLOT: &str = "__lmDataTransferEffectAllowed";
 const DATA_TRANSFER_STORE_SLOT: &str = "__lmDataTransferStore";
 const DATA_TRANSFER_STORE_ITEMS_SLOT: &str = "__lmDragDataStoreItems";
@@ -68,8 +67,6 @@ struct DataTransferObjectDeclaration<'s> {
     types: (),
     #[webapi(slot = DATA_TRANSFER_DROP_EFFECT_SLOT, constructor_default = "none")]
     drop_effect: &'static str,
-    #[webapi(slot = DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT, constructor_default = false)]
-    drop_effect_initialized: bool,
     #[webapi(slot = DATA_TRANSFER_EFFECT_ALLOWED_SLOT, constructor_default = "none")]
     effect_allowed: &'static str,
     #[webapi(slot = DATA_TRANSFER_MODE_SLOT, constructor_default = 0.0)]
@@ -1163,13 +1160,6 @@ pub(crate) fn native_data_transfer_drop_effect<'s>(
         .unwrap_or_else(|| "none".to_owned())
 }
 
-pub(crate) fn native_data_transfer_drop_effect_is_initialized<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    view: v8::Local<'s, v8::Object>,
-) -> bool {
-    private_bool_property(scope, view, DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT).unwrap_or(false)
-}
-
 fn build_data_transfer_item_list_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -1579,24 +1569,7 @@ fn data_transfer_drop_effect_setter<'s>(
             return;
         }
     };
-    set_script_drag_drop_effect(scope, args.this(), &value);
-}
-
-fn set_script_drag_drop_effect<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    view: v8::Local<'s, v8::Object>,
-    value: &str,
-) {
-    if valid_drop_effect(value) {
-        set_private_string(scope, view, DATA_TRANSFER_DROP_EFFECT_SLOT, value);
-        let initialized = v8::Boolean::new(scope, true);
-        set_private_value(
-            scope,
-            view,
-            DATA_TRANSFER_DROP_EFFECT_INITIALIZED_SLOT,
-            initialized.into(),
-        );
-    }
+    native_set_drag_drop_effect(scope, args.this(), &value);
 }
 
 fn data_transfer_effect_allowed_getter<'s>(
@@ -2393,27 +2366,17 @@ mod tests {
         with_transfer_scope(|scope| {
             let store = create_native_drag_data_store(scope).unwrap();
             let first =
-                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::Protected, "none")
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::Protected, "copy")
                     .unwrap();
-            native_set_drag_drop_effect(scope, first, "copy");
-            assert!(!native_data_transfer_drop_effect_is_initialized(
-                scope, first
-            ));
-            set_script_drag_drop_effect(scope, first, "none");
-            assert!(native_data_transfer_drop_effect_is_initialized(
-                scope, first
-            ));
+            assert_eq!(native_data_transfer_drop_effect(scope, first), "copy");
+            native_set_drag_drop_effect(scope, first, "none");
             assert_eq!(finish_drag_data_transfer_view(scope, first), "none");
             let next =
-                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::Protected, "none")
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::Protected, "move")
                     .unwrap();
-            assert!(!native_data_transfer_drop_effect_is_initialized(
-                scope, next
-            ));
-            set_script_drag_drop_effect(scope, next, "invalid");
-            assert!(!native_data_transfer_drop_effect_is_initialized(
-                scope, next
-            ));
+            assert_eq!(native_data_transfer_drop_effect(scope, next), "move");
+            native_set_drag_drop_effect(scope, next, "invalid");
+            assert_eq!(finish_drag_data_transfer_view(scope, next), "move");
         });
     }
 }

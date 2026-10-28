@@ -376,15 +376,23 @@ fn iframe_native_drag_preserves_screen_coordinates_with_offset_and_scale() {
         let events: Vec<serde_json::Value> =
             serde_json::from_str(&vm.eval("JSON.stringify(__dragCoordinates)").unwrap()).unwrap();
         assert_eq!(events.len(), 3, "scale {scale}: {events:?}");
+        // Chromium's dragstart retains the press position. The first move
+        // enters the target; release revalidates it with a final dragover.
         for (event, (event_type, target, client_y)) in events.iter().zip([
-            ("dragstart", "source", 120.0),
-            ("dragover", "target", 120.0),
+            ("dragstart", "source", 20.0),
+            ("dragover", "target", 130.0),
             ("drop", "target", 130.0),
         ]) {
             assert_eq!(event["type"], event_type);
             assert_eq!(event["target"], target);
-            assert!((event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1);
-            assert!((event["clientY"].as_f64().unwrap() - client_y).abs() < 0.1);
+            assert!(
+                (event["clientX"].as_f64().unwrap() - 20.0).abs() < 0.1,
+                "scale {scale}: {event}"
+            );
+            assert!(
+                (event["clientY"].as_f64().unwrap() - client_y).abs() < 0.1,
+                "scale {scale}: {event}"
+            );
             assert_eq!(event["screenX"], 100.0 + 20.0 * scale);
             assert_eq!(event["screenY"], 120.0 + client_y * scale);
         }
