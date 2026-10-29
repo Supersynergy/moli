@@ -129,7 +129,10 @@ mod performance_observer_runtime;
 mod performance_runtime;
 mod range;
 mod range_algorithms;
-pub(crate) use range_algorithms::document_selection_drag_text_at_point;
+pub(crate) use range_algorithms::{
+    NativeSelectionDragSnapshot, document_selection_drag_snapshot_at_point,
+    selection_text_element_is_hidden,
+};
 mod range_live;
 mod range_surface;
 mod resize_observer_runtime;

@@ -384,7 +384,18 @@ fn replace_selected_dom_range_with_html<'s>(
     selection: v8::Local<'s, v8::Object>,
     replacement_html: &str,
 ) -> bool {
-    let Some(range) = selected_dom_range(scope, target, selection) else {
+    let Some(range) = selected_dom_range(scope, target, selection).or_else(|| {
+        // A native selection drag can leave the Selection at its source.
+        // Preserve a range inside the editing host; otherwise insert the HTML
+        // at the host's end, just as the text fallback appends there.
+        let document = object_property_as_object(scope, target, "ownerDocument")?;
+        let range = call_object_method(scope, document, "createRange", &[])
+            .and_then(|range| v8::Local::<v8::Object>::try_from(range).ok())?;
+        call_object_method(scope, range, "selectNodeContents", &[target.into()])?;
+        let at_start = v8::Boolean::new(scope, false);
+        call_object_method(scope, range, "collapse", &[at_start.into()])?;
+        Some(range)
+    }) else {
         return false;
     };
     let Some(html) = v8_string(scope, replacement_html) else {

@@ -6,6 +6,9 @@ use moli_file_api::data_transfer::{
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod drag_source;
+use drag_source::dispatch_drag_source_event;
+
 use super::input_dispatch_outcome;
 use super::input_helpers::{mouse_button_mask, single_changed_mouse_button};
 use super::inspector::{
@@ -24,7 +27,7 @@ use crate::native_bridge::element::{
     InputEventCoordinates, TextEditInputType, TouchEventPoint,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    construct_drag_event, construct_drag_event_with_related_target, construct_keyboard_event,
+    construct_drag_event_with_related_target, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
@@ -42,7 +45,7 @@ use crate::native_bridge::{
     CurrentInputEvent, CurrentInputEventScope, MouseReleaseFollowUp, PointerCaptureDispatchEvent,
 };
 use crate::runtime::{
-    RendererDragData, RendererDragDataItem, RendererInputDispatchOutcome, RendererInterceptedDrag,
+    RendererDragData, RendererInputDispatchOutcome, RendererInterceptedDrag,
     RendererPointerEventProperties, RendererTouchPoint,
 };
 use crate::util::{
@@ -81,6 +84,76 @@ fn frozen_frame_transform(
     })
 }
 
+fn root_to_document_frame(
+    runtime: &crate::native_bridge::JsContextHost,
+    document: DomHandle,
+) -> Option<moli_layout::LayoutTransform2D> {
+    let dom = runtime.dom_host();
+    let root_document = dom.document_handle();
+    if document == root_document {
+        return Some(moli_layout::LayoutTransform2D::IDENTITY);
+    }
+    let target_root = dom.dom().document_element_handle_for_document(document)?;
+    runtime
+        .with_latest_layout_tree_for_document(root_document, |tree| {
+            frozen_frame_transform(tree, target_root)
+        })
+        .flatten()
+}
+
+fn drag_related_target_in_document(
+    runtime: &crate::native_bridge::JsContextHost,
+    document: DomHandle,
+    mut related: DomHandle,
+) -> Option<DomHandle> {
+    loop {
+        let related_document = runtime.dom_host().owner_document_handle(related)?;
+        if related_document == document {
+            return Some(related);
+        }
+        related = runtime.child_browsing_context_host_for_document_handle(related_document)?;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_native_drag_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    event_type: &str,
+    target: DomHandle,
+    related: Option<DomHandle>,
+    coordinates: InputEventCoordinates,
+    transfer: v8::Local<'s, v8::Object>,
+    modifiers: u8,
+) -> Option<crate::native_bridge::element::NodePublicEventDispatchOutcome> {
+    let (coordinates, related) = {
+        let runtime = unsafe { &*runtime_ptr };
+        let dom = runtime.dom_host();
+        let document = dom.owner_document_handle(target)?;
+        let transform = root_to_document_frame(runtime, document)?;
+        let client = transform.map_point(moli_layout::LayoutPoint::new(
+            coordinates.screen_x as f32,
+            coordinates.screen_y as f32,
+        ));
+        let related =
+            related.and_then(|related| drag_related_target_in_document(runtime, document, related));
+        (
+            coordinates.with_client(f64::from(client.x), f64::from(client.y)),
+            related,
+        )
+    };
+    let related = related_target_value(scope, related);
+    let event = construct_drag_event_with_related_target(
+        scope,
+        event_type,
+        coordinates,
+        transfer.into(),
+        related,
+        modifiers,
+    )?;
+    Some(dispatch_public_event(scope, runtime_ptr, target, event))
+}
+
 #[derive(Clone, Copy)]
 enum DragFinishReason {
     Dropped,
@@ -105,23 +178,28 @@ fn finish_drag_session<'s>(
         reason,
         DragFinishReason::Canceled | DragFinishReason::Rejected
     ) && let Some(target) = session.target
-        && let Some(data_transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
+    {
+        if !session.intercepted {
+            dispatch_drag_source_event(scope, runtime_ptr, &session, coordinates, modifiers);
+        }
+        if let Some(data_transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
             scope,
             &session.data_store,
             DragDataStoreMode::Protected,
             "none",
-        )
-    {
-        if let Some(event) = construct_drag_event(
-            scope,
-            "dragleave",
-            coordinates,
-            data_transfer.into(),
-            modifiers,
         ) {
-            let _ = dispatch_public_event(scope, runtime_ptr, target, event);
+            let _ = dispatch_native_drag_event(
+                scope,
+                runtime_ptr,
+                "dragleave",
+                target,
+                None,
+                coordinates,
+                data_transfer,
+                modifiers,
+            );
+            crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
         }
-        crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
     }
     if let Some(source) = session.source
         && let Some(source_transfer) = session.source_transfer.as_ref()
@@ -136,15 +214,16 @@ fn finish_drag_session<'s>(
             "none"
         };
         crate::context_bootstrap::native_set_drag_drop_effect(scope, data_transfer, effect);
-        if let Some(event) = construct_drag_event(
+        let _ = dispatch_native_drag_event(
             scope,
+            runtime_ptr,
             "dragend",
+            source,
+            None,
             coordinates,
-            data_transfer.into(),
+            data_transfer,
             modifiers,
-        ) {
-            let _ = dispatch_public_event(scope, runtime_ptr, source, event);
-        }
+        );
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, data_transfer);
     }
     unsafe { &mut *runtime_ptr }.clear_mouse_press();
@@ -198,6 +277,9 @@ fn update_drag_target<'s>(
             .dom_host()
             .owner_document_handle(target)
     });
+    if target.is_some() && (session.target != target || !session.only_drag_over_next) {
+        dispatch_drag_source_event(scope, runtime_ptr, session, coordinates, modifiers);
+    }
     let Some(transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
         scope,
         &session.data_store,
@@ -214,42 +296,51 @@ fn update_drag_target<'s>(
     );
     let mut operation = None;
     if session.target != target {
-        if let Some(target) = target {
-            let related = related_target_value(scope, session.target);
-            if let Some(event) = construct_drag_event_with_related_target(
+        if let Some(target) = target
+            && let Some(dispatched) = dispatch_native_drag_event(
                 scope,
+                runtime_ptr,
                 "dragenter",
+                target,
+                session.target,
                 coordinates,
-                transfer.into(),
-                related,
+                transfer,
                 modifiers,
-            ) {
-                let canceled =
-                    !dispatch_public_event(scope, runtime_ptr, target, event).allows_default();
-                operation = accepted_drag_operation(scope, runtime_ptr, target, transfer, canceled);
-            }
+            )
+        {
+            let canceled = !dispatched.allows_default();
+            operation = accepted_drag_operation(scope, runtime_ptr, target, transfer, canceled);
         }
         if let Some(previous) = session.target {
             crate::context_bootstrap::native_set_drag_drop_effect(scope, transfer, "none");
-            let related = related_target_value(scope, target);
-            if let Some(event) = construct_drag_event_with_related_target(
+            let _ = dispatch_native_drag_event(
                 scope,
+                runtime_ptr,
                 "dragleave",
+                previous,
+                target,
                 coordinates,
-                transfer.into(),
-                related,
+                transfer,
                 modifiers,
-            ) {
-                let _ = dispatch_public_event(scope, runtime_ptr, previous, event);
-            }
+            );
         }
         session.target = target;
+        session.only_drag_over_next = target.is_some();
     } else if let Some(target) = target
-        && let Some(event) =
-            construct_drag_event(scope, "dragover", coordinates, transfer.into(), modifiers)
+        && let Some(dispatched) = dispatch_native_drag_event(
+            scope,
+            runtime_ptr,
+            "dragover",
+            target,
+            None,
+            coordinates,
+            transfer,
+            modifiers,
+        )
     {
-        let canceled = !dispatch_public_event(scope, runtime_ptr, target, event).allows_default();
+        let canceled = !dispatched.allows_default();
         operation = accepted_drag_operation(scope, runtime_ptr, target, transfer, canceled);
+        session.only_drag_over_next = false;
     }
     crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
     if !target
@@ -260,6 +351,7 @@ fn update_drag_target<'s>(
         })
     {
         session.target = None;
+        session.only_drag_over_next = false;
         return;
     }
     if let Some(operation) = operation {
@@ -293,12 +385,20 @@ fn drop_drag_target<'s>(
     ) else {
         return DragFinishReason::Rejected;
     };
-    let Some(event) = construct_drag_event(scope, "drop", coordinates, transfer.into(), modifiers)
-    else {
+    let Some(dispatched) = dispatch_native_drag_event(
+        scope,
+        runtime_ptr,
+        "drop",
+        target,
+        None,
+        coordinates,
+        transfer,
+        modifiers,
+    ) else {
         crate::context_bootstrap::finish_drag_data_transfer_view(scope, transfer);
         return DragFinishReason::Rejected;
     };
-    let default_allowed = dispatch_public_event(scope, runtime_ptr, target, event).allows_default();
+    let default_allowed = dispatched.allows_default();
     let requested_effect =
         crate::context_bootstrap::native_data_transfer_drop_effect(scope, transfer);
     let allowed = crate::context_bootstrap::native_data_transfer_effect_allowed(scope, transfer);
@@ -334,24 +434,6 @@ fn drop_drag_target<'s>(
         session.drop_effect = "none".to_owned();
         DragFinishReason::DropFailed
     }
-}
-
-/// Only text whose selected ink contains the original press starts a selection
-/// drag. An unrelated selection elsewhere in the document is not a source.
-fn selected_drag_text(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
-    handle: DomHandle,
-    x: f64,
-    y: f64,
-) -> Option<String> {
-    crate::context_bootstrap::document_selection_drag_text_at_point(
-        scope,
-        runtime_ptr,
-        handle,
-        x,
-        y,
-    )
 }
 
 fn native_drag_source(
@@ -392,42 +474,22 @@ fn native_drag_source(
             .parent_node(handle)
             .or_else(|| host.shadow_root_host(handle));
     }
-    let mut data = RendererDragData {
-        items: Vec::new(),
-        files: Vec::new(),
-        directories: Vec::new(),
-        drag_operations_mask: 19,
-    };
     if candidate.is_none_or(|(_, attribute)| attribute != Some("src"))
-        && let Some(text) =
-            selected_drag_text(scope, runtime_ptr, gesture.handle, gesture.x, gesture.y)
+        && let Some(data) = super::native_drag_data::selection_drag_data_at_point(
+            scope,
+            runtime_ptr,
+            gesture.handle,
+            gesture.x,
+            gesture.y,
+        )
     {
-        data.items.push(RendererDragDataItem {
-            mime_type: "text/plain".to_owned(),
-            data: text,
-            title: None,
-            base_url: None,
-        });
         return Some((gesture.handle, data));
     }
-    let (source, attribute) = candidate?;
-    if let Some(attribute) = attribute {
-        let element = host.node(source)?.as_element()?;
-        if let Some(raw) = element.attribute_ns("", attribute)
-            && let Some(document) = host.owner_document_handle(source)
-            && let Ok(url) = runtime.document_base_url_for_handle(document).join(raw)
-        {
-            for mime_type in ["text/uri-list", "text/plain"] {
-                data.items.push(RendererDragDataItem {
-                    mime_type: mime_type.to_owned(),
-                    data: url.to_string(),
-                    title: None,
-                    base_url: None,
-                });
-            }
-        }
-    }
-    Some((source, data))
+    let (source, _) = candidate?;
+    Some((
+        source,
+        super::native_drag_data::element_drag_data(runtime, source),
+    ))
 }
 
 fn tracks_mouse_hover_for_event(event_name: &str) -> bool {
@@ -930,20 +992,10 @@ impl ScriptVm {
         {
             return Ok(hit.root_to_frame);
         }
-        if document == self.document_runtime.document_handle() {
-            return Ok(moli_layout::LayoutTransform2D::IDENTITY);
-        }
         // Capture keeps its own frame even when the physical hit moves out of
         // that frame. Read the same frozen content box and inverse transform
         // used by hit testing, without requiring the point to hit the iframe.
-        if let Some(target_root) = dom.dom().document_element_handle_for_document(document)
-            && let Some(transform) = runtime
-                .with_latest_layout_tree_for_document(
-                    self.document_runtime.document_handle(),
-                    |tree| frozen_frame_transform(tree, target_root),
-                )
-                .flatten()
-        {
+        if let Some(transform) = root_to_document_frame(&runtime, document) {
             return Ok(transform);
         }
         if self
@@ -1603,17 +1655,17 @@ impl ScriptVm {
                 let source_document = unsafe { &*runtime_ptr }
                     .dom_host()
                     .owner_document_handle(drag_start_handle);
-                let allowed = construct_drag_event(
+                let allowed = dispatch_native_drag_event(
                     scope,
+                    runtime_ptr,
                     "dragstart",
+                    drag_start_handle,
+                    None,
                     start_coordinates,
-                    data_transfer.into(),
+                    data_transfer,
                     modifiers,
                 )
-                .is_some_and(|event| {
-                    dispatch_public_event(scope, runtime_ptr, drag_start_handle, event)
-                        .allows_default()
-                });
+                .is_some_and(|outcome| outcome.allows_default());
                 let (items, drag_operations_mask) =
                     crate::context_bootstrap::read_string_drag_data(scope, &data_store);
                 let source_transfer = v8::Global::new(scope, data_transfer);
@@ -1638,6 +1690,7 @@ impl ScriptVm {
                         source: Some(drag_start_handle),
                         intercepted: intercept_drags,
                         target: None,
+                        only_drag_over_next: false,
                         coordinates,
                         modifiers,
                     });
@@ -2479,6 +2532,7 @@ impl ScriptVm {
                     source: None,
                     intercepted: false,
                     target: None,
+                    only_drag_over_next: false,
                     coordinates,
                     modifiers,
                 });

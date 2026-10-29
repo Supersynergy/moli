@@ -1551,9 +1551,13 @@ const rect=range.getBoundingClientRect();JSON.stringify([rect.left+2,rect.top+2]
     let drag = dispatch_drag_mouse(&mut vm, point[0] + 5.0, point[1], "mousemove", true)
         .intercepted_drag
         .expect("selected text is a native drag source");
-    assert_eq!(drag.items.len(), 1);
-    assert_eq!(drag.items[0].mime_type, "text/plain");
-    assert_eq!(drag.items[0].data, "selected");
+    let plain = drag
+        .items
+        .iter()
+        .find(|item| item.mime_type == "text/plain")
+        .expect("selected text supplies a plain-text representation");
+    assert_eq!(plain.data, "selected");
+    assert!(drag.items.iter().any(|item| item.mime_type == "text/html"));
 }
 
 #[test]
@@ -2156,9 +2160,13 @@ JSON.stringify([selectedText,[rect.left+2,rect.top+2],source.textContent]);
     let drag = dispatch_drag_mouse(&mut vm, point[0] + 5.0, point[1], "mousemove", true)
         .intercepted_drag
         .expect("visible selection starts a native drag");
-    assert_eq!(drag.items.len(), 1);
-    assert_eq!(drag.items[0].mime_type, "text/plain");
-    assert_eq!(drag.items[0].data, selected_text);
+    let plain = drag
+        .items
+        .iter()
+        .find(|item| item.mime_type == "text/plain")
+        .expect("selected text supplies a plain-text representation");
+    assert_eq!(plain.data, selected_text);
+    assert!(drag.items.iter().any(|item| item.mime_type == "text/html"));
     vm.cancel_dragging().expect("finish selected text drag");
     assert_eq!(
         vm.eval("String(window.__selectionStringCalls)")

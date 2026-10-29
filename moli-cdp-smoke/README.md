@@ -199,12 +199,44 @@ the existing browser for other groups. All default groups still run under
 `--strict-full-suite`. The `dom-input` group checks drag eligibility and
 movement thresholds, native `effectAllowed: "uninitialized"`, frontend-session
 isolation, cancellation, protected dragenter/dragover data, client-edited replay
-payloads, and accepted or rejected drops. Chromium reports all operations as
-`-1`, while Moli reports the supported mask `19`; the shared assertion compares
-the copy/link/move bits. Default text drops into writable input, textarea, and
+payloads, and accepted or rejected drops. Both browsers report all operations
+as `-1` at the CDP boundary; Moli keeps the supported mask `19` internally.
+Default text drops into writable input, textarea, and
 contenteditable targets need no author-canceled dragover. They use copy for a
 draggable element source: `copyMove` allows the drop, while `linkMove` rejects it.
 The same scenarios run against Moli's current build.
+
+The native source scenarios also compare selected rich text, links and linked
+images through `dragstart`, raw `Input.dragIntercepted` data, replay and the
+resulting editable HTML. They check URL titles, HTML base URLs, absolute markup
+URLs, author replacements and the exact operation mask. Moli retains existing
+string-item order when `setData()` replaces a value; Chromium removes and
+appends the replacement. Each engine's intercepted order must match its own
+`dragstart` string types, and both must clear obsolete native metadata.
+Selection HTML preserves selected DOM formatting and excludes hidden elements;
+it does not synthesize Chromium's computed-style clipboard annotations.
+Native image drags currently supply URL and HTML data, without manufacturing an
+image File from decoded pixels. Original encoded response bytes and filename
+metadata are required before that payload can be supported.
+
+Cross-document tests cover parent/child and sibling-frame transitions, including
+scaled frames. Related targets are retargeted to an iframe host in the receiving
+Document, or become null when no such host exists. Moli projects drag coordinates
+into the receiving Document, including source `drag` and `dragend`; Chromium 156
+uses the destination event manager's client coordinates for those source events.
+The shared scenarios assert these values separately instead of treating them as
+identical. Source `drag` follows destination updates: enter emits it, the first
+following over does not repeat it, and subsequent over updates emit it again.
+Intercepted idle time has no autonomous drag timer, and canceling a source
+`drag` event does not cancel the session. Like Chromium, source events reuse the
+source's protected DataTransfer until dragend; repeated drag callbacks preserve
+its identity, original metadata and author-set dropEffect. Target event views
+remain independent, and finishing the source disables every retained reference.
+
+Cancellation tests retain Moli's explicit cleanup contract: both intercepted
+`Input.cancelDragging` and `dragCancel` leave the target and end the source once.
+Chromium 156 leaves intercepted `Input.cancelDragging` idle and sends only
+`dragend` for `dragCancel`; the oracle asserts this difference explicitly.
 
 Protected enter/over views start with the preferred operation allowed by the
 source; leave uses `none`, and drop receives the negotiated operation. CDP

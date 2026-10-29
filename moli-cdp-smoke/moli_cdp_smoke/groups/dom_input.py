@@ -16,6 +16,7 @@ from .drop_input import run_drop_input_workflow
 from ..assertions import SmokeError, assert_equal, wait_until
 from ..progress import await_with_progress
 from .drag_interception import run_drag_interception_workflows
+from .native_drag_semantics import run_native_drag_semantics
 
 
 async def run_dom_input_group(state: SmokeState) -> None:
@@ -239,6 +240,7 @@ async def run_dom_input_group(state: SmokeState) -> None:
 
     await run_locator_input_workflows(state)
     await run_drag_interception_workflows(state)
+    await run_native_drag_semantics(state)
     await run_user_facing_locator_workflows(state)
     await run_role_selector_state_workflows(state)
     await run_playwright_expect_matcher_workflows(state)

@@ -106,8 +106,7 @@ async def run_drag_interception_workflows(state: SmokeState) -> None:
         await mouse(first, "mouseMoved", 50, 50, 1)
         await asyncio.wait_for(ready["first"].wait(), timeout=5)
         data = intercepted["first"][-1]["data"]
-        # Chromium encodes all operations as -1; Moli uses the supported bits 19.
-        assert_equal(data["dragOperationsMask"] & 19, 19, "native default allows copy/link/move")
+        assert_equal(data["dragOperationsMask"], -1, "native default uses Chromium's all-operations wire value")
         starts = [event for event in await log() if event["type"] == "dragstart"]
         assert_equal(len(starts), 1, "threshold crossing starts one native drag")
         assert_equal(starts[0]["allowed"], "uninitialized", "native effectAllowed starts uninitialized")

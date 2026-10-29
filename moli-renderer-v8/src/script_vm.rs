@@ -747,6 +747,7 @@ mod indexed_db_task_body;
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
+mod native_drag_data;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod document_context_transition;
 mod initial_window_document;
@@ -1126,6 +1127,9 @@ pub(super) struct ActiveDragSession {
     /// longer drive `dragover` and `drop`. `Input.dispatchDragEvent` does.
     pub intercepted: bool,
     pub target: Option<DomHandle>,
+    /// An enter update already emitted source `drag`; its following over
+    /// update must not emit it twice (Blink EventHandler's corresponding bit).
+    pub only_drag_over_next: bool,
     pub coordinates: crate::native_bridge::element::InputEventCoordinates,
     pub modifiers: u8,
 }

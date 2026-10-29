@@ -481,8 +481,8 @@ pub struct RendererDragData {
 
 /// String data of a drag that started while the client intercepts drags.
 ///
-/// Files and directories are not carried: only string items set through
-/// `DataTransfer.setData` during `dragstart` leave the renderer.
+/// Files and directories are not carried. String items include native defaults
+/// and any changes made through `DataTransfer.setData` during `dragstart`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererInterceptedDrag {
     pub items: Vec<RendererDragDataItem>,

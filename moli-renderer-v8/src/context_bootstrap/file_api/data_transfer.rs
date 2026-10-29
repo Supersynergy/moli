@@ -35,6 +35,8 @@ const DATA_TRANSFER_ITEM_TYPE_SLOT: &str = "__lmDataTransferItemType";
 const DATA_TRANSFER_ITEM_FILE_SLOT: &str = "__lmDataTransferItemFile";
 const DATA_TRANSFER_ITEM_ENTRY_SLOT: &str = "__lmDataTransferItemEntry";
 const DATA_TRANSFER_ITEM_STRING_SLOT: &str = "__lmDataTransferItemString";
+const DATA_TRANSFER_ITEM_TITLE_SLOT: &str = "__lmDataTransferItemTitle";
+const DATA_TRANSFER_ITEM_BASE_URL_SLOT: &str = "__lmDataTransferItemBaseURL";
 const FILE_SYSTEM_ENTRY_FILESYSTEM_SLOT: &str = "__lmFileSystemEntryFilesystem";
 const FILE_SYSTEM_ENTRY_FULL_PATH_SLOT: &str = "__lmFileSystemEntryFullPath";
 const FILE_SYSTEM_ENTRY_IS_DIRECTORY_SLOT: &str = "__lmFileSystemEntryIsDirectory";
@@ -508,14 +510,17 @@ pub(crate) fn read_string_drag_data<'s>(
         if item_kind(scope, item).as_deref() != Some("string") {
             continue;
         }
+        let mime_type = item_type(scope, item).unwrap_or_default();
+        let base_url = private_string_property(scope, item, DATA_TRANSFER_ITEM_BASE_URL_SLOT)
+            .or_else(|| (mime_type == "text/html").then(|| "about:blank#blocked".to_owned()));
         items.push(RendererDragDataItem {
-            mime_type: item_type(scope, item).unwrap_or_default(),
+            mime_type,
             // Native interception serializes the store, independently of the
             // access granted to the last JavaScript event listener.
             data: private_string_property(scope, item, DATA_TRANSFER_ITEM_STRING_SLOT)
                 .unwrap_or_default(),
-            title: None,
-            base_url: None,
+            title: private_string_property(scope, item, DATA_TRANSFER_ITEM_TITLE_SLOT),
+            base_url,
         });
     }
     (items, mask)
@@ -726,6 +731,14 @@ impl<'s> DataTransferItemStore<'s> {
                     continue;
                 }
                 set_private_string(scope, existing, DATA_TRANSFER_ITEM_STRING_SLOT, data);
+                // Author replacement supplies a new string, not the native
+                // source's URL label or HTML provenance.
+                for slot in [
+                    DATA_TRANSFER_ITEM_TITLE_SLOT,
+                    DATA_TRANSFER_ITEM_BASE_URL_SLOT,
+                ] {
+                    set_private_value(scope, existing, slot, v8::undefined(scope).into());
+                }
                 return DataTransferItemListMutation::Changed(());
             }
 
@@ -1088,12 +1101,18 @@ fn append_drag_data_records<'s>(
     data: &RendererDragData,
 ) -> Option<()> {
     for item in &data.items {
-        append_string_item(
+        let record = append_string_item(
             scope,
             records,
             &normalize_drag_data_type(&item.mime_type),
             &item.data,
         )?;
+        if let Some(title) = &item.title {
+            set_private_string(scope, record, DATA_TRANSFER_ITEM_TITLE_SLOT, title);
+        }
+        if let Some(base_url) = &item.base_url {
+            set_private_string(scope, record, DATA_TRANSFER_ITEM_BASE_URL_SLOT, base_url);
+        }
     }
     for file in &data.files {
         append_file_item(scope, records, file)?;
@@ -2023,6 +2042,47 @@ mod tests {
         let list = get_private_object(scope, view, DATA_TRANSFER_ITEMS_SLOT).unwrap();
         let array = item_list_array(scope, list).unwrap();
         v8::Local::<v8::Object>::try_from(array.get_index(scope, 0).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn native_drag_metadata_roundtrips_and_author_replacement_clears_its_provenance() {
+        with_transfer_scope(|scope| {
+            let data = RendererDragData {
+                items: vec![
+                    RendererDragDataItem {
+                        mime_type: "text/uri-list".to_owned(),
+                        data: "https://source.test/link".to_owned(),
+                        title: Some("Source label".to_owned()),
+                        base_url: None,
+                    },
+                    RendererDragDataItem {
+                        mime_type: "text/html".to_owned(),
+                        data: "<b>source</b>".to_owned(),
+                        title: None,
+                        base_url: Some("https://source.test/".to_owned()),
+                    },
+                ],
+                files: Vec::new(),
+                directories: Vec::new(),
+                drag_operations_mask: 19,
+            };
+            let store = create_native_drag_data_store(scope).unwrap();
+            populate_native_drag_data_store(scope, &store, &data).unwrap();
+            let (items, mask) = read_string_drag_data(scope, &store);
+            assert_eq!(items, data.items);
+            assert_eq!(mask, 19);
+            let source =
+                create_drag_data_transfer_view(scope, &store, DragDataStoreMode::ReadWrite, "none")
+                    .unwrap();
+            let items = DataTransferItemStore::for_owner(scope, source).unwrap();
+            items.set_string_data(scope, "text/uri-list", "https://author.test/new");
+            items.set_string_data(scope, "text/html", "<i>author</i>");
+            let (items, _) = read_string_drag_data(scope, &store);
+            assert_eq!(items[0].data, "https://author.test/new");
+            assert_eq!(items[0].title, None);
+            assert_eq!(items[1].data, "<i>author</i>");
+            assert_eq!(items[1].base_url.as_deref(), Some("about:blank#blocked"));
+        });
     }
 
     #[test]

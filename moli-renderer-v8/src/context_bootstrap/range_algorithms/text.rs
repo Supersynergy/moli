@@ -372,7 +372,7 @@ fn selection_node_may_intersect_range(
     Some(starts_before_range_end && ends_after_range_start)
 }
 
-fn selection_text_element_is_hidden(
+pub(crate) fn selection_text_element_is_hidden(
     runtime: &crate::native_bridge::JsContextHost,
     handle: DomHandle,
 ) -> bool {

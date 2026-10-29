@@ -671,23 +671,6 @@ pub(crate) fn construct_pointer_event_with_related_target_and_modifiers<'s>(
     construct_event(scope, "PointerEvent", event_type, init)
 }
 
-pub(crate) fn construct_drag_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    coordinates: InputEventCoordinates,
-    data_transfer: v8::Local<'s, v8::Value>,
-    modifiers: u8,
-) -> Option<v8::Local<'s, v8::Object>> {
-    construct_drag_event_with_related_target(
-        scope,
-        event_type,
-        coordinates,
-        data_transfer,
-        None,
-        modifiers,
-    )
-}
-
 pub(crate) fn construct_drag_event_with_related_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,

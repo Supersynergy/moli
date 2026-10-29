@@ -63,9 +63,37 @@ pub(super) fn drag_intercepted_event(
         json!({
             "data": {
                 "items": items,
-                "dragOperationsMask": drag.drag_operations_mask,
+                // Blink serializes DragOperationEvery as -1. Keep the store's
+                // supported copy/link/move bits internal to the renderer.
+                "dragOperationsMask": if drag.drag_operations_mask == 19 {
+                    -1
+                } else {
+                    drag.drag_operations_mask
+                },
             }
         }),
         session_id,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drag_interception_serializes_chromium_masks_without_mutating_renderer_operations() {
+        for (mask, wire_mask) in [(19, -1), (-1, -1), (17, 17), (1, 1), (0, 0)] {
+            let drag = RendererInterceptedDrag {
+                items: Vec::new(),
+                drag_operations_mask: mask,
+            };
+            let event = drag_intercepted_event(Some("drag-session"), &drag)
+                .into_wire_message()
+                .expect("wire drag event");
+            assert_eq!(event["method"], "Input.dragIntercepted");
+            assert_eq!(event["sessionId"], "drag-session");
+            assert_eq!(event["params"]["data"]["dragOperationsMask"], wire_mask);
+            assert_eq!(drag.drag_operations_mask, mask);
+        }
+    }
 }
