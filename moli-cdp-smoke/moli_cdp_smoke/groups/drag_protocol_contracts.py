@@ -460,8 +460,198 @@ async def _pointer_contract_case(state: SmokeState, fixture: str,
             await session.send("Input.setInterceptDrags", {"enabled": False})
 
 
+async def _intrinsic_constructor_contracts(state: SmokeState) -> None:
+    for mode in ("replace", "delete", "getter"):
+        page = await state.page.context.new_page()
+        session = await new_cdp_session(page.context, page)
+        intercepted = []
+        ready = asyncio.Event()
+
+        def on_intercepted(event: dict) -> None:
+            intercepted.append(event)
+            ready.set()
+
+        session.on("Input.dragIntercepted", on_intercepted)
+        try:
+            await page.set_content(_BOARD)
+            await page.evaluate("""mode => {
+              const IntrinsicDragEvent=DragEvent;
+              window.__events=[];window.__constructorReads=0;
+              for(const type of ['dragstart','dragend'])document.addEventListener(type,event=>{
+                __events.push([type,event instanceof IntrinsicDragEvent,event.isTrusted]);
+                if(type==='dragstart')event.dataTransfer.setData('text/plain','payload');
+              });
+              if(mode==='replace')window.DragEvent=function(){
+                __constructorReads++;throw Error('author constructor');
+              };
+              if(mode==='delete')delete window.DragEvent;
+              if(mode==='getter')Object.defineProperty(window,'DragEvent',{configurable:true,get(){
+                __constructorReads++;throw Error('author getter');
+              }});
+            }""", mode)
+            await capture_layout(page)
+            await session.send("Input.setInterceptDrags", {"enabled": True})
+            await _mouse(session, "mouseMoved", 40, 40, 0)
+            await _mouse(session, "mousePressed", 40, 40, 1)
+            await _mouse(session, "mouseMoved", 55, 50, 1)
+            await asyncio.wait_for(ready.wait(), timeout=5)
+            await _drag(session, "dragCancel", _data(None))
+            assert_equal(len(intercepted), 1, f"{mode}: native drag is intercepted once")
+            assert_equal(intercepted[0]["data"]["items"][0]["data"], "payload",
+                         f"{mode}: the native dragstart can populate its transfer")
+            assert_equal(await page.evaluate("() => [__constructorReads,__events]"),
+                         [0, [["dragstart", True, True], ["dragend", True, True]]],
+                         f"{mode}: native events use intrinsic constructors without reading public properties")
+        finally:
+            await _drag(session, "dragCancel", _data(None))
+            await _mouse(session, "mouseReleased", 55, 50, 0)
+            await session.detach()
+            await page.close()
+        state.record(f"drag_intrinsic_constructor_{mode}")
+
+
+_REALM_FRAME = """<!doctype html><style>
+  body{margin:0}#source,#target{position:absolute;left:0;width:100px;height:80px}
+  #source{top:0}#target{top:100px}
+</style><div id=source draggable=true>source</div><div id=target>target</div><script>
+  window.__events=[];window.__views=[];window.__constructorReads=0;
+  const IntrinsicDragEvent=DragEvent;
+  Object.defineProperty(window,'DragEvent',{configurable:true,get(){
+    __constructorReads++;throw Error('child public constructor');
+  }});
+  for(const type of ['dragstart','drag','dragenter','dragover','dragleave','drop','dragend']){
+    document.addEventListener(type,event=>{
+      const dt=event.dataTransfer;
+      if(type==='dragstart'){dt.setData('text/plain','child-payload');dt.effectAllowed='copy';}
+      if(type==='dragover'||type==='drop')event.preventDefault();
+      const file=dt.files[0];
+      __events.push({type,event:event instanceof IntrinsicDragEvent,
+        transfer:dt instanceof DataTransfer,items:dt.items instanceof DataTransferItemList,
+        item:dt.items[0] instanceof DataTransferItem,files:dt.files instanceof FileList,
+        types:dt.types instanceof Array&&Object.isFrozen(dt.types),view:event.view===window,
+        stable:dt===event.dataTransfer,
+        text:dt.getData('text/plain'),file:file?[file instanceof File,file.name,file.size,dt.items[1].getAsFile() instanceof File]:null});
+      if(type==='drop')window.__retainedFile=file;
+      __views.push(dt);
+    });
+  }
+</script>"""
+
+
+async def _iframe_realm_contracts(state: SmokeState) -> None:
+    for native in (False, True):
+        page = await state.page.context.new_page()
+        session = await new_cdp_session(page.context, page)
+        label = "native" if native else "replay"
+        try:
+            await page.set_content("""<!doctype html><body style='margin:0'>
+              <iframe id=realmFrame name=realmFrame
+                style='position:absolute;left:100px;top:120px;width:300px;height:300px;border:0'></iframe>""")
+            await page.evaluate("""html => {
+              window.__constructorReads=0;
+              window.__IntrinsicDragEvent=DragEvent;
+              Object.defineProperty(window,'DragEvent',{configurable:true,get(){
+                __constructorReads++;throw Error('parent public constructor');
+              }});
+              document.getElementById('realmFrame').srcdoc=html;
+            }""", _REALM_FRAME)
+            await page.wait_for_function(
+                "() => Array.isArray(document.getElementById('realmFrame').contentWindow.__events)")
+            child = next(frame for frame in page.frames if frame.name == "realmFrame")
+            await capture_layout(page)
+            if native:
+                for kind, y, buttons in (("mouseMoved", 140, 0), ("mousePressed", 140, 1),
+                                         ("mouseMoved", 240, 1), ("mouseMoved", 245, 1),
+                                         ("mouseReleased", 245, 0)):
+                    await _mouse(session, kind, 120, y, buttons)
+            else:
+                with TemporaryDirectory(prefix="moli-drag-realm-") as directory:
+                    file = Path(directory) / "payload.txt"
+                    file.write_bytes(b"file-payload")
+                    packet = {**_data("external-payload"), "files": [str(file)]}
+                    for kind in ("dragEnter", "dragOver", "drop"):
+                        await session.send("Input.dispatchDragEvent", {
+                            "type": kind, "x": 120, "y": 245, "data": packet,
+                        })
+                    retained_text = await child.evaluate("async () => await __retainedFile.text()")
+            result = await child.evaluate("""() => ({events:__events,reads:__constructorReads,
+              closed:__views.every(dt=>dt.types.length===0&&dt.items.length===0&&
+                dt.files.length===0&&dt.getData('text/plain')==='')})""")
+            assert_equal(bool(result["events"]), True, f"{label}: the child's own script receives drag events")
+            for event in result["events"]:
+                for field in ("event", "transfer", "items", "item", "files", "types", "view", "stable"):
+                    assert_equal(event[field], True, f"{label} {event['type']}: {field} belongs to the child realm")
+            drop = [event for event in result["events"] if event["type"] == "drop"]
+            assert_equal(len(drop), 1, f"{label}: the child receives one drop")
+            assert_equal(drop[0]["text"], "child-payload" if native else "external-payload",
+                         f"{label}: realm-local views retain the shared store's payload")
+            if native:
+                assert_equal([result["events"][0]["type"], result["events"][-1]["type"]],
+                             ["dragstart", "dragend"], "source events also belong to the child's Window")
+            else:
+                assert_equal(drop[0]["file"], [True, "payload.txt", 12, True],
+                             "FileList and getAsFile return Files in the child realm with the original metadata")
+                assert_equal(retained_text, "file-payload",
+                             "a retained File remains readable after its DataTransfer view closes")
+            assert_equal(result["closed"], True, f"{label}: finishing closes all views across realms")
+            assert_equal([result["reads"], await page.evaluate("() => __constructorReads")], [0, 0],
+                         f"{label}: neither Window's public DragEvent constructor is consulted")
+            if not native:
+                await page.evaluate("""() => {
+                  window.__cross=[];let next=0;const ids=new WeakMap();
+                  window.__dragIdentity=dt=>{if(!ids.has(dt))ids.set(dt,++next);return ids.get(dt);};
+                  const outer=document.createElement('div');outer.id='outer';
+                  outer.style='position:absolute;left:500px;top:100px;width:200px;height:200px';
+                  document.body.append(outer);
+                  for(const type of ['dragenter','dragover','dragleave','drop']){
+                    document.addEventListener(type,event=>{
+                      const dt=event.dataTransfer;
+                      __cross.push([type,__dragIdentity(dt),event instanceof __IntrinsicDragEvent,
+                        dt instanceof DataTransfer,dt.items instanceof DataTransferItemList,event.view===window]);
+                      if(type==='dragover'||type==='drop')event.preventDefault();
+                    });
+                  }
+                }""")
+                await child.evaluate("""() => {
+                  window.__cross=[];
+                  for(const type of ['dragenter','dragover','dragleave','drop']){
+                    document.addEventListener(type,event=>{
+                      const dt=event.dataTransfer;
+                      __cross.push([type,parent.__dragIdentity(dt),event instanceof IntrinsicDragEvent,
+                        dt instanceof DataTransfer,dt.items instanceof DataTransferItemList,event.view===window]);
+                    });
+                  }
+                }""")
+                await capture_layout(page)
+                for kind, x, y in (("dragEnter", 120, 240), ("dragOver", 520, 150),
+                                   ("dragOver", 120, 245), ("drop", 120, 245)):
+                    await session.send("Input.dispatchDragEvent", {
+                        "type": kind, "x": x, "y": y, "data": _data("cross-payload"),
+                    })
+                assert_equal(await page.evaluate("() => __cross"),
+                             [["dragenter", 2, True, True, True, True],
+                              ["dragleave", 3, True, False, False, True]],
+                             "cross-document enter/leave share a view belonging to the new Window")
+                assert_equal(await child.evaluate("() => __cross"),
+                             [["dragenter", 1, True, True, True, True],
+                              ["dragleave", 2, True, False, False, True],
+                              ["dragenter", 3, True, True, True, True],
+                              ["dragover", 4, True, True, True, True],
+                              ["drop", 5, True, True, True, True]],
+                             "each Event keeps its receiving Window while the transition view stays shared")
+                state.record("drag_cross_document_transition_realms")
+        finally:
+            await _drag(session, "dragCancel", _data(None))
+            await _mouse(session, "mouseReleased", 120, 245, 0)
+            await session.detach()
+            await page.close()
+        state.record(f"drag_iframe_realm_{label}")
+
+
 async def run_drag_protocol_contracts(state: SmokeState) -> None:
     await _payload_contracts(state)
     await _view_contracts(state)
     await _target_contracts(state)
     await _pointer_contracts(state)
+    await _intrinsic_constructor_contracts(state)
+    await _iframe_realm_contracts(state)

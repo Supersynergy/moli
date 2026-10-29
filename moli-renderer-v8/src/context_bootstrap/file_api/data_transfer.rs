@@ -864,7 +864,24 @@ fn item_file_object<'s>(
         return None;
     }
     let record = item_record(scope, item)?;
-    get_private_object(scope, record, DATA_TRANSFER_ITEM_FILE_SLOT)
+    let file = get_private_object(scope, record, DATA_TRANSFER_ITEM_FILE_SLOT)?;
+    let file = crate::context_bootstrap::world_wrappers::owner(scope, file);
+    let context = item.get_creation_context(scope)?;
+    if file.get_creation_context(scope) == Some(context) {
+        return Some(file);
+    }
+    if let Some(wrapper) =
+        crate::context_bootstrap::world_wrappers::get_in_context(scope, file, context)
+    {
+        return Some(wrapper);
+    }
+    // Keep the same Blob identity and payload; only its File wrapper and
+    // metadata belong to this item view's receiving Window.
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let wrapper = blob::world_wrapper(scope, file)?;
+    super::file::bind_file_world_wrapper(scope, file, wrapper)?;
+    crate::context_bootstrap::world_wrappers::insert(scope, file, wrapper);
+    Some(wrapper)
 }
 
 fn item_entry_object<'s>(

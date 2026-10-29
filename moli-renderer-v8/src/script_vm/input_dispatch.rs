@@ -115,6 +115,20 @@ fn drag_related_target_in_document(
     }
 }
 
+fn create_drag_data_transfer_view_for_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    target: DomHandle,
+    store: &crate::context_bootstrap::NativeDragDataStore,
+    mode: DragDataStoreMode,
+    drop_effect: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
+    crate::context_bootstrap::create_drag_data_transfer_view(scope, store, mode, drop_effect)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dispatch_native_drag_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -142,6 +156,9 @@ fn dispatch_native_drag_event<'s>(
             related,
         )
     };
+    let context =
+        crate::native_bridge::node_owner_document_relevant_context(scope, runtime_ptr, target)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let related = related_target_value(scope, related);
     let event = construct_drag_event_with_related_target(
         scope,
@@ -182,8 +199,10 @@ fn finish_drag_session<'s>(
         if !session.intercepted {
             dispatch_drag_source_event(scope, runtime_ptr, &session, coordinates, modifiers);
         }
-        if let Some(data_transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
+        if let Some(data_transfer) = create_drag_data_transfer_view_for_target(
             scope,
+            runtime_ptr,
+            target,
             &session.data_store,
             DragDataStoreMode::Protected,
             "none",
@@ -280,8 +299,16 @@ fn update_drag_target<'s>(
     if target.is_some() && (session.target != target || !session.only_drag_over_next) {
         dispatch_drag_source_event(scope, runtime_ptr, session, coordinates, modifiers);
     }
-    let Some(transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
+    let Some(view_target) = target.or(session.target) else {
+        return;
+    };
+    // Blink shares the transition view between enter and leave, even across
+    // Documents. Its wrapper belongs to the newly entered Window; each Event
+    // itself belongs to its receiver's Window.
+    let Some(transfer) = create_drag_data_transfer_view_for_target(
         scope,
+        runtime_ptr,
+        view_target,
         &session.data_store,
         DragDataStoreMode::Protected,
         "none",
@@ -377,8 +404,10 @@ fn drop_drag_target<'s>(
     else {
         return DragFinishReason::Rejected;
     };
-    let Some(transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
+    let Some(transfer) = create_drag_data_transfer_view_for_target(
         scope,
+        runtime_ptr,
+        target,
         &session.data_store,
         DragDataStoreMode::ReadOnly,
         &session.drop_effect,
@@ -417,8 +446,10 @@ fn drop_drag_target<'s>(
         return DragFinishReason::DropFailed;
     }
     let mut completed = false;
-    if let Some(default_transfer) = crate::context_bootstrap::create_drag_data_transfer_view(
+    if let Some(default_transfer) = create_drag_data_transfer_view_for_target(
         scope,
+        runtime_ptr,
+        target,
         &session.data_store,
         DragDataStoreMode::ReadOnly,
         &session.drop_effect,
@@ -1644,13 +1675,14 @@ impl ScriptVm {
                     &initial_data,
                 )
                 .is_some()
-                && let Some(data_transfer) =
-                    crate::context_bootstrap::create_drag_data_transfer_view(
-                        scope,
-                        &data_store,
-                        DragDataStoreMode::ReadWrite,
-                        "none",
-                    )
+                && let Some(data_transfer) = create_drag_data_transfer_view_for_target(
+                    scope,
+                    runtime_ptr,
+                    drag_start_handle,
+                    &data_store,
+                    DragDataStoreMode::ReadWrite,
+                    "none",
+                )
             {
                 let source_document = unsafe { &*runtime_ptr }
                     .dom_host()

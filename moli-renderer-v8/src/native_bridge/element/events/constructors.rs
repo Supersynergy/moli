@@ -1,7 +1,7 @@
 use crate::runtime::RendererPointerEventProperties;
 use crate::util::{serialize_v8_iter_array, v8_string};
 
-use super::{construct_event, event_constructor, mark_event_trusted};
+use super::{construct_event, event_constructor};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -67,6 +67,7 @@ struct DragEventInitDeclaration<'scope> {
     ctrl_key: bool,
     meta_key: bool,
     shift_key: bool,
+    view: v8::Local<'scope, v8::Object>,
     data_transfer: v8::Local<'scope, v8::Value>,
     related_target: Option<v8::Local<'scope, v8::Value>>,
 }
@@ -680,6 +681,7 @@ pub(crate) fn construct_drag_event_with_related_target<'s>(
     modifiers: u8,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let modifier_keys = modifier_key_state(modifiers);
+    let view = scope.get_current_context().global(scope);
     let init = DragEventInitDeclaration::new(
         true,
         !matches!(event_type, "dragleave" | "dragend"),
@@ -692,6 +694,7 @@ pub(crate) fn construct_drag_event_with_related_target<'s>(
         modifier_keys.ctrl,
         modifier_keys.meta,
         modifier_keys.shift,
+        view,
         data_transfer,
         related_target,
     )
@@ -922,17 +925,7 @@ fn construct_input_event_with_transfer<'s>(
     )
     .bind(scope)
     .ok()?;
-    // Native editing must not invoke a page-replaced InputEvent constructor.
-    let ctor =
-        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
-            scope,
-            "InputEvent",
-        )
-        .ok()?;
-    let event_type = v8_string(scope, event_type)?;
-    let event = ctor.new_instance(scope, &[event_type.into(), init.into()])?;
-    mark_event_trusted(scope, event);
-    Some(event)
+    construct_event(scope, "InputEvent", event_type, init)
 }
 
 pub(crate) fn construct_simple_event<'s>(

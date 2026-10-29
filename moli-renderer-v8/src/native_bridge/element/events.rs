@@ -26,9 +26,11 @@ fn event_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
-    let global = scope.get_current_context().global(scope);
-    let ctor = global.get(scope, v8_string(scope, name)?.into())?;
-    v8::Local::<v8::Function>::try_from(ctor).ok()
+    // Browser-generated events must not consult author-replaceable Window properties.
+    crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
+        scope, name,
+    )
+    .ok()
 }
 
 pub(in crate::native_bridge::element) fn construct_event<'s>(

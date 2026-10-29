@@ -1170,6 +1170,40 @@ fn drag_data_from(drag: &RendererInterceptedDrag) -> RendererDragData {
 }
 
 #[test]
+fn native_drag_ignores_replaced_deleted_and_throwing_public_drag_event_constructors() {
+    for replacement in [
+        "window.DragEvent=function(){window.__constructorReads++;throw Error('author constructor');}",
+        "delete window.DragEvent",
+        "Object.defineProperty(window,'DragEvent',{configurable:true,get(){window.__constructorReads++;throw Error('author getter');}})",
+    ] {
+        let mut vm = new_rendered_test_vm("https://drag-intrinsic.test/", DRAG_INTERCEPT_PAGE);
+        vm.eval(
+            r#"
+window.__constructorReads=0;window.__events=[];
+const IntrinsicDragEvent=DragEvent;
+for(const type of ['dragstart','dragend'])document.addEventListener(type,event=>{
+  __events.push([type,event instanceof IntrinsicDragEvent,event.isTrusted]);
+  if(type==='dragstart')event.dataTransfer.setData('text/plain','payload');
+});
+"#,
+        )
+        .expect("install intrinsic drag listeners");
+        vm.eval(replacement)
+            .expect("replace the public constructor");
+        let drag = start_intercepted_drag(&mut vm);
+        assert_eq!(drag.items[0].data, "payload", "{replacement}");
+        vm.cancel_dragging()
+            .expect("end the intercepted native drag");
+        assert_eq!(
+            vm.eval("JSON.stringify([__constructorReads,__events])")
+                .expect("native constructor observations"),
+            r#"[0,[["dragstart",true,true],["dragend",true,true]]]"#,
+            "{replacement}"
+        );
+    }
+}
+
+#[test]
 fn intercepted_drag_reports_string_data_and_waits_for_drag_events() {
     let mut vm = new_rendered_test_vm("https://drag-intercept-report.test/", DRAG_INTERCEPT_PAGE);
     vm.eval(DRAG_INTERCEPT_LISTENERS)
