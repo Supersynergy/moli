@@ -40,8 +40,8 @@ use crate::renderer::{
 use anyhow::Result;
 pub use command_dispatch::{
     CompletedDevToolsIoCommandDispatch, CompletedPageCommand,
-    CompletedRuntimeInspectorCommandDispatch, PendingDevToolsIoCommandDispatch, PendingPageCommand,
-    PendingRuntimeInspectorCommandDispatch,
+    CompletedRuntimeInspectorCommandDispatch, PageDocumentCommandTarget,
+    PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
 };
 
 #[cfg(all(test, debug_assertions))]
@@ -106,7 +106,7 @@ pub use moli_renderer_v8::{
     RendererDomFocusOutcome, RendererDomMutationEvent, RendererDomMutationEventBatch,
     RendererDomSnapshotCaptureOptions, RendererDomSnapshotCapturePayload, RendererDragData,
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererFrameToken,
-    RendererInputDispatchOutcome, RendererInspectorCommandRoute,
+    RendererInputDispatchOutcome, RendererInspectorCommandRoute, RendererInterceptedDrag,
     RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId, RendererJavaScriptDialogResult,
     RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererLifecycleEpoch,
     RendererLifecycleEventStamp, RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
@@ -137,7 +137,7 @@ pub use moli_renderer_v8::{
     RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
     RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody, RendererTextSearchMatch,
     RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
-    RuntimeConsoleMessageSnapshot,
+    RuntimeConsoleMessageSnapshot, WorkerInspectorError,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,
@@ -417,6 +417,7 @@ impl Page {
             delta_y,
             pointer: RendererPointerEventProperties::default(),
             modifiers: 0,
+            intercept_drags: false,
         };
         let reply = self.dispatch_page_command_async(command).await?;
         expect_page_reply!(

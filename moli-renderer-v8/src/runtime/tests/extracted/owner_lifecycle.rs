@@ -20,6 +20,7 @@ async fn owner_loop_runs_file_reading_callback_without_retry_command() {
         r#"<!doctype html><body>
 <div id="drop" style="width: 100px; height: 100px">drop</div>
 <script>
+document.getElementById("drop").addEventListener("dragover", event => event.preventDefault());
 document.getElementById("drop").addEventListener("drop", event => {
   const reader =
     event.dataTransfer.items[0].webkitGetAsEntry().createReader();
@@ -35,37 +36,40 @@ document.getElementById("drop").addEventListener("drop", event => {
     )
     .await;
 
-    let (reply, _) = page
-        .run_async_command(RendererPageCommand::DispatchDragEventAtPoint {
-            x: 10.0,
-            y: 10.0,
-            event_name: "drop".to_owned(),
-            data: RendererDragData {
-                items: Vec::new(),
-                files: Vec::new(),
-                directories: vec![RendererDraggedDirectory {
-                    name: "fixture".to_owned(),
-                    files: vec![RendererDraggedFile {
-                        bytes: b"body".to_vec(),
-                        mime_type: "text/plain".to_owned(),
-                        name: "entry.txt".to_owned(),
-                        last_modified: 1.0,
-                    }],
-                    directories: Vec::new(),
-                }],
-                drag_operations_mask: 1,
-            },
-            modifiers: 0,
-        })
-        .await
-        .expect("directory drop command should run");
-    assert!(
-        matches!(
-            reply,
-            RendererPageReply::InputDispatchOutcome(ref outcome) if outcome.handled
-        ),
-        "directory drop command should dispatch to the target"
-    );
+    let data = RendererDragData {
+        items: Vec::new(),
+        files: Vec::new(),
+        directories: vec![RendererDraggedDirectory {
+            name: "fixture".to_owned(),
+            files: vec![RendererDraggedFile {
+                bytes: b"body".to_vec(),
+                mime_type: "text/plain".to_owned(),
+                name: "entry.txt".to_owned(),
+                last_modified: 1.0,
+            }],
+            directories: Vec::new(),
+        }],
+        drag_operations_mask: 1,
+    };
+    for event_name in ["dragenter", "dragover", "drop"] {
+        let (reply, _) = page
+            .run_async_command(RendererPageCommand::DispatchDragEventAtPoint {
+                x: 10.0,
+                y: 10.0,
+                event_name: event_name.to_owned(),
+                data: data.clone(),
+                modifiers: 0,
+            })
+            .await
+            .expect("directory drop command should run");
+        assert!(
+            matches!(
+                reply,
+                RendererPageReply::InputDispatchOutcome(ref outcome) if outcome.handled
+            ),
+            "directory drop command should dispatch to the target"
+        );
+    }
 
     tokio::time::timeout(Duration::from_secs(2), callback_request_seen)
         .await
@@ -132,6 +136,90 @@ navigator.webkitTemporaryStorage.queryUsageAndQuota((usage, quota) => {
         .await
         .expect("MiscPlatformApi owner-loop page should close");
 }
+#[tokio::test(flavor = "multi_thread")]
+async fn child_frame_lifecycle_observer_fences_load_published_while_waiting() {
+    use futures_util::FutureExt as _;
+
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (origin, requested, release, server) = spawn_owner_wake_gated_server_with_content_type(
+        "/child-observer.js",
+        "globalThis.childDone = true;",
+        "text/javascript",
+    )
+    .await;
+    let mut page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{origin}/page")).unwrap(),
+        "<!doctype html><body></body>",
+    )
+    .await;
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: format!("const frame = document.createElement('iframe'); frame.srcdoc = `<script src='{origin}/child-observer.js'></script><p>ready</p>`; document.body.appendChild(frame); true"),
+        await_promise: false,
+    }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), requested)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut observer = Box::pin(
+        page.enqueue_protocol_command(
+            RendererPageCommand::CompleteChildFrameLifecycleWorkBestEffort {
+                timeout_ms: 5_000,
+                loader: loader.clone(),
+            },
+        )
+        .unwrap()
+        .wait(),
+    );
+    // This later Native command witnesses admission of the waiting observer.
+    // Its admission frontier cannot contain the still-held child load.
+    page.enqueue_protocol_command(RendererPageCommand::ChildFrameTreeSnapshot)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert!(observer.as_mut().now_or_never().is_none());
+    release.send(()).unwrap();
+    let load_cursor = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let publication = output_rx.recv().await.unwrap();
+            if publication.records().iter().any(|record| {
+                matches!(
+                    record.item(),
+                    RendererOutputItem::OwnerAction(RendererOwnerAction::ChildFrameLoad { .. })
+                )
+            }) {
+                return publication.cursor();
+            }
+        }
+    })
+    .await
+    .expect("the held child must publish its load before observation completes");
+    let output = tokio::time::timeout(Duration::from_secs(5), observer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        output.completion().reply(),
+        RendererPageReply::Bool(true)
+    ));
+    let observed = output
+        .renderer_output_predecessor()
+        .expect("the completed observer must retain load output published during its wait")
+        .cursor();
+    assert_eq!(observed.stream(), load_cursor.stream());
+    assert!(
+        observed.sequence() >= load_cursor.sequence(),
+        "observer={observed:?}, load={load_cursor:?}"
+    );
+    server.await.unwrap();
+    page.close_async().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn child_frame_lifecycle_best_effort_observes_autonomous_page_turns() {
     let runtime = JsRuntime::initialize();

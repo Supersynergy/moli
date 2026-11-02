@@ -12,7 +12,9 @@ pub(crate) use message::construct_original_message_event;
 mod methods;
 mod modifiers;
 mod subclasses;
+pub(crate) use subclasses::clear_input_event_target_ranges;
 pub(crate) use subclasses::initialize_native_security_policy_violation_event;
+pub(in crate::context_bootstrap) use subclasses::input_event_get_target_ranges_callback;
 mod submit;
 mod ui;
 mod value;
@@ -317,7 +319,7 @@ pub(super) use base::{
     event_target_getter_function, event_type_getter_function, set_event_dispatch_fields,
     set_event_initialized,
 };
-pub(in crate::context_bootstrap) use init::EventInit;
+pub(in crate::context_bootstrap) use init::{EventInit, parse_event_dictionary};
 pub(super) use kind::EventSubclassKind;
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,

@@ -8,7 +8,7 @@ use crate::protocol_types::{
     ChildFrameDocumentOpenedSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
 };
 use crate::types::{ScriptObservableOutput, ScriptObservableOutputItem};
-use anyhow::bail;
+use anyhow::{Context as _, Result, bail};
 pub use moli_page_types::{
     DevToolsSessionKey, DocumentNodeObjectSnapshot, DocumentNodeSnapshot,
     RendererAgentAttachmentId, RendererDevToolsAgentToken,
@@ -479,12 +479,26 @@ pub struct RendererDragData {
     pub drag_operations_mask: i32,
 }
 
+/// String data of a drag that started while the client intercepts drags.
+///
+/// Files and directories are not carried. String items include native defaults
+/// and any changes made through `DataTransfer.setData` during `dragstart`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererInterceptedDrag {
+    pub items: Vec<RendererDragDataItem>,
+    pub drag_operations_mask: i32,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RendererInputDispatchOutcome {
     pub handled: bool,
     pub triggered_top_level_navigation: bool,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub pending_file_chooser: Option<RendererPendingFileChooserActivation>,
+    /// Set when `dragstart` ran uncanceled and the command asked to intercept
+    /// drags. The renderer then leaves `dragenter`, `dragover` and `drop` to
+    /// `RendererPageCommand::DispatchDragEventAtPoint`.
+    pub intercepted_drag: Option<RendererInterceptedDrag>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2831,11 +2845,11 @@ pub struct PendingWorkerRuntimeInspectorSessionResponse {
 }
 
 impl PendingWorkerRuntimeInspectorSessionResponse {
-    pub async fn wait(self) -> Result<(RendererOutputFence, bool), String> {
+    pub async fn wait(self) -> Result<(RendererOutputFence, bool)> {
         self.settlement
             .await
             .map(RendererRuntimeInspectorSessionResponseSettlement::into_parts)
-            .map_err(|_| "WorkerRuntimeInspectorResponseCanceled".to_owned())
+            .context(WorkerInspectorError::ResponseCanceled)
     }
 }
 
@@ -2850,7 +2864,7 @@ impl CompletedWorkerRuntimeInspectorCommandDispatch {
     }
 
     pub(crate) fn finish(
-        dispatch: Result<Vec<RendererRuntimeInspectorMessage>, String>,
+        dispatch: Result<Vec<RendererRuntimeInspectorMessage>>,
         settlement: oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>,
         error_response: RendererRuntimeInspectorResponseSender,
     ) -> Self {
@@ -2862,7 +2876,7 @@ impl CompletedWorkerRuntimeInspectorCommandDispatch {
                     "id": call_id,
                     "error": {
                         "code": -32000,
-                        "message": message,
+                        "message": message.to_string(),
                     }
                 }));
                 Vec::new()
@@ -4339,12 +4353,19 @@ pub struct RendererRuntimeRealmInfo {
 }
 
 /// A native DOM-agent reference, resolved against the current Page document.
-/// Frontend IDs belong to one Inspector session; backend IDs use the Page's
-/// live node registry. Inspector objects and WebDriver/BiDi handles require
-/// their own resolution and cannot enter this native-only query boundary.
+/// CDP frontend IDs must be published in their Inspector session. Internal
+/// automation may explicitly resolve an unpublished binding. Backend IDs use
+/// the Page's live node registry; protocol object handles require their own
+/// resolution before entering this boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RendererDomNodeReference {
+    /// A CDP node ID that must already be visible to this session.
     FrontendNodeId {
+        inspector_session_id: Option<String>,
+        frontend_node_id: u32,
+    },
+    /// An internal automation binding; it does not imply CDP publication.
+    InternalFrontendNodeBinding {
         inspector_session_id: Option<String>,
         frontend_node_id: u32,
     },
@@ -4385,7 +4406,6 @@ pub enum RendererDocumentQuerySelectorResolution {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RendererDocumentQuerySelectorNode {
-    pub live_node_id: crate::dom::NodeId,
     pub frontend_node_id: u32,
     pub backend_node_id: u32,
 }
@@ -4706,6 +4726,11 @@ pub(crate) enum RendererInspectorPageCommand {
         object_id: String,
         depth: i32,
         pierce: bool,
+        bind_frontend_nodes: bool,
+    },
+    RequestDocumentNodeForObjectId {
+        include_whitespace: bool,
+        object_id: String,
     },
     AccessibilityTreePayloadsForObjectId {
         object_id: String,
@@ -4739,6 +4764,12 @@ pub enum RendererPageCommand {
     },
     // The call fits inline; its operation boxes the recursively contained page command.
     Native(RendererCdpCall),
+    /// Checks the original root Document on the renderer before executing an
+    /// operation admitted while its browser-side Page is still being adopted.
+    ForDocument {
+        source_document: RendererDocumentLifecycleIdentity,
+        command: Box<RendererPageCommand>,
+    },
     Inspector(RendererInspectorCommandEnvelope),
     EvaluateExpression {
         expression: String,
@@ -4807,6 +4838,8 @@ pub enum RendererPageCommand {
         delta_y: f64,
         pointer: RendererPointerEventProperties,
         modifiers: u8,
+        /// `Input.setInterceptDrags` state of the issuing DevTools session.
+        intercept_drags: bool,
     },
     DispatchTouchEvent {
         points: Vec<RendererTouchPoint>,
@@ -4821,6 +4854,7 @@ pub enum RendererPageCommand {
         modifiers: u8,
     },
     ClearActiveDragDataTransfer,
+    CancelDragging,
     InsertTextIntoActiveControl(String),
     DispatchKeyEvent {
         event_name: String,
@@ -5040,8 +5074,7 @@ pub enum RendererPageCommand {
         frontend_node_id: u32,
     },
     DocumentFrontendNodeBinding {
-        inspector_session_id: Option<String>,
-        frontend_node_id: u32,
+        reference: RendererDomNodeReference,
     },
     RegisterDocumentBidiNodeBinding {
         inspector_session_id: Option<String>,
@@ -5517,6 +5550,7 @@ impl RendererPageCommand {
         object_id: String,
         depth: i32,
         pierce: bool,
+        bind_frontend_nodes: bool,
     ) -> Self {
         Self::inspector_command(
             inspector_session_id,
@@ -5525,6 +5559,21 @@ impl RendererPageCommand {
                 object_id,
                 depth,
                 pierce,
+                bind_frontend_nodes,
+            },
+        )
+    }
+
+    pub fn request_document_node_for_object_id(
+        inspector_session_id: Option<String>,
+        include_whitespace: bool,
+        object_id: String,
+    ) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorPageCommand::RequestDocumentNodeForObjectId {
+                include_whitespace,
+                object_id,
             },
         )
     }
@@ -6044,6 +6093,10 @@ pub enum RendererPageReply {
     ExecutionContextIds(Vec<i64>),
     OptionalExecutionContextId(Option<i64>),
     OptionalDocumentNodeObjectSnapshot(Box<Option<DocumentNodeObjectSnapshot>>),
+    DocumentNodeRequested {
+        node_id: Option<u32>,
+        child_node_snapshot_events: Option<RendererDocumentChildNodeSnapshotEvents>,
+    },
     OptionalDomSnapshotCapturePayload(Option<RendererDomSnapshotCapturePayload>),
     OptionalDocumentChildNodeSnapshots(Option<RendererDocumentChildNodeSnapshots>),
     OptionalDocumentChildNodeSnapshotEvents(Option<RendererDocumentChildNodeSnapshotEvents>),
@@ -6053,7 +6106,10 @@ pub enum RendererPageReply {
         RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     ),
     DocumentPerformSearch(RendererDomSearchRegistration),
-    DocumentSearchResults(RendererDomSearchResultsResolution),
+    DocumentSearchResults {
+        resolution: RendererDomSearchResultsResolution,
+        child_node_snapshot_events: Option<RendererDocumentChildNodeSnapshotEvents>,
+    },
     DocumentSearchResultsDiscarded,
     DocumentNodeStackTracesEnabled,
     DocumentNodeStackTrace(RendererDomNodeStackTraceResolution),

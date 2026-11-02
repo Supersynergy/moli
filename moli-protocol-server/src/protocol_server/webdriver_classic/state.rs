@@ -1271,9 +1271,7 @@ async fn execute_classic_automation_command_with_pending_navigation_retry(
             execution.execution.result = Err(classic_pending_navigation_timeout_error());
             return execution;
         };
-        let mut progress = scheduler
-            .complete_ready_protocol_residences_for_external_load_wait()
-            .await;
+        let mut progress = scheduler.complete_ready_protocol_residences_for_external_load_wait();
         if progress.is_empty() {
             let input = match tokio::time::timeout(remaining, receivers.recv_interleaved_input())
                 .await
@@ -1405,6 +1403,15 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
+                    completion = receivers.protocol_work_completion_rx.recv() => {
+                        let Some(completion) = completion else { break; };
+                        if !attached.actor.handle_protocol_work_completion(&mut scheduler, &mut receivers, completion).await {
+                            detach_bidi = true;
+                        }
+                    }
+                    _ = receivers.state_events_ready.notified() => {
+                        scheduler.apply_protocol_state_events();
+                    }
                     completion = receivers.background_navigation_completion_rx.recv() => {
                         let Some(completion) = completion else {
                             break;
@@ -1490,6 +1497,10 @@ async fn classic_session_runtime_loop(
                                     detach_bidi = true;
                                 }
                             }
+                            BidiSocketActorInput::RuntimeWorkflowReady(Some(ready)) => {
+                                if !attached.actor.handle_runtime_workflow_ready(&mut scheduler, &mut receivers, *ready).await { detach_bidi = true; }
+                            }
+                            BidiSocketActorInput::RuntimeWorkflowReady(None) => { detach_bidi = true; }
                             BidiSocketActorInput::RuntimeResponseReady(None) => {
                                 detach_bidi = true;
                             }
@@ -1540,6 +1551,13 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
+                completion = receivers.protocol_work_completion_rx.recv() => {
+                    let Some(completion) = completion else { break; };
+                    if scheduler.complete_protocol_work(completion).is_err() { break; }
+                }
+                _ = receivers.state_events_ready.notified() => {
+                    scheduler.apply_protocol_state_events();
+                }
                 completion = receivers.background_navigation_completion_rx.recv() => {
                     let Some(completion) = completion else {
                         break;
@@ -1570,13 +1588,11 @@ async fn classic_session_runtime_loop(
                         break;
                     };
                     let _ = adapter_scheduler
-                        .ingest_renderer_publication(&mut scheduler, publication)
-                        .await;
+                        .ingest_renderer_publication(&mut scheduler, publication);
                 }
                 input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
                     let _ = adapter_scheduler
-                        .advance_input(&mut scheduler, input)
-                        .await;
+                        .advance_input(&mut scheduler, input);
                 }
                 request = rx.recv() => {
                     let Some(request) = request else {
@@ -1922,9 +1938,7 @@ async fn classic_session_ingest_ready_renderer_publications(
     receivers: &mut CdpSchedulerEventReceivers,
 ) {
     while let Ok(publication) = receivers.renderer_publication_rx.try_recv() {
-        let _ = adapter_scheduler
-            .ingest_renderer_publication(scheduler, publication)
-            .await;
+        let _ = adapter_scheduler.ingest_renderer_publication(scheduler, publication);
     }
 }
 #[cfg(test)]

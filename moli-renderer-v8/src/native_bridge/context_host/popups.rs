@@ -9,7 +9,7 @@ use crate::{
         SIMPLE_EVENT_TARGET_LISTENERS_SLOT, SharedWebStorageStore, WINDOW_NAME_SLOT,
         apply_local_window_location_navigation, clear_simple_window_event_handler_values,
         deep_clone_shared_web_storage_store, dispatch_simple_event_target_event,
-        install_navigation_bootstrap_entry_for_holder, install_simple_event_target_methods,
+        initialize_simple_event_target, install_navigation_bootstrap_entry_for_holder,
         install_simple_window_event_handlers, install_storage_aliases_for_window,
         install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
         scoped_indexed_db_factory, sync_document_location_runtime_state_from_window,
@@ -803,6 +803,9 @@ impl JsContextHost {
             .bridge
             .bindings
             .instantiate_window_shell(scope, host_ptr);
+        crate::web_api_interfaces::Window::DESCRIPTOR
+            .initialize(scope, window)
+            .ok()?;
         if let Some(dom_exception) = global_constructor_object(scope, "DOMException") {
             // Lightweight popups share the opener's V8 realm, so their
             // synthetic Window shell must expose the same realm constructor
@@ -866,7 +869,7 @@ impl JsContextHost {
             }
         }
         let _ = install_storage_aliases_for_window(scope, window);
-        install_simple_event_target_methods(scope, window);
+        initialize_simple_event_target(scope, window);
         install_simple_window_event_handlers(scope, window);
         let _ = LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window);
         let initial_document_owner = self.allocate_lightweight_popup_document_owner(popup_id);
@@ -2422,15 +2425,15 @@ impl JsContextHost {
         let opener_character_set = self.document_character_set().to_owned();
         let task_resource_loader = resource_loader.clone();
         resource_loader.spawn_resource_task(async move {
-            let result = async {
+            use anyhow::Context as _;
+
+            let result: Result<PopupDocumentLoadOutcome> = async {
                 let response = match response {
                     Some(receiver) => {
                         let response = receiver
                             .await
-                            .map_err(|_| "auxiliary navigation was cancelled".to_owned())??;
-                        task_resource_loader
-                            .note_external_response_ready()
-                            .map_err(|error| error.to_string())?;
+                            .context("auxiliary navigation was cancelled")??;
+                        task_resource_loader.note_external_response_ready()?;
                         response
                     }
                     None => task_resource_loader
@@ -2446,8 +2449,7 @@ impl JsContextHost {
                                 response.head(),
                                 response.body_bytes().to_vec(),
                             )
-                        })
-                        .map_err(|error| error.to_string())?,
+                        })?,
                 };
                 let head = response.head();
                 if popup_document_response_should_ignore_navigation(response.status, &head.headers)
@@ -2458,8 +2460,7 @@ impl JsContextHost {
                     response.final_url.as_str(),
                     response.status,
                     false,
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
                 let content_type =
                     super::child_documents::child_document_content_type_from_headers(&head.headers);
                 let fallback = if content_type
@@ -2701,7 +2702,7 @@ impl JsContextHost {
                     popup_id,
                     navigation_id = task.navigation_id(),
                     url = %pending.target_url,
-                    error,
+                    error = %error,
                     "lightweight popup document load failed"
                 );
                 let Some(current_owner) = self.current_lightweight_popup_document_owner(popup_id)

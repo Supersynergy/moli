@@ -150,7 +150,9 @@ impl ResourceRequestClient {
         self.page_network_policy.clone()
     }
 
-    pub(crate) fn frozen_request_client(&self) -> Self {
+    /// Captures page request configuration for an owned operation. Headers,
+    /// cache and blocked-URL policy stay fixed; network emulation stays live.
+    pub fn frozen_request_client(&self) -> Self {
         let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),
             self.page_network_policy.frozen_request_view(),
@@ -218,10 +220,19 @@ impl ResourceRequestClient {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.fetch_raw_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+            .await
+    }
+
+    pub async fn fetch_raw_with_cancel_and_network_metadata(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let request = self.apply_network_policy(request)?;
         self.resource_runtime
             .client()
-            .fetch_raw_with_network_metadata(request)
+            .fetch_raw_with_cancel_and_network_metadata(request, cancel_handle)
             .await
     }
 
@@ -1062,7 +1073,14 @@ impl ResourceRequestClient {
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
         request.browser_origin()?;
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {
-            request = request.with_browser_site_context(browser_site_context.clone());
+            let mut browser_site_context = browser_site_context.clone();
+            // Child navigations bind the destination frame's partition before
+            // entering its parent's loader. Keep that key while applying the
+            // owner's other cookie settings, including Storage Access policy.
+            if let Some(key) = request.network_partition_key() {
+                browser_site_context = browser_site_context.with_serialized_storage_key(key);
+            }
+            request = request.with_browser_site_context(browser_site_context);
         }
         let request = self
             .page_network_policy

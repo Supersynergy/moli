@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use indexmap::IndexMap;
 use moli_core::network::SharedWebStorageStore;
@@ -13,6 +14,23 @@ use super::{
 };
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
+/// Identifies a target host across Document replacements without retaining it.
+#[derive(Clone, Debug)]
+pub(crate) struct PageTargetHostIdentity(Weak<()>);
+
+impl PartialEq for PageTargetHostIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other)
+    }
+}
+impl Eq for PageTargetHostIdentity {}
+
+impl PageTargetHostIdentity {
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
 /// The stable owner of all state that belongs to one page target.
 ///
 /// Selecting another page never replaces or reconstructs this object. The
@@ -21,6 +39,8 @@ use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 #[derive(Debug)]
 pub struct PageTargetHost {
     target_id: String,
+    lifetime: Arc<()>,
+    pub(crate) closing: bool,
     pub(crate) window_id: u32,
     navigation_engine: Option<NavigationEngine>,
     pub(crate) target_identity: TargetIdentityState,
@@ -31,8 +51,6 @@ pub struct PageTargetHost {
     pub(crate) tls_verify_host_override: Option<bool>,
     pub(crate) environment_owner: moli_core::ProcessEnvironmentOwner,
     pub(crate) effective_emulation_state: EffectiveTargetEmulationState,
-    pub(crate) input_intercept_drags_enabled: bool,
-    pub(crate) input_drag_intercepted: bool,
     pub(crate) css_enabled: bool,
     pub(crate) document_cookie_manager_surface: BrowserContextCookieManagerSurface,
     pub(crate) dom_remote_object_node_cache: HashMap<String, Value>,
@@ -46,6 +64,8 @@ impl PageTargetHost {
     pub(crate) fn empty(target_id: String) -> Self {
         Self {
             target_id,
+            lifetime: Arc::new(()),
+            closing: false,
             window_id: 0,
             navigation_engine: None,
             target_identity: TargetIdentityState::about_blank(),
@@ -56,8 +76,6 @@ impl PageTargetHost {
             tls_verify_host_override: None,
             environment_owner: Default::default(),
             effective_emulation_state: EffectiveTargetEmulationState::default(),
-            input_intercept_drags_enabled: false,
-            input_drag_intercepted: false,
             css_enabled: false,
             document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             dom_remote_object_node_cache: HashMap::new(),
@@ -112,6 +130,10 @@ impl PageTargetHost {
 
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
+    }
+
+    pub(crate) fn host_identity(&self) -> PageTargetHostIdentity {
+        PageTargetHostIdentity(Arc::downgrade(&self.lifetime))
     }
 
     fn replace_target_id(&mut self, target_id: String) {

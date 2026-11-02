@@ -747,6 +747,7 @@ mod indexed_db_task_body;
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
+mod native_drag_data;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod document_context_transition;
 mod initial_window_document;
@@ -791,6 +792,7 @@ pub(crate) use document_settings::{
     DocumentSetting, DocumentSettingEffect, DocumentSettingsApplication,
 };
 mod execution_contexts;
+mod font_resources;
 mod layout;
 mod prepared_scripts;
 mod rendering_update;
@@ -876,6 +878,7 @@ fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,
+        intercepted_drag: None,
     }
 }
 
@@ -1042,6 +1045,7 @@ pub(super) struct ScriptVm {
     suppress_compat_mouse_events: bool,
     active_scrollbar_drag: Option<ActiveScrollbarDrag>,
     active_drag_session: Option<ActiveDragSession>,
+    pending_drag_gesture: Option<PendingDragGesture>,
     promise_reject_dispatch: PromiseRejectDispatchSlot,
     next_internal_runtime_evaluate_call_id: i32,
     next_internal_frontend_inspector_call_id: i32,
@@ -1111,8 +1115,31 @@ pub(super) struct ActiveTouchPoint {
 }
 
 pub(super) struct ActiveDragSession {
-    pub data_transfer: v8::Global<v8::Object>,
+    pub data_store: crate::context_bootstrap::NativeDragDataStore,
+    /// Chromium retains the source view for dragend, without restoring data access.
+    pub source_transfer: Option<v8::Global<v8::Object>>,
+    pub drop_effect: String,
     pub drop_allowed: bool,
+    /// Element that received `dragstart`; `dragend` is dispatched here.
+    /// `None` for sessions created from externally supplied drag data.
+    pub source: Option<DomHandle>,
+    /// The DevTools client asked to take over the drag, so mouse events no
+    /// longer drive `dragover` and `drop`. `Input.dispatchDragEvent` does.
+    pub intercepted: bool,
+    pub target: Option<DomHandle>,
+    /// An enter update already emitted source `drag`; its following over
+    /// update must not emit it twice (Blink EventHandler's corresponding bit).
+    pub only_drag_over_next: bool,
+    pub coordinates: crate::native_bridge::element::InputEventCoordinates,
+    pub modifiers: u8,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PendingDragGesture {
+    pub handle: DomHandle,
+    pub x: f64,
+    pub y: f64,
+    pub root_to_frame: moli_layout::LayoutTransform2D,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1612,8 +1639,7 @@ impl ScriptVm {
                                     outbound.capture_dispatch_responses();
                                 with_scoped_inspector_microtasks(scope, || {
                                     dispatch_with_runtime_defaults(session, raw_json, &outbound)
-                                })
-                                .map_err(anyhow::Error::msg)?;
+                                })?;
                             }
                             let response = outbound
                                 .take_response_for_call_id_after(
@@ -1841,7 +1867,7 @@ impl ScriptVm {
                             dispatch_with_runtime_defaults(session, raw_json, &outbound)
                         }) {
                             outbound.discard_messages_after(snap);
-                            return Err(anyhow::Error::msg(error));
+                            return Err(error);
                         }
                         if let (Some(total_started), Some(started)) =
                             (timing_started, dispatch_started)
@@ -1967,7 +1993,10 @@ impl ScriptVmPageRealmBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -2069,8 +2098,8 @@ impl ScriptVmPageRealmBootstrap {
         }
         let browsing_context_group = main_document_commit
             .as_ref()
-            .and_then(|commit| commit.browsing_context_group.clone());
-        if let (Some(environment), Some(commit)) = (
+            .and_then(|(_, commit)| commit.browsing_context_group.clone());
+        if let (Some(environment), Some((source_document, commit))) = (
             renderer_page_script_environment.as_ref(),
             main_document_commit,
         ) {
@@ -2081,7 +2110,10 @@ impl ScriptVmPageRealmBootstrap {
             environment.output_journal().append(
                 crate::runtime::PendingRendererOutputRecord::observation(
                     None,
-                    crate::runtime::RendererProtocolObservation::MainDocumentCommit(commit),
+                    crate::runtime::RendererProtocolObservation::MainDocumentCommit {
+                        source_document,
+                        commit,
+                    },
                 ),
             );
         }
@@ -2403,7 +2435,10 @@ impl ScriptVmDefaultWorldBootstrap {
             &[crate::runtime::RendererInspectorSessionRestoreSnapshot],
         backend_node_registry: SharedRendererBackendNodeRegistry,
         root_frame_id: Option<String>,
-        main_document_commit: Option<crate::runtime::RendererMainDocumentCommit>,
+        main_document_commit: Option<(
+            crate::runtime::RendererDocumentLifecycleIdentity,
+            crate::runtime::RendererMainDocumentCommit,
+        )>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -2543,6 +2578,7 @@ impl ScriptVmDefaultWorldBootstrap {
             suppress_compat_mouse_events: false,
             active_scrollbar_drag: None,
             active_drag_session: None,
+            pending_drag_gesture: None,
             promise_reject_dispatch,
             next_internal_runtime_evaluate_call_id: 1,
             next_internal_frontend_inspector_call_id: -1,

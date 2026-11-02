@@ -18,12 +18,12 @@ use super::{
         event_stop_immediate_propagation_callback, event_stop_propagation_callback,
         event_target_getter_function, event_time_stamp_getter_function, event_type_getter_function,
         event_value_attribute_getter, focus_event_related_target_getter_function,
-        form_data_event_form_data_getter_function, keyboard_event_init_callback,
-        message_event_init_callback, mouse_event_related_target_getter_function,
-        pointer_event_get_predicted_events_callback, submit_event_agent_invoked_getter_function,
-        submit_event_respond_with_callback, submit_event_submitter_getter_function,
-        track_event_track_getter_function, ui_event_pseudo_target_getter_function,
-        ui_event_which_getter_function,
+        form_data_event_form_data_getter_function, input_event_get_target_ranges_callback,
+        keyboard_event_init_callback, message_event_init_callback,
+        mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
+        submit_event_agent_invoked_getter_function, submit_event_respond_with_callback,
+        submit_event_submitter_getter_function, track_event_track_getter_function,
+        ui_event_pseudo_target_getter_function, ui_event_which_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
@@ -167,6 +167,9 @@ struct FormDataEventTemplateAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::UIEvent, enumerable, receiver)]
 struct UiEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property, getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "sourceCapabilities"))]
+    source_capabilities: (),
+
     #[webapi(accessor_property = "view", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "view"))]
     view: (),
     #[webapi(accessor_property = "detail", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "detail"))]
@@ -228,6 +231,12 @@ struct CustomEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::InputEvent, enumerable, receiver)]
 struct InputEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "dataTransfer"))]
+    data_transfer: (),
+
+    #[webapi(method, length = 0, callback = input_event_get_target_ranges_callback)]
+    get_target_ranges: (),
+
     #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "data"))]
     data: (),
 
@@ -311,6 +320,9 @@ struct KeyboardEventTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::MouseEvent, enumerable, receiver)]
 struct MouseEventTemplateMethodsDeclaration {
+    #[webapi(method = "getModifierState", length = 1, callback = event_get_modifier_state_callback)]
+    get_modifier_state: (),
+
     #[webapi(
         accessor_property = "relatedTarget",
         getter = mouse_event_related_target_getter_function
@@ -328,8 +340,15 @@ struct MouseEventTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::WheelEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::WheelEvent, enumerable, receiver)]
 struct WheelEventTemplateConstantsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "wheelDeltaX"))]
+    wheel_delta_x: (),
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "wheelDeltaY"))]
+    wheel_delta_y: (),
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "wheelDelta"))]
+    wheel_delta: (),
+
     #[webapi(constant = "DOM_DELTA_PIXEL", value = 0u32)]
     dom_delta_pixel: (),
 
@@ -343,6 +362,9 @@ struct WheelEventTemplateConstantsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::PointerEvent, enumerable, receiver)]
 struct PointerEventTemplateMethodsDeclaration {
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "persistentDeviceId"))]
+    persistent_device_id: (),
+
     #[webapi(
         method = "getPredictedEvents",
         length = 0,

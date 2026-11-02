@@ -120,7 +120,7 @@ pub(crate) use styles::{
     STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT, STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT,
     STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT, STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT,
     StyleObservation, computed_style_target_context, iframe_handle_viewport,
-    marker_pseudo_element_is_generated_for_document_snapshot,
+    marker_pseudo_element_is_generated_for_document_snapshot, style_viewport_for_document,
 };
 mod stylesheets;
 mod template_install;
@@ -194,13 +194,14 @@ pub(crate) use activation::{
     navigate_named_iframe_target,
 };
 pub(crate) use activation::{
-    activate_default_submit_button_via_keyboard, activate_handle_after_pointer_release,
-    activate_handle_via_click, activate_handle_via_click_with_detail_and_modifiers,
-    activate_handle_via_synthetic_click, dispatched_click_activation_target,
-    finish_legacy_activation_for_dispatched_click, perform_auxiliary_link_default_action,
-    perform_click_default_action_for_dispatched_event, perform_drop_default_action,
-    prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
-    scroll_to_url_fragment_or_top, select_contenteditable_contents,
+    accepts_drop_default_action, activate_default_submit_button_via_keyboard,
+    activate_handle_after_pointer_release, activate_handle_via_click,
+    activate_handle_via_click_with_detail_and_modifiers, activate_handle_via_synthetic_click,
+    dispatched_click_activation_target, finish_legacy_activation_for_dispatched_click,
+    perform_auxiliary_link_default_action, perform_click_default_action_for_dispatched_event,
+    perform_drop_default_action, prepare_legacy_activation_for_dispatched_click,
+    replace_contenteditable_selection, scroll_to_url_fragment_or_top,
+    select_contenteditable_contents,
 };
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
 use activation::{
@@ -270,12 +271,12 @@ use event_handlers::{
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
 pub(crate) use events::{
-    NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint, construct_command_event,
-    construct_drag_event, construct_input_event, construct_interest_event,
-    construct_keyboard_event, construct_mouse_event_with_detail_and_modifiers,
-    construct_mouse_event_with_modifiers, construct_mouse_event_with_related_target_and_modifiers,
-    construct_pointer_event, construct_pointer_event_with_modifiers,
-    construct_pointer_event_with_related_target,
+    InputEventCoordinates, NodePublicEventDispatchOutcome, TextEditInputType, TouchEventPoint,
+    construct_command_event, construct_drag_event_with_related_target, construct_drop_input_event,
+    construct_input_event, construct_interest_event, construct_keyboard_event,
+    construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
+    construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
+    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_submit_event, construct_toggle_event, construct_touch_event,
     construct_touch_event_with_points, construct_wheel_event, dispatch_beforeinput,
@@ -540,11 +541,11 @@ pub(in crate::native_bridge) use media::queue_text_track_load_if_source;
 pub(crate) use media::{
     MediaLoadEventPhase, apply_default_text_track_mode_for_track, apply_text_track_load_task,
     dispatch_media_load_event_phase, dispatch_media_seek_completion, dispatch_media_seeking_event,
-    dispatch_text_track_list_event, queue_default_text_track_mode_if_needed,
-    queue_media_canplay_after_text_tracks, queue_media_load_if_needed,
-    queue_media_load_if_source_or_loading_change, queue_media_load_network_terminal_followup,
-    queue_revealed_lazy_media_loads, queue_text_track_load_if_needed,
-    queue_text_track_terminal_followup,
+    dispatch_media_volume_change, dispatch_text_track_list_event,
+    queue_default_text_track_mode_if_needed, queue_media_canplay_after_text_tracks,
+    queue_media_load_if_needed, queue_media_load_if_source_or_loading_change,
+    queue_media_load_network_terminal_followup, queue_revealed_lazy_media_loads,
+    queue_text_track_load_if_needed, queue_text_track_terminal_followup,
 };
 pub(super) use media::{
     apply_default_text_track_modes_for_media, media_add_text_track_callback,

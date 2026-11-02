@@ -49,11 +49,13 @@ interfaces! {
     AudioWorkletNode: AudioNode;
     BaseAudioContext: EventTarget;
     BarProp;
-    BatteryManager;
+    BatteryManager: EventTarget;
     BeforeUnloadEvent: Event;
     BiquadFilterNode: AudioNode;
     Blob;
     BlobEvent: Event;
+    MIDIConnectionEvent: Event;
+    MIDIMessageEvent: Event;
     BroadcastChannel: EventTarget;
     ByteLengthQueuingStrategy;
     CDATASection: Text;
@@ -290,6 +292,7 @@ interfaces! {
     IDBFactory;
     IDBIndex;
     IDBKeyRange;
+    IDBRecord;
     IDBObjectStore;
     IDBOpenDBRequest: IDBRequest;
     IDBRequest: EventTarget;
@@ -313,6 +316,7 @@ interfaces! {
     MathMLElement: Element;
     MediaCapabilities;
     MediaDeviceInfo;
+    InputDeviceCapabilities;
     InputDeviceInfo: MediaDeviceInfo;
     MediaStreamTrack: EventTarget;
     CanvasCaptureMediaStreamTrack: MediaStreamTrack;
@@ -414,6 +418,8 @@ interfaces! {
     RTCErrorEvent: Event;
     RTCIceCandidate;
     RTCIceTransport: EventTarget;
+    RTCEncodedAudioFrame;
+    RTCEncodedVideoFrame;
     RTCPeerConnection: EventTarget;
     RTCPeerConnectionIceEvent: Event;
     RTCDataChannelEvent: Event;
@@ -536,12 +542,12 @@ interfaces! {
     SVGTransform;
     SVGTransformList;
     SVGUseElement: SVGGraphicsElement;
-    Screen;
+    Screen: EventTarget;
     ScreenOrientation: EventTarget;
     SecurityPolicyViolationEvent: Event;
     Selection;
     ServiceWorker: EventTarget;
-    ServiceWorkerContainer;
+    ServiceWorkerContainer: EventTarget;
     ServiceWorkerGlobalScope: WorkerGlobalScope;
     ServiceWorkerRegistration: EventTarget;
     ShadowRoot: DocumentFragment;
@@ -630,6 +636,7 @@ interfaces! {
     WebGLTransformFeedback: WebGLObject;
     WebGLVertexArrayObject: WebGLObject;
     WebGLUniformLocation;
+    WebTransportError: DOMException;
     WebTransportBidirectionalStream;
     WebTransportDatagramDuplexStream;
     WebSocket: EventTarget;

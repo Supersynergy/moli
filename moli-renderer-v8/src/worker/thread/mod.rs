@@ -113,8 +113,6 @@ use super::module_runtime::{
     worker_has_pending_dynamic_module_imports, worker_has_runnable_dynamic_module_imports,
 };
 
-pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
-
 const WORKER_STACK_SIZE: usize = 4 * 1024 * 1024; // 4 MiB
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, crate::webidl::WebIdlEnum)]
@@ -548,6 +546,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
         || !state.pending_xhrs.is_empty()
         || !state.websockets.is_empty()
         || !state.pending_webcrypto.is_empty()
+        || !state.pending_blob_reads.is_empty()
         || state
             .opfs_owner_state
             .as_ref()
@@ -839,7 +838,14 @@ fn drain_worker_file_reader_queue(
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, context);
         let scope = &mut v8::ContextScope::new(scope, ctx);
-        if !flush_one_pending_file_reader(scope) {
+        if super::global_scope::get_worker_state(scope)
+            .is_some_and(|state| !state.borrow().callback_task_delivery_allowed())
+        {
+            break;
+        }
+        if !super::global_scope::drain_one_worker_blob_read(scope)
+            && !flush_one_pending_file_reader(scope)
+        {
             break;
         }
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
@@ -1568,9 +1574,7 @@ async fn worker_main(
         .bind_request_client(loader.request_client().clone());
     install_worker_promise_rejection_dispatch(
         worker_isolate.worker_isolate_mut(),
-        parent_tx.clone(),
         worker_wake_tx.clone(),
-        script_url.clone(),
     );
 
     // Worker-owned isolate timer queues are shared between V8 callbacks and the
@@ -1686,6 +1690,10 @@ async fn worker_main(
         webcrypto_completion_tx,
         pending_webcrypto: std::collections::HashMap::new(),
         next_webcrypto_task_id: 1,
+        next_blob_read_id: 1,
+        pending_blob_reads: std::collections::HashMap::new(),
+        ready_blob_reads: Arc::default(),
+        file_reading_wake: worker_runtime_wake_tx.clone(),
         opfs_completion_tx,
         opfs_owner_state: None,
         pending_service_worker_periodic_sync_events: std::collections::HashMap::new(),
@@ -1799,7 +1807,7 @@ async fn worker_main(
         }
     }
     if install_global_failed {
-        inspector_task_runner.dispose("Worker global installation failed");
+        inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::InstallationFailed);
         *isolate_handle.lock() = None;
         worker_isolate.unregister_worker_isolate_platform();
         return;
@@ -2019,13 +2027,7 @@ async fn worker_main(
                     pending_bootstrap_messages.push_back(WorkerMessage::Post(payload));
                     continue;
                 }
-                dispatch_message_event(
-                    worker_isolate.worker_isolate_mut(),
-                    &context,
-                    &payload,
-                    &parent_tx,
-                    &script_url,
-                );
+                dispatch_message_event(worker_isolate.worker_isolate_mut(), &context, &payload);
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
                     &context,
@@ -2066,8 +2068,6 @@ async fn worker_main(
                     worker_isolate.worker_isolate_mut(),
                     &context,
                     port_id,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2105,8 +2105,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2127,7 +2125,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2285,8 +2282,6 @@ async fn worker_main(
                     &context,
                     &state,
                     *event,
-                    &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2307,7 +2302,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2328,7 +2322,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2349,7 +2342,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -2370,7 +2362,6 @@ async fn worker_main(
                     &state,
                     *event,
                     &parent_tx,
-                    &script_url,
                 );
                 drain_worker_dynamic_module_imports_for_context(
                     worker_isolate.worker_isolate_mut(),
@@ -3345,7 +3336,7 @@ async fn worker_main(
     // routes are destroyed. Ordinary transports are cancelled here;
     // explicitly keepalive loads are reduced to browser-runtime network-only
     // records and therefore cannot retain this WorkerGlobalScope.
-    inspector_task_runner.dispose("Worker exited before Inspector task dispatch");
+    inspector_task_runner.dispose(crate::runtime::WorkerInspectorError::Exited);
     let resource_loader = state.borrow().loader.clone();
     resource_loader.begin_detach();
     if matches!(state.borrow().global_kind, WorkerGlobalKind::Shared { .. }) {
@@ -3356,6 +3347,7 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);
     }
     let common = Rc::clone(&state.borrow().common);

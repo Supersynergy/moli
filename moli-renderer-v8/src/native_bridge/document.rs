@@ -114,7 +114,10 @@ pub(in crate::native_bridge) use attributes::{
     detached_get_attribute_node_method_callback, detached_get_attribute_node_ns_method_callback,
     detached_remove_attribute_node_method_callback, detached_set_attribute_node_method_callback,
 };
-use attributes::{live_attr_cache_object, namespace_attr_cache_key, set_attr_cache_entry};
+use attributes::{
+    live_attr_cache_object, namespace_attr_cache_key, new_document_attr_object,
+    set_attr_cache_entry,
+};
 pub(crate) use attributes::{
     live_get_attribute_node_object, live_named_node_map_wrapper, new_attr_object,
 };
@@ -310,7 +313,7 @@ pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 struct DocumentMetadataPrototypeDeclaration {
     #[webapi(accessor_property = "URL", getter = document_url_getter_function)]
     url: (),
-    #[webapi(accessor_property = "documentURI", getter = document_uri_getter_function)]
+    #[webapi(accessor_property = "documentURI", getter = document_url_getter_function)]
     document_uri: (),
     #[webapi(accessor_property = "readyState", getter = document_ready_state_getter_function)]
     ready_state: (),
@@ -448,7 +451,7 @@ struct DocumentCollectionAccessorsPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentCollectionQueryPrototypeDeclaration {
     #[webapi(
         method,
@@ -826,30 +829,6 @@ fn document_url_getter_function<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    if let Some(url) = detached_state_string(scope, receiver, "url") {
-        set_document_string_return_value(scope, &mut rv, &url);
-        return;
-    }
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
-        rv.set_undefined();
-        return;
-    };
-    let url = unsafe { &*runtime_ptr }
-        .document_url_for_handle(handle)
-        .to_string();
-    set_document_string_return_value(scope, &mut rv, &url);
-}
-
-fn document_uri_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let receiver = args.this();
-    if let Some(url) = detached_state_string(scope, receiver, "documentURI") {
-        set_document_string_return_value(scope, &mut rv, &url);
-        return;
-    }
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
         rv.set_undefined();
         return;
@@ -1372,7 +1351,7 @@ pub(crate) fn install_document_template_bindings<'s>(
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, receiver)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentGetElementByIdTemplateDeclaration {
     #[webapi(method = "getElementById", length = 1, callback = node_get_element_by_id_callback)]
     get_element_by_id: (),
@@ -1652,8 +1631,16 @@ fn detached_method_forward<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     helper_name: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let backing = super::node::node_backing_object(scope, args.this())?;
+    // Detached tree relations retain the canonical wrapper's identity. A
+    // registered proxy without mirrored state uses its native backing instead.
+    let receiver = if get_private_value(scope, args.this(), DETACHED_STATE_SLOT).is_some() {
+        args.this()
+    } else {
+        backing
+    };
     let mut forwarded = Vec::with_capacity(args.length() as usize + 1);
-    forwarded.push(args.this().into());
+    forwarded.push(receiver.into());
     for index in 0..args.length() {
         forwarded.push(args.get(index));
     }

@@ -16,6 +16,7 @@ wpt-extensions = []
 
 [dependencies]
 anyhow = "1.0.100"
+thiserror = "2.0.17"
 app_units = "0.7.8"
 base64 = "0.22"
 brotlic = "0.8.2"
@@ -30,6 +31,7 @@ euclid = "0.22"
 kurbo = "0.13.1"
 futures-util = "0.3.31"
 precomputed-hash = "0.1"
+read-fonts = "0.41.0"
 percent-encoding = "2.3"
 selectors = "0.41"
 stylo = "0.22"
@@ -98,7 +100,6 @@ moli-xpath = { path = "../moli-xpath" }
 curl = { version = "0.4.51", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }
 http = "1"
 httpdate = "1.0.3"
-html-escape = "0.2.13"
 html5ever = "0.40"
 hashlink = "0.12.2"
 indexmap = "2.14.2"
@@ -118,6 +119,7 @@ tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-
 tracing = "0.1.41"
 url = "2.5.7"
 uuid = { version = "1.23.1", default-features = false }
+v_xmlescape = { git = "https://github.com/lexmount/v_escape", rev = "d30e780f4d498ffae80e836bc046501f6dfde47a", default-features = false, features = ["std", "string"] }
 widestring = "1.2.1"
 style_traits = { package = "stylo_traits", version = "0.22" }
 xmlparser = "0.13.6"

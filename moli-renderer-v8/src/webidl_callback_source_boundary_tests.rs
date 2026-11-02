@@ -138,11 +138,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "context_bootstrap/websocket/stream.rs",
-        2,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
         "network_host/body_source.rs",
         3,
         DirectCallOwner::BrowserAlgorithm,
@@ -214,11 +209,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
-        "native_bridge/context_host/host_loads.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
         "native_bridge/document/attributes/named_node_map/handlers.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
@@ -230,7 +220,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "native_bridge/element/activation/default_action.rs",
-        3,
+        // Drag data now uses private native readers, without forwarding to
+        // an author-replaceable DataTransfer.getData method.
+        2,
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(

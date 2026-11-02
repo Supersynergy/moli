@@ -80,11 +80,7 @@ fn prototype_name_for_handle(host_ptr: *mut JsContextHost, handle: &BridgeHandle
                     .node(*node_handle)
                     .map(|node| match node.data() {
                         crate::dom::native::NodeData::Document(document) => {
-                            if document.is_html_document() {
-                                "HTMLDocument"
-                            } else {
-                                "XMLDocument"
-                            }
+                            document.interface_name()
                         }
                         _ if node
                             .local_name()

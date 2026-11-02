@@ -91,6 +91,8 @@ impl JsContextHost {
         );
         self.dom_agent_state
             .reset_for_document_replacement(transition.current_owner().document_id);
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
         self.style_engine
             .clear_for_document_replacement(document_handle);
         self.reset_document_layout_state();
@@ -392,7 +394,6 @@ impl JsContextHost {
             force_child_default_context_preflight_failure: false,
             child_browsing_context_document_handles: HashMap::new(),
             document_domain_override: Rc::new(RefCell::new(None)),
-            next_child_browsing_context_id: 1,
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),
@@ -469,6 +470,7 @@ impl JsContextHost {
             next_image_decode_id: 1,
             pending_image_decode_requests: HashMap::new(),
             resource_timing_buffers: SharedResourceTimingBufferRegistry::new(),
+            pending_font_face_loads: HashMap::new(),
             next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId::first(),
             pending_webcrypto_tasks: HashMap::new(),
             opfs_owner_state: None,
@@ -593,7 +595,6 @@ impl JsContextHost {
             pending_network_body_sources: HashMap::new(),
             pending_network_body_clones: HashMap::new(),
             page_task_capabilities: std::cell::OnceCell::new(),
-            resource_scheduler: RendererResourceScheduler::new(resource_completion_tx.clone()),
             resource_completion_tx,
             next_worker_id: 1,
             workers: HashMap::new(),
@@ -703,6 +704,8 @@ impl JsContextHost {
         }
         self.dom_agent_state
             .reset_for_document_replacement(transition.current_owner().document_id);
+        self.dom_agent_state
+            .sync_mutation_recording_interest(self.dom_host());
         self.replace_main_document_resource_loader(transition);
         let rebound_meta_refresh = {
             let runtime: &mut DocumentRuntime = self;

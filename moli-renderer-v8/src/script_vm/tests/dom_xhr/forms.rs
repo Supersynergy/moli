@@ -3792,6 +3792,7 @@ fn trusted_alt_click_downloads_an_anchor_without_a_download_attribute() {
         0.0,
         crate::runtime::RendererPointerEventProperties::default(),
         1,
+        false,
     )
     .expect("alt mousedown should dispatch");
     let outcome = vm
@@ -3806,6 +3807,7 @@ fn trusted_alt_click_downloads_an_anchor_without_a_download_attribute() {
             0.0,
             crate::runtime::RendererPointerEventProperties::default(),
             1,
+            false,
         )
         .expect("alt mouseup should dispatch");
 
@@ -3852,6 +3854,7 @@ fn alt_input_does_not_turn_window_open_into_a_download_or_background_popup() {
         0.0,
         crate::runtime::RendererPointerEventProperties::default(),
         1,
+        false,
     )
     .expect("Alt mousedown should dispatch");
     let outcome = vm
@@ -3866,6 +3869,7 @@ fn alt_input_does_not_turn_window_open_into_a_download_or_background_popup() {
             0.0,
             crate::runtime::RendererPointerEventProperties::default(),
             1,
+            false,
         )
         .expect("Alt mouseup should dispatch");
 
@@ -3921,6 +3925,7 @@ fn window_open_in_click_listener_uses_current_input_event() {
             0.0,
             crate::runtime::RendererPointerEventProperties::default(),
             platform_modifier,
+            false,
         )
         .expect("new-tab-modified mousedown should dispatch");
     trusted
@@ -3935,6 +3940,7 @@ fn window_open_in_click_listener_uses_current_input_event() {
             0.0,
             crate::runtime::RendererPointerEventProperties::default(),
             platform_modifier,
+            false,
         )
         .expect("new-tab-modified mouseup should dispatch");
     let trusted_popups = trusted.take_pending_popup_activations();
@@ -4024,6 +4030,7 @@ fn current_mouseup_input_covers_pointer_mouse_click_and_microtask_callbacks() {
         0.0,
         crate::runtime::RendererPointerEventProperties::default(),
         platform_modifier,
+        false,
     )
     .expect("new-tab-modified mousedown should dispatch");
     vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
@@ -4037,6 +4044,7 @@ fn current_mouseup_input_covers_pointer_mouse_click_and_microtask_callbacks() {
         0.0,
         crate::runtime::RendererPointerEventProperties::default(),
         platform_modifier,
+        false,
     )
     .expect("new-tab-modified mouseup should dispatch");
 
@@ -5886,7 +5894,7 @@ fn collection_webidl_members_live_on_interface_prototypes() {
 
     assert_eq!(
         result,
-        r#"{"own":{"htmlLength":false,"nodeLength":false,"optionsLength":false,"optionsSelectedIndex":false,"optionsAdd":false,"radioValue":false},"chains":[true,true],"accessors":{"htmlLength":"get length:0:::true:true","nodeLength":"get length:0:::true:true","optionsLength":"get length:0:set length:1:true:true","selectedIndex":"get selectedIndex:0:set selectedIndex:1:true:true","radioValue":"get value:0:set value:1:true:true"},"methods":{"htmlItem":"item:1:true:true:true","namedItem":"namedItem:1:true:true:true","nodeItem":"item:1:false:true:true","add":"add:1:true:true:true","remove":"remove:1:true:true:true"},"borrowed":[2,1,"second",false,true],"forged":["TypeError","TypeError","TypeError"],"crossBrand":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"],"tags":["[object HTMLOptionsCollection]","[object RadioNodeList]"]}"#
+        r#"{"own":{"htmlLength":false,"nodeLength":false,"optionsLength":false,"optionsSelectedIndex":false,"optionsAdd":false,"radioValue":false},"chains":[true,true],"accessors":{"htmlLength":"get length:0:::true:true","nodeLength":"get length:0:::true:true","optionsLength":"get length:0:set length:1:true:true","selectedIndex":"get selectedIndex:0:set selectedIndex:1:true:true","radioValue":"get value:0:set value:1:true:true"},"methods":{"htmlItem":"item:1:true:true:true","namedItem":"namedItem:1:true:true:true","nodeItem":"item:1:true:true:true","add":"add:1:true:true:true","remove":"remove:1:true:true:true"},"borrowed":[2,1,"second",false,true],"forged":["TypeError","TypeError","TypeError"],"crossBrand":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"],"tags":["[object HTMLOptionsCollection]","[object RadioNodeList]"]}"#
     );
 }
 

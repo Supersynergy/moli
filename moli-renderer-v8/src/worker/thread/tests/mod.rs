@@ -1,6 +1,13 @@
 mod abort_signal_events;
 mod callback_execution;
 mod error_reporting_guard;
+mod indexed_db_gc;
+
+mod native_exception_data;
+
+mod event_target_prototype;
+mod notification_init;
+mod request_init;
 mod text_codecs;
 use std::pin::pin;
 use std::sync::Arc;
@@ -1529,6 +1536,7 @@ fn service_worker_storage_apis_use_explicit_registration_storage_key() {
 // ─── Basic tests ────────────────────────────────────────────────────
 
 mod abort_signal_statics;
+mod indexed_db;
 mod lazy_storage;
 mod lifecycle;
 mod message_port_transfer;
@@ -1550,3 +1558,5 @@ mod payment_events;
 mod performance_handler_order;
 
 mod performance_user_timing;
+
+mod abort_controller_receivers;

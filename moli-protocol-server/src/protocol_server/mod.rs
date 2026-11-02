@@ -82,11 +82,11 @@ impl ProtocolServer {
         initial_cookies: Vec<StoredCookie>,
     ) -> Self {
         let storage_partition = Arc::new(
-            StoragePartitionState::open(None).expect("in-memory storage partition should open"),
+            StoragePartitionState::open(None).expect("temporary storage partition should open"),
         );
         storage_partition
             .import_cookies(initial_cookies)
-            .expect("in-memory cookie import should succeed");
+            .expect("initial cookie import should succeed");
         Self::new_with_storage_partition(config, storage_partition)
     }
 
@@ -757,16 +757,14 @@ impl SharedCookieProfile {
         match &self.backing {
             #[cfg(test)]
             SharedCookieProfileBacking::Legacy(inner) => {
-                let (cookies, cache_paths) = {
-                    let mut profile = inner.lock();
-                    commit_cookie_profile(&mut profile.cookies, commit);
-                    (profile.cookies.clone(), profile.cache_paths.clone())
-                };
-
-                for path in cache_paths {
-                    cookie_cache::save_cookie_cache(&path, cookies.clone()).with_context(|| {
-                        anyhow!("failed to save cookie cache `{}`", path.display())
-                    })?;
+                let mut profile = inner.lock();
+                commit_cookie_profile(&mut profile.cookies, commit);
+                // Keep publication and disk writes in the same order across
+                // owners, including checkpoints with an empty cookie delta.
+                for path in &profile.cache_paths {
+                    cookie_cache::save_cookie_cache(path, profile.cookies.clone()).with_context(
+                        || anyhow!("failed to save cookie cache `{}`", path.display()),
+                    )?;
                 }
                 Ok(())
             }

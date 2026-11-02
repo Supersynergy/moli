@@ -555,6 +555,7 @@ impl FetchRuntimeHandle {
     pub(crate) fn submit_auth_raw(
         &self,
         request: Request,
+        cancel_handle: FetchCancelHandle,
     ) -> Result<oneshot::Receiver<Result<RawResponse>>> {
         debug_assert!(
             request.auth_requires_buffered_transport(),
@@ -564,7 +565,7 @@ impl FetchRuntimeHandle {
         self.enqueue(RuntimeJob::new(
             request,
             RuntimeResponseTx::Raw(response_tx),
-            FetchCancelHandle::new(),
+            cancel_handle,
         ))?;
         Ok(response_rx)
     }
@@ -807,17 +808,22 @@ impl RuntimeOwner {
                     Err(anyhow!("fetch runtime is shutting down")),
                 );
             }
-            RuntimeCommand::Request(job) => self.start_job_or_reply(state, job),
+            RuntimeCommand::Request(job) => {
+                self.config.bind_additional_cookie_scope(&job.request);
+                self.start_job_or_reply(state, job)
+            }
             RuntimeCommand::StreamingHtmlRequest(job) if state.closed => {
                 fail_streaming_job(job, anyhow!("fetch runtime is shutting down"));
             }
             RuntimeCommand::StreamingHtmlRequest(job) => {
+                self.config.bind_additional_cookie_scope(&job.request);
                 self.start_streaming_job_or_reply(state, job)
             }
             RuntimeCommand::StreamingRawRequest(job) if state.closed => {
                 fail_raw_streaming_job(job, anyhow!("fetch runtime is shutting down"));
             }
             RuntimeCommand::StreamingRawRequest(job) => {
+                self.config.bind_additional_cookie_scope(&job.request);
                 self.start_raw_streaming_job_or_reply(state, job)
             }
             #[cfg(test)]
@@ -3729,6 +3735,14 @@ fn fail_streaming_job_with_easy(
     error: anyhow::Error,
 ) {
     let mut easy = easy.or_else(|| job.easy.take());
+    // Cancellation may stop curl by returning zero from a write callback,
+    // which curl reports as a write error rather than an aborted callback.
+    // Keep the explicit cancellation cause and the original transport error.
+    let error = if job.cancel_handle.is_cancelled() {
+        error.context(crate::FetchCancelled)
+    } else {
+        error
+    };
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,
@@ -3768,6 +3782,14 @@ fn fail_raw_streaming_job_with_easy(
     mut easy: Option<Easy2<FetchTransferHandler>>,
     error: anyhow::Error,
 ) {
+    // Cancellation may stop curl by returning zero from a write callback,
+    // which curl reports as a write error rather than an aborted callback.
+    // Keep the explicit cancellation cause and the original transport error.
+    let error = if job.cancel_handle.is_cancelled() {
+        error.context(crate::FetchCancelled)
+    } else {
+        error
+    };
     let error = network_fetch_failure_for_request(
         &job.request,
         &job.current_url,

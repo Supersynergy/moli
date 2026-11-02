@@ -14,6 +14,7 @@ use super::super::{
     crypto::install_crypto_template_bindings,
     css_runtime::install_css_typed_om_template_bindings,
     css_stylesheet_runtime::install_css_stylesheet_template_bindings,
+    dom_quad::install_dom_quad_template_bindings,
     dom_rect::install_dom_rect_template_bindings,
     dom_rect_list::install_dom_rect_list_template_bindings,
     event_template::install_event_template_bindings,
@@ -214,7 +215,7 @@ struct WorkerTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransfer, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransfer, enumerable, receiver)]
 struct DataTransferTemplateMethodsDeclaration {
     #[webapi(
         method = "getData",
@@ -239,7 +240,7 @@ struct DataTransferTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItem, enumerable, receiver)]
 struct DataTransferItemTemplateMethodsDeclaration {
     #[webapi(
         method = "getAsFile",
@@ -264,7 +265,7 @@ struct DataTransferItemTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable)]
+#[webapi(interface = web_api_interfaces::DataTransferItemList, enumerable, receiver)]
 struct DataTransferItemListTemplateMethodsDeclaration {
     #[webapi(
         intrinsic_data_property = v8::Intrinsic::ArrayProtoValues,
@@ -411,6 +412,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_css_style_declaration_template_accessors(scope, template, spec.interface.name());
     install_abort_template_bindings(scope, template, spec.interface.name());
     install_attr_template_bindings(scope, template, spec.interface.name());
+    install_dom_quad_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_template_bindings(scope, template, spec.interface.name());
     install_time_ranges_template_bindings(scope, template, spec.interface.name());
     install_dom_rect_list_template_bindings(scope, template, spec.interface.name());
@@ -419,6 +421,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
     install_text_codec_template_bindings(scope, template, spec.interface.name());
     install_geometry_template_bindings(scope, template, spec.interface.name());
+    if spec.interface.name() == "EncodedVideoChunk" {
+        super::super::encoded_video_chunk::install_encoded_video_chunk_template_bindings(
+            scope, template,
+        );
+    }
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }

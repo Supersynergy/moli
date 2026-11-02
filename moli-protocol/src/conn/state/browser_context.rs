@@ -39,7 +39,7 @@ use super::{
 
 pub struct BrowserContext {
     pub id: String,
-    storage_partition: BrowserContextStoragePartition,
+    pub(crate) closing: bool,
     pub(crate) page_targets: PageTargetRegistry,
     /// Browser focus is independent of which context is selected for routing.
     pub(crate) window_is_focused: bool,
@@ -85,9 +85,10 @@ pub struct BrowserContext {
     pub(crate) http_cache_max_bytes: Option<u64>,
     pub(crate) page_navigation_runtime_config: Option<NavigationRuntimeConfig>,
     renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
-    // Keep the sole strong per-context network owner last. Protocol teardown
-    // must drop pages and NavigationEngines before this field is released.
+    // Release pages and NavigationEngines before joining the network owner,
+    // then close storage before deleting its temporary disk backing.
     pub(crate) renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
+    storage_partition: BrowserContextStoragePartition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +115,7 @@ pub(crate) struct BrowserContextStoragePartitionHandles {
     web_storage_store: SharedWebStorageStore,
     indexed_db_manager: SharedIndexedDbManager,
     storage_bucket_store: SharedStorageBucketStore,
+    _owner: Option<std::sync::Arc<StoragePartitionState>>,
 }
 
 #[derive(Clone)]
@@ -225,18 +227,12 @@ impl BrowserContextStoragePartitionHandles {
             web_storage_store,
             indexed_db_manager,
             storage_bucket_store,
+            _owner: None,
         }
     }
 
     pub(crate) fn memory() -> Self {
-        Self::with_initial_cookies(Vec::new())
-    }
-
-    pub(crate) fn with_initial_cookies(
-        initial_cookies: impl IntoIterator<Item = StoredCookie>,
-    ) -> Self {
         let cookie_store = new_shared_browser_cookie_store();
-        seed_initial_cookies(&cookie_store, initial_cookies);
         let indexed_db_manager = moli_core::storage::new_indexed_db_manager(None)
             .expect("in-memory IndexedDB manager should initialize");
         let storage_bucket_store =
@@ -247,6 +243,21 @@ impl BrowserContextStoragePartitionHandles {
             indexed_db_manager,
             storage_bucket_store,
         )
+    }
+
+    pub(crate) fn temporary() -> anyhow::Result<Self> {
+        let owner = std::sync::Arc::new(StoragePartitionState::open(None)?);
+        let mut handles = Self::from_storage_partition(Vec::new(), &owner);
+        handles._owner = Some(owner);
+        Ok(handles)
+    }
+
+    pub(crate) fn with_initial_cookies(
+        initial_cookies: impl IntoIterator<Item = StoredCookie>,
+    ) -> Self {
+        let handles = Self::temporary().expect("temporary browser storage should initialize");
+        seed_initial_cookies(&handles.cookie_store, initial_cookies);
+        handles
     }
 
     fn from_initial_storage_partition(
@@ -456,14 +467,16 @@ impl BrowserContext {
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
         debugger_enabled: bool,
-    ) -> Self {
-        Self::new_ephemeral_with_storage_partition_handles(
+    ) -> Result<Self, String> {
+        let partition = BrowserContextStoragePartitionHandles::temporary()
+            .map_err(|error| format!("{error:#}"))?;
+        Ok(Self::new_ephemeral_with_storage_partition_handles(
             id,
-            BrowserContextStoragePartitionHandles::memory(),
+            partition,
             http_cache_root,
             http_cache_max_bytes,
             debugger_enabled,
-        )
+        ))
     }
 
     pub(crate) fn new_with_storage_partition_and_http_cache(
@@ -511,6 +524,7 @@ impl BrowserContext {
 
         Self {
             id,
+            closing: false,
             storage_partition,
             page_targets: PageTargetRegistry::default(),
             window_is_focused: true,
@@ -817,6 +831,10 @@ impl BrowserContext {
         self.renderer_runtime_owner.take()
     }
 
+    pub(crate) fn retain_storage_for_teardown(&self) -> BrowserContextStoragePartitionHandles {
+        self.storage_partition.handles.clone()
+    }
+
     pub(crate) fn routes_renderer_browser_context_runtime(
         &self,
         runtime_id: moli_core::RendererBrowserContextRuntimeId,
@@ -1031,7 +1049,7 @@ impl BrowserContext {
     pub(crate) fn assert_target_materialized_initial_empty_document_has_page(
         &self,
         target_id: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), TargetInitialEmptyDocumentMissingPage> {
         let Some(target) = self.page_target(target_id) else {
             return Ok(());
         };
@@ -1193,9 +1211,31 @@ impl BrowserContext {
         loader_id: String,
     ) -> Option<DocumentNavigationToken> {
         let target = self.page_target_mut(target_id)?;
+        // Initial Documents already own their placeholder history entry.
+        // Freeze that native identity before a new handoff can replace the
+        // installed binding. Reusing the same Document must not append it.
+        if !target.owner_state.navigation_history_state.is_empty()
+            && target
+                .runtime_slot
+                .page_slot()
+                .prepared_document_output_binding()
+                .is_none()
+            && let Some((page, binding)) = target.runtime_slot.loaded_page().zip(
+                target
+                    .runtime_slot
+                    .page_slot()
+                    .renderer_document_lifecycle_binding(),
+            )
+        {
+            target.owner_state.navigation_history_document = Some((
+                super::RendererPageResidenceIdentity::from_page(page),
+                binding.renderer_document,
+            ));
+        }
         let token = target
             .runtime_slot
             .start_document_navigation(target_id.to_owned(), loader_id);
+        self.close_dedicated_workers_outside_navigation_page(target_id, None);
         self.mark_target_initial_empty_document_pending_cross_document_navigation(target_id);
         Some(token)
     }
@@ -1281,6 +1321,7 @@ impl BrowserContext {
                 .clear_pending_document_navigation_if_loader_matches(loader_id)
         });
         if cleared {
+            self.close_dedicated_workers_outside_navigation_page(target_id, None);
             self.clear_target_initial_empty_document_pending_cross_document_navigation(target_id);
         }
     }
@@ -1499,19 +1540,34 @@ impl BrowserContext {
         path: Option<&str>,
         url_host: Option<&str>,
     ) {
-        self.delete_cookies_with_partition_key(name, domain, path, url_host, None);
+        self.delete_cookies_with_filters(
+            name,
+            domain,
+            path,
+            url_host,
+            &moli_cookie_jar::StoredCookiePartitionFilter::All,
+            moli_cookie_jar::StoredCookieDomainMatch::Canonical,
+        );
     }
 
-    pub(crate) fn delete_cookies_with_partition_key(
+    pub(crate) fn delete_cookies_with_filters(
         &mut self,
         name: Option<&str>,
         domain: Option<&str>,
         path: Option<&str>,
         url_host: Option<&str>,
-        partition_key: Option<&moli_cookie_jar::StoredCookiePartitionKey>,
+        partition_filter: &moli_cookie_jar::StoredCookiePartitionFilter,
+        domain_match: moli_cookie_jar::StoredCookieDomainMatch,
     ) {
         let mut cookie_store = self.storage_partition.cookie_store().lock();
-        cookie_store.delete_cookies_with_partition_key(name, domain, path, url_host, partition_key);
+        cookie_store.delete_cookies_with_filters(
+            name,
+            domain,
+            path,
+            url_host,
+            partition_filter,
+            domain_match,
+        );
     }
 
     pub(crate) fn active_target_id(&self) -> Option<&str> {
@@ -1576,7 +1632,7 @@ impl BrowserContext {
         &mut self,
         locale: Option<String>,
         fallback: &moli_browser_profile::BrowserIdentityProfile,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner.set_locale(locale.as_deref())?;
         self.default_browser_identity
             .set_accept_language(locale, fallback);
@@ -1586,7 +1642,7 @@ impl BrowserContext {
     pub(crate) fn set_default_timezone_override(
         &mut self,
         timezone: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), moli_v8_platform::ProcessEnvironmentError> {
         self.environment_owner.set_timezone(timezone.as_deref())
     }
 
@@ -1734,17 +1790,24 @@ impl BrowserContext {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
+)]
+pub(crate) struct TargetInitialEmptyDocumentMissingPage {
+    target_id: String,
+}
+
 fn materialized_initial_empty_document_missing_page_error(
     target_id: &str,
     owner_state: &TargetOwnerState,
     has_loaded_page: bool,
-) -> Option<String> {
-    if owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page {
-        return Some(format!(
-            "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
-        ));
-    }
-    None
+) -> Option<TargetInitialEmptyDocumentMissingPage> {
+    (owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page).then(|| {
+        TargetInitialEmptyDocumentMissingPage {
+            target_id: target_id.to_owned(),
+        }
+    })
 }
 
 pub(crate) fn seed_initial_cookies(
@@ -1754,5 +1817,29 @@ pub(crate) fn seed_initial_cookies(
     let mut store = cookie_store.lock();
     for cookie in initial_cookies {
         let _ = store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
+    }
+}
+
+#[cfg(test)]
+mod temporary_storage_tests {
+    use super::*;
+
+    #[test]
+    fn temporary_storage_handles_keep_the_partition_until_the_last_clone_drops() {
+        let handles = BrowserContextStoragePartitionHandles::temporary().unwrap();
+        let owner = std::sync::Arc::downgrade(handles._owner.as_ref().unwrap());
+        let sql = handles.indexed_db_manager.lock().sqlite_service();
+        let retained = handles.clone();
+
+        drop(handles);
+        assert!(owner.upgrade().is_some());
+        assert!(!sql.is_closed());
+
+        drop(retained);
+        assert!(owner.upgrade().is_none());
+        assert!(
+            sql.is_closed(),
+            "retained SQL clients must not own the partition"
+        );
     }
 }

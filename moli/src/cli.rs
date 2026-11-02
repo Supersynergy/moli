@@ -144,6 +144,10 @@ pub struct FetchArgs {
     #[arg(short = 'H', long = "header", value_name = "HEADER", value_parser = parse_request_header_arg)]
     pub headers: Vec<RequestHeaderArg>,
 
+    /// Write final unpartitioned cookies to a Netscape file, or - for stdout.
+    #[arg(long, value_name = "FILE", overrides_with = "cookie_jar")]
+    pub cookie_jar: Option<String>,
+
     /// Disable page-authored JavaScript before the Document starts parsing.
     /// Stylesheets still load; automation expressions remain available.
     #[arg(
@@ -271,7 +275,8 @@ pub struct FetchArgs {
     /// Maximum total readiness time in milliseconds. Initial and HTTP-error
     /// replacement navigations, the selected lifecycle stage, response match,
     /// selector, and script waits share one absolute deadline. Network-idle and
-    /// DOM-stable return the current page with a warning when it expires.
+    /// DOM-stable return the current page when it expires. Pass `--log-level warn`
+    /// to see timeout warnings.
     #[arg(
         short,
         long,
@@ -553,6 +558,7 @@ pub struct CommonArgs {
     #[arg(long)]
     pub http_cache_dir: Option<String>,
 
+    /// Persist browser storage in this directory. Without it, IndexedDB and OPFS use temporary files.
     #[arg(short = 'P', long)]
     pub profile_dir: Option<String>,
 
@@ -616,7 +622,13 @@ pub struct CommonArgs {
     )]
     pub scrollbars: bool,
 
-    #[arg(short, long = "cookie-file")]
+    /// Send Cookie header data or load a cookie file. Use - for stdin. May be repeated.
+    /// In serve mode, literal data defaults to the first HTTP(S) top-level navigation host.
+    #[arg(
+        long = "cookie",
+        visible_alias = "cookie-file",
+        value_name = "DATA|FILE"
+    )]
     pub cookie_file: Vec<String>,
 
     #[arg(long)]
@@ -1031,8 +1043,10 @@ mod tests {
             "--layout",
             "--image",
             "--font",
-            "--cookie-file",
+            "--cookie",
             "jar.txt",
+            "--cookie-jar",
+            "final-jar.txt",
             "--profile-dir",
             "/tmp/p",
             "--user-agent",
@@ -1055,8 +1069,10 @@ mod tests {
             "-l",
             "--image",
             "--font",
-            "-c",
+            "--cookie-file",
             "jar.txt",
+            "--cookie-jar",
+            "final-jar.txt",
             "-P",
             "/tmp/p",
             "-A",

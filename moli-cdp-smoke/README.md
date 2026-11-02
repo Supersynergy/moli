@@ -6,14 +6,36 @@ The suite covers real CDP-client workflows: `connect_over_cdp`, concurrent brows
 
 ## Chromium Behavior Evidence
 
-CI runs the entire default group list twice: `CDP smoke` uses the HEAD Moli
+CI runs every default group twice per engine: `CDP smoke` uses the HEAD Moli
 release and `CDP smoke (Chromium)` uses the Chromium revision bundled with the
-Playwright version in `uv.lock`. Both jobs select all default groups, including
-newly registered groups, without maintaining separate allowlists. The
+Playwright version in `uv.lock`. These are independent executions: passing the
+second repetition cannot replace a failed first repetition. Chromium additionally
+uses `--retries 3`: each failed group gets up to three retries in fresh worker and
+browser processes. Passing groups are not retried. A recovered group is marked
+`flaky` in `summary.json`; every execution's log, result, and diagnostics remain
+in the artifact. If all four executions fail, the job fails. Moli has no retries.
+Both jobs select all default groups, including newly registered groups, without
+separate allowlists. The
 `chromium-cdp` group is a collection of protocol scenarios; its name alone does
 not identify the browser under test.
 The existing `CDP smoke` check also requires the Chromium job to succeed, so it
 cannot remain green when the Chromium suite fails.
+
+Both jobs use `--strict-full-suite --repeat 2`. Strict mode rejects `--group`,
+`--endpoint`, `--fail-fast`, `--list-groups`, and nonempty `MOLI_SMOKE_GROUPS`,
+`MOLI_MULTI_PAGE_CASES`, or `MOLI_MULTI_PAGE_SHARD`. A failure does not prevent
+the remaining groups from running. Browser crashes, timeouts, failed assertions,
+unhandled asyncio callback/task exceptions, incomplete/empty results, and
+diagnostic capture failures fail an execution. Exhausting Chromium's per-group
+retries, failing any Moli execution, or failing diagnostic uploads fails CI; Chromium failures are
+not treated as Moli passes. Classifying a failure as infrastructure trouble or
+Chromium instability requires evidence.
+New pushes to `main` cancel unfinished CI runs for older `main` commits.
+PR revisions and manual runs have independent concurrency groups, so a new
+revision does not interrupt their Chromium suites or diagnostic collection.
+Once a PR is merged or closed, the trusted `Cancel closed PR CI` workflow
+requests cancellation of every unfinished CI run associated with that PR,
+including queued runs for older revisions.
 
 Each worker records the actual discovery version, engine, executable command,
 and PID for its managed browser and any nested browser launches. Chromium
@@ -23,12 +45,85 @@ Use managed `--browser chromium` runs for the full oracle, including process
 resource sampling; sharing an external `--endpoint` does not provide the same
 process isolation or owned PID.
 
+## Synchronization and diagnostics
+
+Wait for the condition needed by the assertion, using the identity of the
+operation being tested:
+
+| Assertion needs | Synchronization |
+| --- | --- |
+| A newly loaded Document | Session, main frame, returned loader, commit, and loader-scoped load; `navigation.py` serves raw CDP and Python SDK clients |
+| A frontend's response body | That frontend's request/loader and `Network.loadingFinished`; Page load or response headers are insufficient |
+| Closing/detaching during evaluation | A unique marker emitted inside the pending evaluation, followed by its completion or expected rejection |
+| A worker has initialized | A fixture request/reply, before testing its runtime values |
+| An old Document's work is retired | The replacement Document's commit plus the specific pending-operation terminal |
+
+`wait_until` bounds the entire async predicate and propagates protocol, fixture,
+and evaluation errors immediately. Such errors must not become `False` followed
+by a successful retry. Error documents, downloads, same-document navigations,
+and deliberately gated navigations keep their own explicit contracts.
+
+Event collectors have weak callbacks and explicit `close()`/context-manager
+cleanup. Automatic cleanup schedules unsubscription on the event loop: a GC
+finalizer must never reenter an event emitter's non-reentrant lock. Paused-page
+cleanup must still attempt resume, evaluation drain, and debugger disable if
+listener removal or assertions fail; those errors remain observable.
+
+Fixed waits in Python groups require an adjacent `# smoke-timing:` explanation,
+checked by `test_synchronization_policy.py`. The remaining positive delays are
+bounded condition polls, inputs exercising the action-window deadline, or
+bounded negative wheel observations with a positive scrolling control.
+`sleep(0)` only yields scheduling; it is not evidence of browser readiness.
+New readiness tests should use explicit gates/events instead of elapsed time.
+
+Each worker writes `<result>.diagnostics/checkpoint.json` during execution,
+containing recent phases, a bounded protocol tail, outstanding commands, and
+CPU affinity/cgroup/memory information. Raw connections retain real wire IDs;
+Python CDPSession observations use clearly labelled local call IDs. The SDK's
+existing Python/driver transport also records its RPC IDs, object GUIDs,
+navigation/locator commands and document events, including Page operations that
+do not pass through a manual CDPSession. These IDs are not CDP wire IDs. This
+small adapter targets the pinned Playwright version and fails explicitly if
+that transport changes. Collection adds no browser commands or alternate
+readers. A watchdog independently prints
+Python thread stacks before the worker deadline, including when the event loop
+is blocked. The deadline and failure status do not change.
+
+CPU traces are saved in full before validation, for both successful and failed
+workloads. Profile IDs are scoped by process; an expected hot function must be
+on an actually sampled stack, not merely declared in the profile's node table.
+The closed-page workload duration and its missing-function assertion remain
+unchanged. A missing sample remains a failure to investigate with the saved
+trace, browser identity, resource evidence, and a minimal executable probe;
+it is not proof of either Chromium instability or a Moli adaptation bug.
+
+For local investigation, use filtered groups without `--strict-full-suite`.
+Keep every failed execution and report the denominator; a later pass does not
+erase earlier failures. Before changing a Chromium-derived expectation, follow
+the executable calibration procedure below.
+
 The `Browser.close` lifecycle contract requires an acknowledgment followed by a
 natural, zero-status exit of the owned browser process before cleanup. It
 observes the parent's return code independently of stdout/stderr EOF: a
 descendant may retain an inherited output pipe after the browser has exited,
 which can leave `asyncio.subprocess.Process.wait()` pending. Failures identify
 the session case and lifecycle stage, including acknowledgment and process exit.
+Failed cases retain their close response, completed cases, browser log tail, and
+connection state in the worker's `observed` result before any socket or process
+cleanup. On Linux they also capture the owned PID's status, thread wait channels
+and syscalls, and descendant process states. This distinguishes a live or stuck
+browser from an already reaped browser whose descendants still own output pipes;
+diagnostic collection does not relax the natural-exit deadline or count forced
+cleanup as a successful exit.
+
+Layout and scrollbar probes wait for the requested Document's main-frame
+commit and loader-scoped `Page.lifecycleEvent` named `load`. A session-level
+`Page.loadEventFired` cannot identify the Document and cannot release that
+wait. Reloads must commit a loader different from the previous Document;
+events received before the command reply are retained. Navigation failures
+record the command, session, frame, loader, commit/load state, and recent wire
+messages. Layout-policy scenario failures also retain their original traceback,
+and failed initial navigation closes the target it created.
 
 Lifecycle artifacts retain total FDs for both engines. Chromium also records
 FDs for regular files inside its owned profile: delayed database initialization
@@ -56,8 +151,25 @@ or identical scenario counts:
 | Fetch body streams | Buffered seeking and explicit rejection of continuation after body take | Sequential reads; EOF may require a separate empty read |
 | WebSocket events and URL blocking | Extra generic request events, payload lengths, and WebSocket URL blocking | Dedicated WebSocket events and payload data; URL blocking excludes WebSockets |
 | Hosted file URLs | Capability error before navigation/interception | File navigation and interception; missing file returns `ERR_FILE_NOT_FOUND` |
-| Other capability boundaries | Stack timing privacy, unsupported drag/CPU throttling, PI rename extension | Observed stack timing, successful drag/throttling, rejected PI rename |
+| Other capability boundaries | Stack timing privacy, unsupported CPU throttling, PI rename extension | Observed stack timing, successful throttling, rejected PI rename |
 | Response/manifest/idle details | Plaintext TextTrack bodies, document-relative data manifest URLs, same-site idle persistence | Base64 TextTrack bodies, data manifest URL fallbacks, cross-document idle reset |
+
+The `dom-input` text-editing checks were calibrated on 2026-09-12 against
+Debian `/usr/bin/chromium` 145.0.7632.116 under xvfb and run unchanged against
+Moli. `Input.insertText` on input, textarea and contenteditable elements emits
+trusted `InputEvent` instances with `data`, `inputType` and `isComposing`;
+textarea Enter and text-control Backspace/Delete have null data and distinct
+operation types. `beforeinput` is cancelable; `input` is not. Both bubble and
+are composed.
+
+The native drop checks use `Input.dispatchDragEvent` (dragEnter/dragOver/drop)
+and were also calibrated on that Chromium binary. Rich contenteditable edits
+carry null data and a read-only DataTransfer, shared by beforeinput/input and
+readable after dispatch. Text controls carry string data and null DataTransfer.
+For plaintext-only contenteditable, Chromium exposes text on beforeinput and
+the transfer on input. Cancellation and page-replaced InputEvent constructors
+are covered. These checks do not claim full drag-store lifecycle, IME or
+target-range support.
 
 Any smoke assertion described as Chromium-compatible must be verified against a
 real Chromium binary. Do not infer observable behavior solely from the
@@ -77,6 +189,70 @@ Source inspection remains useful for explaining why Chromium behaves as
 observed, but it does not replace the executable probe when one can be run. If
 Chromium cannot be tested, document that limitation explicitly instead of
 presenting an inferred expectation as verified behavior.
+
+The native drag scenarios were recalibrated on 2026-10-29 against Chrome for
+Testing 156.0.8078.73 with its default flags, and with `SetDefaultDropEffect`
+and `SuppressPointerStreamAfterDrag` explicitly enabled. Both runs agree.
+CI's CDP Chromium job installs this pinned oracle for `dom-input` with
+`--chromium-bin-for-group`, while retaining the locked Playwright client and
+the existing browser for other groups. All default groups still run under
+`--strict-full-suite`. The `dom-input` group checks drag eligibility and
+movement thresholds, native `effectAllowed: "uninitialized"`, frontend-session
+isolation, cancellation, protected dragenter/dragover data, client-edited replay
+payloads, and accepted or rejected drops. Both browsers report all operations
+as `-1` at the CDP boundary; Moli keeps the supported mask `19` internally.
+Default text drops into writable input, textarea, and
+contenteditable targets need no author-canceled dragover. They use copy for a
+draggable element source: `copyMove` allows the drop, while `linkMove` rejects it.
+The same scenarios run against Moli's current build.
+
+The native source scenarios also compare selected rich text, links and linked
+images through `dragstart`, raw `Input.dragIntercepted` data, replay and the
+resulting editable HTML. They check URL titles, HTML base URLs, absolute markup
+URLs, author replacements and the exact operation mask. Moli retains existing
+string-item order when `setData()` replaces a value; Chromium removes and
+appends the replacement. Each engine's intercepted order must match its own
+`dragstart` string types, and both must clear obsolete native metadata.
+Selection HTML preserves selected DOM formatting and excludes hidden elements;
+it does not synthesize Chromium's computed-style clipboard annotations.
+Native image drags currently supply URL and HTML data, without manufacturing an
+image File from decoded pixels. Original encoded response bytes and filename
+metadata are required before that payload can be supported.
+
+Cross-document tests cover parent/child and sibling-frame transitions, including
+scaled frames. Related targets are retargeted to an iframe host in the receiving
+Document, or become null when no such host exists. Moli projects drag coordinates
+into the receiving Document, including source `drag` and `dragend`; Chromium 156
+uses the destination event manager's client coordinates for those source events.
+The shared scenarios assert these values separately instead of treating them as
+identical. Source `drag` follows destination updates: enter emits it, the first
+following over does not repeat it, and subsequent over updates emit it again.
+Intercepted idle time has no autonomous drag timer, and canceling a source
+`drag` event does not cancel the session. Like Chromium, source events reuse the
+source's protected DataTransfer until dragend; repeated drag callbacks preserve
+its identity, original metadata and author-set dropEffect. Target event views
+remain independent, and finishing the source disables every retained reference.
+
+Cancellation tests retain Moli's explicit cleanup contract: both intercepted
+`Input.cancelDragging` and `dragCancel` leave the target and end the source once.
+Chromium 156 leaves intercepted `Input.cancelDragging` idle and sends only
+`dragend` for `dragCancel`; the oracle asserts this difference explicitly.
+
+Protected enter/over views start with the preferred operation allowed by the
+source; leave uses `none`, and drop receives the negotiated operation. CDP
+modifier flags remain observable without overriding this initialization. The
+manual port in `fixtures/drag-pointer-suppression.html` preserves the upstream
+WPT scenario: pointer cancellation, capture release, and out/ancestor-leave
+events must precede leaving the drag source. It also checks resumed pointer
+entry while preserving the independent legacy mouse hover state. Returning
+from a released capture to its descendant does not leave that ancestor.
+
+Moli's drop-result regressions follow the HTML processing model: a drop must
+be handled by script or complete its default action to succeed. Chrome 156
+still reports its previous operation for an unhandled generic target and
+ignores a drop listener's final operation changes. Those differences are
+covered by Moli's specification regressions; the shared Chromium oracle
+checks initialization, negotiation, and pointer suppression.
 
 The `Fetch.getResponseBody` text encoding was calibrated on 2026-10-19 against
 Debian `/usr/bin/chromium` 145.0.7632.116. A fresh page enabled `Network` and
@@ -187,6 +363,12 @@ returns `InvalidParams` on initial admission, while its active override
 `change()` path silently retains the old zone for an invalid replacement.
 Moli additionally locks down the latter state-preservation case in a focused
 Rust protocol test.
+
+The `emulation-storage` cookie expiry case was calibrated against Chrome for
+Testing 156.0.8078.47 on 2026-10-28. It sets short-lived, maximum-safe-integer,
+and far-future expiries over raw CDP, then checks that every cookie remains
+persistent, short expiries stay unchanged, and large expiries are capped at
+400 days rather than losing their expiry during timestamp conversion.
 
 The default `locale-timezone-inputs` group adds input-boundary regressions for
 PR #369. It was calibrated on 2026-09-10 against `/usr/bin/chromium`
@@ -710,6 +892,7 @@ Runner layout:
   coordinates, exact used frame viewport propagation, and Moli's nested-frame
   UA scrollbar routing boundary.
 - `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, detailed geolocation plus locale/timezone runtime overrides, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
+- `groups/font_face.py`: process-isolated FontFace payload validation contracts.
 - `groups/media_error.py`: process-isolated HTMLMediaElement MediaError lifecycle contracts.
 - `groups/target_semantics.py`: raw Target-domain identity, attachment,
   activation, visibility, and lifecycle contracts calibrated against Chromium.
@@ -790,7 +973,7 @@ uv run moli-cdp-smoke --group agent-episode
 uv run moli-cdp-smoke --group fetch-runtime-teardown
 uv run moli-cdp-smoke --group network-body-cache
 uv run moli-cdp-smoke --group dom-input,emulation-storage
-uv run moli-cdp-smoke --group media-error
+uv run moli-cdp-smoke --group font-face,media-error,emulation-storage --jobs 3
 uv run moli-cdp-smoke --group document-content
 uv run moli-cdp-smoke --group dom-snapshot
 uv run moli-cdp-smoke --group dom-whitespace
@@ -903,6 +1086,9 @@ Useful environment variables:
 - `MOLI_BIN`: path to the `moli` binary under test.
 - `CHROMIUM_BIN` / `--chromium-bin`: optional executable override for
   `--browser chromium`; otherwise use the locked Playwright browser.
+- `--chromium-bin-for-group GROUP=PATH`: use a Chromium executable for one
+  group while preserving the full group selection. May be repeated; each
+  group's actual executable is recorded as `chromiumBin` in `summary.json`.
 - `MOLI_CDP_PORT`: fixed CDP server port for single-worker debugging. By
   default every worker uses `--port 0` and reads the OS-selected endpoint from
   Moli's bound-listener log. A fixed port is rejected with parallel workers.

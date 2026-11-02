@@ -308,6 +308,18 @@ impl PageVmTaskExecutorTestHarness {
         Ok(completed)
     }
 
+    pub(crate) async fn run_one_file_reading_task_executor_turn(
+        &mut self,
+        loader: &ResourceRequestClient,
+    ) -> anyhow::Result<bool> {
+        self.selected_task_local_set
+            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::FileReading,
+                loader,
+            ))
+            .await
+    }
+
     pub(crate) async fn run_one_dom_manipulation_task_executor_turn(
         &mut self,
         family: super::PageDomManipulationTestFamily,
@@ -495,18 +507,6 @@ impl PageVmTaskExecutorTestHarness {
             loader,
         )
         .await
-    }
-
-    pub(crate) async fn run_one_webcrypto_task_executor_turn(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<bool> {
-        self.selected_task_local_set
-            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::WebCryptoTask,
-                loader,
-            ))
-            .await
     }
 
     pub(crate) fn run_one_child_realm_materialization_body_for_test(

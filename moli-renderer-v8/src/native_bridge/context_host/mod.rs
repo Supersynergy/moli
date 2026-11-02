@@ -27,7 +27,6 @@ use crate::{
         native_bridge::{bindings::NativeBridgeBindings, element::ClientRect},
         observer_runtime::{ObserverStore, ObserverStoreAccessToken},
         page_task_queue::RendererResourceCompletionSender,
-        renderer_resource_scheduler::RendererResourceScheduler,
         runtime::{
             RendererBrowserContextRuntime, RendererDocumentLifecycleJournalHandle,
             RendererPageContextCancelReceiver, SharedRendererBackendNodeRegistry,
@@ -147,6 +146,7 @@ mod security_policy;
 mod selection_records;
 mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
+mod font_face_loads;
 mod shared_workers;
 mod signal_bridge;
 mod storage_events;
@@ -869,7 +869,6 @@ pub(crate) struct JsContextHost {
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: Rc<RefCell<Option<String>>>,
-    next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
@@ -943,6 +942,7 @@ pub(crate) struct JsContextHost {
     next_image_decode_id: u64,
     pending_image_decode_requests: HashMap<ImageDecodeRequestId, PendingImageDecodeRequest>,
     resource_timing_buffers: SharedResourceTimingBufferRegistry,
+    pending_font_face_loads: HashMap<u64, font_face_loads::PendingFontFaceLoad>,
     next_webcrypto_task_id: crate::page_task_queue::RendererPageWebCryptoTaskId,
     pending_webcrypto_tasks: HashMap<
         crate::page_task_queue::RendererPageWebCryptoTaskId,
@@ -964,7 +964,7 @@ pub(crate) struct JsContextHost {
         VecDeque<crate::frame_owner_model::FrameDocumentModulepreloadWorkAwaitingRealm>,
     active_child_browsing_context_host_loads: Vec<DomHandle>,
     character_data_utf16_overrides: HashMap<DomHandle, U16String>,
-    child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshNavigationTask>,
+    child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshState>,
     disconnected_shadow_roots: HashSet<DomHandle>,
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,
     style_engine: MoliStyleEngine,
@@ -1086,7 +1086,6 @@ pub(crate) struct JsContextHost {
     pub(crate) pending_network_body_clones: HashMap<NetworkBodySourceId, Vec<NetworkBodySourceId>>,
     page_task_capabilities: OnceCell<JsContextHostPageTaskCapabilities>,
     resource_completion_tx: RendererResourceCompletionSender,
-    resource_scheduler: RendererResourceScheduler,
     next_worker_id: u64,
     workers: HashMap<DedicatedWorkerId, WorkerConnectionState>,
     next_websocket_id: u64,
