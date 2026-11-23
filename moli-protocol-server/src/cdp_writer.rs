@@ -183,11 +183,21 @@ impl CdpSocketSink {
     }
 
     pub(crate) fn enqueue_owned_message(&self, message: impl Into<InspectorJson>) -> bool {
+        let message = message.into();
+        // Responses carry the command `id` a client is waiting on, so losing
+        // one would hang the caller and they keep strict close-on-overflow
+        // semantics. Events are advisory: Chromium sheds queued events under
+        // backpressure instead of tearing down the session, so overload drops
+        // events first and only kills the socket for responses.
+        let is_response = message.id_u64().is_some();
         let available_pending_bytes = self.pending_byte_budget.available();
         let serialization_limit = self.max_message_bytes.min(available_pending_bytes);
         let message = match serialize_owned_message_with_limit(message, serialization_limit) {
             Ok(message) => message,
             Err(BoundedJsonError::LimitExceeded { .. }) => {
+                if self.shed_event(is_response) {
+                    return true;
+                }
                 tracing::warn!(
                     max_message_bytes = self.max_message_bytes,
                     available_pending_bytes,
@@ -197,12 +207,18 @@ impl CdpSocketSink {
                 return false;
             }
             Err(BoundedJsonError::Serialization(error)) => {
+                if self.shed_event(is_response) {
+                    return true;
+                }
                 tracing::warn!(?error, "failed to serialize CDP protocol output");
                 self.close();
                 return false;
             }
         };
         let Some(pending_bytes) = self.pending_byte_budget.try_reserve(message.len()) else {
+            if self.shed_event(is_response) {
+                return true;
+            }
             tracing::warn!(
                 message_bytes = message.len(),
                 max_pending_bytes = self.pending_byte_budget.limit(),
@@ -220,9 +236,23 @@ impl CdpSocketSink {
             .try_send(SocketWriterCommand::Output(envelope))
             .is_err()
         {
+            if self.shed_event(is_response) {
+                return true;
+            }
             self.close();
             return false;
         }
+        true
+    }
+
+    /// Returns `true` when an overloaded non-response message was shed
+    /// instead of closing the socket. `false` means the caller must take the
+    /// strict response path.
+    fn shed_event(&self, is_response: bool) -> bool {
+        if is_response {
+            return false;
+        }
+        tracing::debug!("dropping CDP protocol event under writer backpressure");
         true
     }
 
