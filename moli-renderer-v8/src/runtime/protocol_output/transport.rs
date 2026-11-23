@@ -185,6 +185,8 @@ pub struct RendererOutputTransportDiagnostics {
     pub admitted_service_worker_messages: u64,
     pub admitted_observation_publications: u64,
     pub admitted_essential_messages: u64,
+    pub shed_observation_publications: u64,
+    pub shed_observation_bytes: u64,
     pub terminal: bool,
 }
 
@@ -274,6 +276,17 @@ impl RendererOutputTransportBudgetState {
             }
         }
         true
+    }
+
+    fn record_observation_shed(&mut self, bytes: usize) {
+        self.diagnostics.shed_observation_publications = self
+            .diagnostics
+            .shed_observation_publications
+            .saturating_add(1);
+        self.diagnostics.shed_observation_bytes = self
+            .diagnostics
+            .shed_observation_bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
     }
 
     fn release(&mut self, class: RendererOutputTransportAdmissionClass, bytes: usize) {
@@ -368,10 +381,31 @@ impl RendererOutputTransportSender {
         message: RendererOutputTransportMessage,
     ) -> Result<(), RendererOutputTransportSendError> {
         let _send_order = self.shared.send_order.lock();
-        let class = message.admission_class();
+        let mut message = message;
+        let mut class = message.admission_class();
         let residence = message.residence();
-        let bytes = message.transport_charge_bytes();
-        let admitted = self.shared.budget.lock().reserve(class, residence, bytes);
+        let mut bytes = message.transport_charge_bytes();
+        let mut admitted = self.shared.budget.lock().reserve(class, residence, bytes);
+        if !admitted && class == RendererOutputTransportAdmissionClass::Observation {
+            // Advisory publications shed their records instead of terminating
+            // the transport. The empty shell keeps its reserved cursor
+            // sequence and is admitted from the essential reserve, so
+            // same-stream FIFO projection cannot stall on a gap.
+            if let RendererOutputTransportMessage::Publication(publication) = &mut message {
+                publication.shed_advisory_records();
+                let shed_bytes = publication.transport_charge_bytes();
+                if self.shared.budget.lock().reserve(
+                    RendererOutputTransportAdmissionClass::Essential,
+                    residence,
+                    shed_bytes,
+                ) {
+                    self.shared.budget.lock().record_observation_shed(bytes);
+                    class = RendererOutputTransportAdmissionClass::Essential;
+                    bytes = shed_bytes;
+                    admitted = true;
+                }
+            }
+        }
         if !admitted {
             self.terminate();
             return Err(RendererOutputTransportSendError { message });
@@ -610,36 +644,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn observation_budget_exhaustion_is_an_ordered_transport_terminal() {
+    async fn observation_budget_exhaustion_sheds_advisory_records_without_terminating() {
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(test_limits());
         let opened =
             RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
                 stream: stream(),
             });
         let first = publication(1, vec![observation_record(1)]);
+        let second = publication(2, vec![observation_record(1)]);
+        let essential = publication(3, vec![owner_action_record()]);
 
         sender.send(opened.clone()).expect("stream open admission");
         sender
             .send(first.clone())
             .expect("first observation admission");
-        assert!(
-            sender
-                .send(publication(2, vec![observation_record(1)]))
-                .is_err(),
-            "the observation ceiling must not borrow the essential reserve"
-        );
-        assert!(sender.diagnostics().terminal);
-        assert!(receiver.is_terminal());
-        assert!(
-            !receiver.is_closed(),
-            "the consumer must drain admitted FIFO messages before closing"
-        );
+        sender
+            .send(second)
+            .expect("exhausted observation budget sheds instead of terminating");
+        assert!(!sender.diagnostics().terminal);
+        assert!(!receiver.is_terminal());
+        assert_eq!(sender.diagnostics().shed_observation_publications, 1);
+        assert!(sender.diagnostics().shed_observation_bytes > 0);
 
         assert_eq!(receiver.recv().await, Some(opened));
         assert_eq!(receiver.recv().await, Some(first));
-        assert_eq!(receiver.recv().await, None);
-        assert!(receiver.is_terminal());
-        assert!(receiver.is_closed());
+        let shed = receiver
+            .recv()
+            .await
+            .expect("the shed shell must preserve the reserved sequence");
+        let RendererOutputTransportMessage::Publication(shed_publication) = shed else {
+            panic!("shed output remains a publication envelope")
+        };
+        assert!(shed_publication.records().is_empty());
+        assert_eq!(shed_publication.cursor().sequence(), 2);
+
+        sender
+            .send(essential.clone())
+            .expect("essential reserve survives observation shedding");
+        assert_eq!(receiver.recv().await, Some(essential));
+        assert!(!sender.diagnostics().terminal);
         assert_eq!(receiver.diagnostics().pending_messages, 0);
     }
 
@@ -681,20 +724,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_oversized_message_terminates_without_entering_the_queue() {
+    async fn one_oversized_observation_message_is_shed_without_terminating() {
         let mut limits = test_limits();
         limits.max_message_bytes = 4 * 1024;
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(limits);
 
-        assert!(
-            sender
-                .send(publication(1, vec![observation_record(4 * 1024)]))
-                .is_err()
-        );
-        assert_eq!(receiver.recv().await, None);
-        assert!(receiver.is_terminal());
-        assert!(receiver.is_closed());
+        sender
+            .send(publication(1, vec![observation_record(4 * 1024)]))
+            .expect("oversized advisory output sheds instead of terminating");
+        assert!(!sender.diagnostics().terminal);
+        assert!(!receiver.is_terminal());
+        let shed = receiver
+            .recv()
+            .await
+            .expect("the shed shell must preserve the reserved sequence");
+        let RendererOutputTransportMessage::Publication(publication) = shed else {
+            panic!("shed output remains a publication envelope")
+        };
+        assert!(publication.records().is_empty());
+        assert_eq!(publication.cursor().sequence(), 1);
         assert_eq!(receiver.diagnostics().pending_messages, 0);
+        drop(receiver);
+        assert_eq!(sender.diagnostics().shed_observation_publications, 1);
     }
 
     #[tokio::test]

@@ -56,6 +56,7 @@ pub struct RendererOutputPublication {
     ordering: RendererOutputPublicationOrdering,
     admission: RendererOutputPublicationAdmission,
     records: Vec<RendererOutputRecord>,
+    transport_shed: bool,
 }
 
 /// Ordering information that cannot be reconstructed from a concrete record
@@ -89,6 +90,7 @@ impl RendererOutputPublication {
             ordering: RendererOutputPublicationOrdering::Unconstrained,
             admission,
             records,
+            transport_shed: false,
         }
     }
 
@@ -107,8 +109,24 @@ impl RendererOutputPublication {
         self
     }
 
+    /// Sheds every advisory record while preserving the exact cursor.
+    ///
+    /// Same-stream projection requires every reserved sequence to arrive, so
+    /// a publication that cannot fit the observation budget cannot simply be
+    /// dropped: the transport delivers this empty shell instead. Protocol then
+    /// observes an empty advisory turn rather than a fabricated event or a
+    /// sequence gap. This is the single sanctioned empty-records publication.
+    pub(crate) fn shed_advisory_records(&mut self) {
+        self.records = Vec::new();
+        self.transport_shed = true;
+    }
+
     pub(crate) fn requires_essential_transport_admission(&self) -> bool {
-        self.admission != RendererOutputPublicationAdmission::Observation
+        // A shed publication carries no advisory payload, but its cursor still
+        // owns a reserved same-stream sequence. It must be admitted from the
+        // essential reserve so observation backpressure can never create a
+        // projection gap.
+        self.admission != RendererOutputPublicationAdmission::Observation || self.transport_shed
     }
 
     pub fn cursor(&self) -> RendererOutputCursor {
