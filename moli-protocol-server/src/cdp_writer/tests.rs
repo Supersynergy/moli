@@ -46,6 +46,79 @@ fn page_sink_overflow_requests_frontend_close_without_waiting() {
 }
 
 #[test]
+fn event_overflow_is_shed_without_closing_the_sink() {
+    let (sink, mut output_rx, close_rx) = test_sink_with_limits(
+        1,
+        DEFAULT_MAX_PENDING_WRITER_BYTES,
+        DEFAULT_MAX_WRITER_MESSAGE_BYTES,
+    );
+    let event = || json!({ "method": "Runtime.consoleAPICalled", "params": {} });
+
+    assert!(sink.enqueue_owned_message(event()));
+    assert!(
+        sink.enqueue_owned_message(event()),
+        "a flooded event must be shed, not kill the socket"
+    );
+    assert_eq!(*close_rx.borrow(), SocketCloseSignal::Open);
+
+    assert!(matches!(
+        output_rx.try_recv(),
+        Ok(SocketWriterCommand::Output(_))
+    ));
+    assert!(sink.enqueue_owned_message(json!({ "id": 1, "result": {} })));
+}
+
+#[test]
+fn oversized_event_is_shed_while_oversized_response_still_closes() {
+    let event = json!({ "method": "Runtime.consoleAPICalled", "params": { "value": "large" } });
+    let event_bytes = serde_json::to_string(&event)
+        .expect("serialize test event")
+        .len();
+    let (event_sink, mut event_output, event_close) =
+        test_sink_with_limits(1, event_bytes, event_bytes - 1);
+    assert!(event_sink.enqueue_owned_message(event));
+    assert!(event_output.try_recv().is_err());
+    assert_eq!(*event_close.borrow(), SocketCloseSignal::Open);
+
+    let response = json!({ "id": 1, "result": { "value": "large" } });
+    let response_bytes = serde_json::to_string(&response)
+        .expect("serialize test response")
+        .len();
+    let (response_sink, mut response_output, response_close) =
+        test_sink_with_limits(1, response_bytes, response_bytes - 1);
+    assert!(!response_sink.enqueue_owned_message(response));
+    assert!(response_output.try_recv().is_err());
+    assert_eq!(*response_close.borrow(), SocketCloseSignal::ImmediateClose);
+}
+
+#[test]
+fn byte_budget_event_shed_keeps_response_path_strict() {
+    let event = json!({ "method": "Runtime.consoleAPICalled", "params": {} });
+    let event_bytes = serde_json::to_string(&event)
+        .expect("serialize test event")
+        .len();
+    let response = json!({ "id": 1, "result": {} });
+    let response_bytes = serde_json::to_string(&response)
+        .expect("serialize test response")
+        .len();
+    let budget = event_bytes + response_bytes - 1;
+    let (sink, output_rx, close_rx) = test_sink_with_limits(8, budget, usize::MAX);
+
+    assert!(sink.enqueue_owned_message(event));
+    assert!(
+        sink.enqueue_owned_message(json!({ "method": "Runtime.consoleAPICalled", "params": {} })),
+        "second event exceeds the remaining byte budget and must be shed"
+    );
+    assert_eq!(*close_rx.borrow(), SocketCloseSignal::Open);
+    assert!(
+        !sink.enqueue_owned_message(response),
+        "response still closes on overflow"
+    );
+    assert_eq!(*close_rx.borrow(), SocketCloseSignal::ImmediateClose);
+    drop(output_rx);
+}
+
+#[test]
 fn graceful_close_is_queued_after_existing_output() {
     let (sink, mut output_rx, close_rx) = test_sink_with_limits(
         2,
